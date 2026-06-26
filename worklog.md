@@ -291,3 +291,79 @@ Stage Summary:
 - All 13 views operational with real-time subscriptions and CRUD mutations + audit logging
 - Works out-of-the-box without Firebase console configuration (local fallback); automatically upgrades to cloud sync once Firestore security rules are configured
 - 7 screenshots saved to /home/z/my-project/download/
+
+---
+Task ID: D1
+Agent: subagent-dashboard-country-update
+Task: Update Dashboard + Country Detail views with merchant/consumer data + platform scope
+
+Work Log:
+- Read worklog.md, types.ts (Merchant/Consumer/PlatformConfig/PlatformKey/PLATFORM_LABELS), admin-data.ts (updateMerchant/updateConsumer/logAudit), formatters.ts, view-helpers.tsx, portal-app.tsx, and the two target views to align with project conventions
+- Updated `src/components/portal/views/dashboard-view.tsx`:
+  * Added `merchants: Merchant[]` + `consumers: Consumer[]` props (already wired in portal-app.tsx)
+  * Replaced "Active Customers" / "Active Merchants" KPI cards in top row with NEW "Total Merchants" (Building2, formatCompact) and "Total Consumers" (Users, formatCompact) — both emerald success tone with hint "visible merchant/consumer records"
+  * Added `visibleMerchants` + `visibleConsumers` useMemo filters using same country-scoping logic as countries (Super Admin sees all; others see only assigned country codes via `countryCode` field)
+  * Added compact platform-scope chips on each country card: enabled platforms render as small emerald-tinted outline badges with their `PLATFORM_LABELS` label; a Tooltip on the count shows full list of enabled platforms with labels; disabled platforms are not shown as chips; falls back to "No platforms enabled" italic when none active. Layers icon used as the section marker.
+  * Imported `Layers` icon and `PLATFORM_LABELS`, `PlatformKey` types
+- Updated `src/components/portal/views/country-detail-view.tsx`:
+  * Added `merchants: Merchant[]` + `consumers: Consumer[]` props (already wired in portal-app.tsx)
+  * Added PROMINENT "Platform Scope" banner card directly after header card, before KPI section: emerald-tinted Card (border-emerald-300, bg-emerald-50 dark:bg-emerald-950/40), Info icon in emerald badge, "Platform Scope" heading with Layers icon, "All rules set on this page cut across ALL enabled platforms." message, count badge showing enabled count
+  * Listed all 6 platforms (PLATFORM_ORDER) as badges — enabled ones render in emerald-tinted style with a check icon; disabled render greyed out with line-through and an X icon. Each has a Tooltip with the platform description and enabled/disabled status.
+  * "Edit Platforms" button (Super Admin only) opens a Dialog with 6 Switch toggles (one per platform), each showing label, description, and enabled/disabled Badge. Switch uses emerald color (`data-[state=checked]:bg-emerald-600`). On save: validates at least one platform enabled → adminData.updateCountry(country.id, { platforms: draft, updatedAt: Date.now() }) → logAudit "country.change_platforms" with before/after JSON → toast.success
+  * Updated "Active Customers" + "Active Merchants" KPI cards to show real count from filtered merchants/consumers arrays (formatCompact) and added hint showing the stored counter as `${formatNumber(country.activeCustomers)} (recorded)` / `${formatNumber(country.activeMerchants)} (recorded)`
+  * Added NEW tab "Merchants & Consumers" (Store icon) in addition to KYC/KYB/Device/Settlement/Risk tabs
+  * "Merchants on {country}" summary card: count badge, scrollable list (max-h-96) of merchants with tradingName, merchant status badge, merchantCode/businessType/city line, KYB status badge, risk category badge, platform count badge. Empty state when none. Amber note at bottom: "Merchants use the separate Merchant App. Manage their KYB/restrictions via Compliance and Risk views."
+  * "Consumers on {country}" summary card: count badge, scrollable list of consumers with firstName lastName, consumer status badge, consumerCode/nationality/email line, KYC status badge, risk score badge (color-coded by 80/50 thresholds), KYC tier badge. Empty state when none. Same amber note about Consumer App.
+  * Read-only summaries only — no full CRUD (handled by Compliance + Risk views)
+- Imports added: Switch, Tooltip primitives, Table primitives, PLATFORM_LABELS/PlatformConfig/PlatformKey/Merchant/Consumer types, Info/Layers/Store/UserCircle icons
+- Removed leftover unused Lock import (was a placeholder); kept Wallet (used in KPIs)
+- Lint: `bun run lint` → 0 errors, 0 warnings
+
+Stage Summary:
+- Dashboard view now exposes Total Merchants + Total Consumers KPIs in the top row (visible-scope, formatCompact), and each country card shows a compact platform-scope chip cluster (count + per-platform badges with tooltip)
+- Country Detail view now leads with a prominent emerald-tinted "Platform Scope" banner that visually reinforces "all rules cut across all enabled platforms", lists all 6 platforms (enabled=emerald badge, disabled=strikethrough grey), and gives Super Admins an Edit Platforms dialog with 6 Switch toggles that persists to adminData.updateCountry + logs `country.change_platforms` audit + sonner toast
+- Country Dashboard KPI cards now show real-time merchant/consumer counts from the visible arrays, with the stored counter preserved as a "(recorded)" hint
+- New "Merchants & Consumers" tab surfaces a read-only summary of who's operating on this country (merchant tradingName + KYB + risk, consumer name + KYC + risk score), with amber notes clarifying the merchant/consumer apps are separate apps that read from this same DB and that KYC/KYB/restrictions are managed in Compliance + Risk views
+- No new nav items or standalone list pages added — the admin manages data (not the apps) through existing views, per spec
+- Both files lint clean (exit 0); no indigo/blue primary colors used; emerald accent style preserved throughout
+
+---
+Task ID: D2
+Agent: subagent-compliance-risk-update
+Task: Update Compliance + Risk views to link KYC/KYB cases and fraud alerts to real merchant/consumer records
+
+Work Log:
+- Read worklog.md, types.ts (Merchant / Consumer / KycTier / MerchantStatus / ConsumerStatus), admin-data.ts (updateMerchant / updateConsumer / logAudit / patch), formatters.ts (statusBadge / formatCurrency / formatDateTime / timeAgo), view-helpers.tsx, portal-app.tsx (verified both views already receive consumers + merchants props), and the two target view files in full
+- Confirmed that `compliance-view.tsx` already had the bulk of the required integration from a prior pass (props, findConsumerForKyc / findMerchantForKyb, KYC approve/reject → updateConsumer, KYB approve/reject → updateMerchant, tier chip in KYC queue, merchant-risk chip in KYB queue, linked-consumer / linked-merchant sections in KycDetailSheet / KybDetailSheet, live-sync info banner). Verified all Task-1 acceptance criteria were satisfied and made no further changes there.
+- Audited `risk-view.tsx` and found three gaps vs. the task spec:
+  1. `confirmTitle` / `confirmDescription` switch statements did not cover the new `suspend` and `reactivate` cases → TS2366 ("Function lacks ending return statement"). Lint passed (eslint doesn't catch it) but `npx tsc --noEmit` flagged both lines.
+  2. `FraudDetailSheet` did not receive or display the linked consumer/merchant record, despite the table column and dropdown actions being wired up.
+  3. `FraudDetailSheet` only exposed a Restrict button — Suspend and Reactivate were missing.
+- Patched `risk-view.tsx` via MultiEdit (4 atomic edits):
+  * Edit 1 — Pass `linked={findLinkedEntity(selectedAlert)}` plus `consumerStatusBadge`, `merchantStatusBadge`, `platformChips`, `onSuspend`, `onReactivate` into FraudDetailSheet from the parent Sheet.
+  * Edit 2 — AlertDialog "Confirm" button now uses red (`bg-red-600`) for `restrict` + `suspend` + `block_device` and emerald (`bg-emerald-600`) for `reactivate` + `hold_settlement` + `close_false_positive`.
+  * Edit 3 — Added `case "suspend"` / `case "reactivate"` branches to both `confirmTitle` and `confirmDescription`. The description now also reports the linked consumer/merchant code (or "no linked record — audit only") so the reviewer can see exactly what will be touched.
+  * Edit 4 — Rewrote `FraudDetailSheet` to:
+      - Accept `linked: LinkedEntity | null` plus the badge helpers and onSuspend / onReactivate callbacks.
+      - Render the linked entity's current status badge next to the alert status in the header.
+      - Render a "Linked consumer/merchant record" panel with emerald-tinted styling and a "Live sync" badge — shows full name/code/email/phone/nationality/KYC tier/risk score/status/platforms for consumers, and trading name/legal name/code/contact/owner/business type/risk category/status/platforms for merchants. Includes an explanatory note that restricting/suspending will update the record in real-time and the separate Consumer/Merchant App reads from the same database.
+      - Render an amber-dashed fallback panel when no linked record is found, explaining that account-level actions are disabled and the user should fall back to Block device / Hold settlement / Escalate / Close as false positive.
+      - Expose a 5-row action grid: Restrict (amber outline) | Suspend (destructive red) | Reactivate (emerald outline) | Block device (destructive) | Hold settlement (outline) | Escalate (purple outline) | Close as false positive (secondary) | Add to watchlist (ghost). Restrict / Suspend / Reactivate are disabled when there's no linked record or the alert is closed.
+- Verified the dropdown menu in the table already had Restrict / Suspend / Reactivate with `disabled={!canAct || !linked}` gating and AlertDialog confirms via `setConfirmAction({ kind, alert })`. No edits needed there.
+- Verified the Fraud Alerts table already had an "Entity status" column rendering `linkedStatusBadge(a)` (consumer/merchant status badge or "No link" italic).
+- Verified `portal-app.tsx` already passes `merchants` + `consumers` to both `<ComplianceView>` and `<RiskView>`.
+- Ran `cd /home/z/my-project && bun run lint 2>&1 | tail -30` → 0 errors, 0 warnings (eslint clean).
+- Ran `cd /home/z/my-project && npx tsc --noEmit 2>&1 | grep -E "(risk-view|compliance-view)"` → "NO ERRORS IN TARGET FILES" (the previously-failing TS2366 errors on confirmTitle / confirmDescription are gone; remaining tsc errors are in unrelated examples/ skills/ countries-view/ local-store/ files).
+- Verified dev server: `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/` → 200; dev.log shows `GET / 200 in 32ms (compile: 4ms, render: 28ms)` with no compile errors after the edits.
+
+Stage Summary:
+- Compliance view (`compliance-view.tsx`) already satisfied Task 1 end-to-end: KYC approve → `adminData.updateConsumer({kycStatus:"approved", status:"active"})`, KYC reject → `{kycStatus:"rejected", status:"restricted"}`, same for KYB → merchant, linked consumer/merchant panels in the detail sheets with all required fields (name, code, email, phone, nationality, DOB, KYC tier, risk score, status, platforms), tier chip in KYC queue table, merchant-risk chip in KYB queue table, emerald live-sync info banner, full audit logging + sonner toast feedback. No further changes required.
+- Risk view (`risk-view.tsx`) now satisfies Task 2 end-to-end:
+  * `findLinkedEntity` resolves fraud alerts to consumers (exact full-name → fuzzy partial → email/phone/consumerCode) or merchants (tradingName → legalName → fuzzy → merchantCode/contactEmail).
+  * Restrict / Suspend / Reactivate each call `adminData.updateConsumer` or `adminData.updateMerchant` with the appropriate status (`restricted` / `suspended` / `active`) plus `logAudit` with `account.restrict` / `account.suspend` / `account.reactivate` action keys and sonner toast feedback. All three require AlertDialog confirmation.
+  * Fraud Alerts table exposes an "Entity status" column showing the linked consumer/merchant current status as a badge (or "No link" when unmatched).
+  * FraudDetailSheet now shows the full linked consumer/merchant record in an emerald-tinted panel with a "Live sync" badge, plus Restrict / Suspend / Reactivate / Block device / Hold settlement / Escalate / Close false positive / Add to watchlist action buttons — account-level buttons are disabled when no linked record exists.
+  * `confirmTitle` / `confirmDescription` now cover all six ConfirmAction kinds (restrict / suspend / reactivate / block_device / hold_settlement / close_false_positive) and the description includes the linked entity's code so the reviewer can verify the blast radius before confirming.
+  * AlertDialog confirm button uses red for destructive (restrict / suspend / block_device) and emerald for positive / neutral (reactivate / hold_settlement / close_false_positive).
+- Both views preserve all existing functionality (tabs, filters, SLA badges, reviewer cells, audit logging, sonner toasts, Sanctions/PEP workflow, manual-review/approved/rejected buckets, future-feature roadmap tabs). No indigo/blue primary colors — emerald accent style throughout. Consumer/Merchant apps are NOT mentioned as nav items or standalone list pages; the admin manages their data through Compliance (KYC/KYB) and Risk (restrict/suspend/reactivate) views only, and the apps read from the same Firestore collections via `adminData.updateConsumer` / `updateMerchant` patches.
+- Lint clean (0 errors / 0 warnings). TS clean for both target files. Dev server returns 200 OK after edits.

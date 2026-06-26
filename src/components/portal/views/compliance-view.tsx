@@ -32,6 +32,10 @@ import {
   UserCheck,
   ArrowUpCircle,
   Eye,
+  Info,
+  User,
+  Building2,
+  Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ViewHeader, ViewContainer, EmptyState, StatCard } from "@/components/portal/view-helpers";
@@ -77,7 +81,19 @@ import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { adminData, logAudit } from "@/lib/admin-data";
 import { formatDateTime, slaStatus, statusBadge, timeAgo } from "@/lib/formatters";
-import type { KycCase, KybCase, AdminStaff, CountryConfig } from "@/lib/types";
+import type {
+  KycCase,
+  KybCase,
+  AdminStaff,
+  CountryConfig,
+  Consumer,
+  Merchant,
+  ConsumerStatus,
+  MerchantStatus,
+  KycTier,
+  PlatformKey,
+} from "@/lib/types";
+import { PLATFORM_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface ComplianceViewProps {
@@ -85,9 +101,35 @@ interface ComplianceViewProps {
   kybCases: KybCase[];
   staff: AdminStaff[];
   countries: CountryConfig[];
+  consumers: Consumer[];
+  merchants: Merchant[];
 }
 
 const SUPER_ADMIN_DEPT = "dept_super_admin";
+
+/** Badge styling for Consumer.status (not in shared formatters). */
+const CONSUMER_STATUS_STYLES: Record<ConsumerStatus, { label: string; className: string }> = {
+  pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+};
+
+/** Badge styling for Merchant.status (not in shared formatters). */
+const MERCHANT_STATUS_STYLES: Record<MerchantStatus, { label: string; className: string }> = {
+  onboarding: { label: "Onboarding", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+};
+
+const KYC_TIER_STYLES: Record<KycTier, { label: string; className: string }> = {
+  tier_1: { label: "Tier 1", className: "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800" },
+  tier_2: { label: "Tier 2", className: "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800" },
+  tier_3: { label: "Tier 3", className: "text-orange-700 border-orange-300 bg-orange-50 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800" },
+};
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All statuses" },
@@ -98,9 +140,51 @@ const STATUS_OPTIONS = [
   { value: "rejected", label: "Rejected" },
 ] as const;
 
-export function ComplianceView({ kycCases, kybCases, staff, countries }: ComplianceViewProps) {
+export function ComplianceView({ kycCases, kybCases, staff, countries, consumers, merchants }: ComplianceViewProps) {
   const { staff: currentStaff } = useAuth();
   const [activeTab, setActiveTab] = useState<string>("kyc");
+
+  /* ----------------- Linked entity lookups (KYC → Consumer, KYB → Merchant) ----------------- */
+  // Match by kycCaseId first; when multiple consumers share a case id (e.g. spouses
+  // on a joint application), disambiguate by exact customerName match. Fall back to
+  // name-only match if kycCaseId is null on both sides.
+  function findConsumerForKyc(k: KycCase): Consumer | null {
+    if (!consumers.length) return null;
+    const fullName = `${k.customerName}`.trim().toLowerCase();
+    const byCaseId = consumers.filter((c) => c.kycCaseId === k.id);
+    if (byCaseId.length === 1) return byCaseId[0];
+    if (byCaseId.length > 1) {
+      const byName = byCaseId.find(
+        (c) => `${c.firstName} ${c.lastName}`.trim().toLowerCase() === fullName,
+      );
+      return byName ?? byCaseId[0];
+    }
+    // No case-id link — try exact name match as a fallback (older case with cleared link)
+    return (
+      consumers.find(
+        (c) => `${c.firstName} ${c.lastName}`.trim().toLowerCase() === fullName,
+      ) ?? null
+    );
+  }
+
+  function findMerchantForKyb(k: KybCase): Merchant | null {
+    if (!merchants.length) return null;
+    const name = `${k.merchantName}`.trim().toLowerCase();
+    const byCaseId = merchants.filter((m) => m.kybCaseId === k.id);
+    if (byCaseId.length === 1) return byCaseId[0];
+    if (byCaseId.length > 1) {
+      const byName =
+        byCaseId.find((m) => m.legalName.trim().toLowerCase() === name) ??
+        byCaseId.find((m) => m.tradingName.trim().toLowerCase() === name);
+      return byName ?? byCaseId[0];
+    }
+    // No case-id link — try name match against legal / trading name
+    return (
+      merchants.find((m) => m.legalName.trim().toLowerCase() === name) ??
+      merchants.find((m) => m.tradingName.trim().toLowerCase() === name) ??
+      null
+    );
+  }
 
   /* ----------------------- Country scoping ----------------------- */
   const visibleCountryCodes = useMemo(() => {
@@ -201,9 +285,28 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
       beforeValue: k.status,
       afterValue: "approved",
     });
-    toast.success(`KYC approved: ${k.customerName}`, {
-      description: `Case ${k.id} · ${countryName(k.countryCode)}`,
-    });
+    // Live-sync the linked consumer record so the Consumer App sees the new status
+    const consumer = findConsumerForKyc(k);
+    if (consumer) {
+      adminData.updateConsumer(consumer.id, {
+        kycStatus: "approved",
+        status: "active",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "consumer.kyc_approved", "consumer", consumer.id, {
+        countryCode: consumer.countryCode,
+        beforeValue: `${consumer.kycStatus} / ${consumer.status}`,
+        afterValue: "approved / active",
+        reason: `KYC case ${k.id} approved`,
+      });
+      toast.success(`KYC approved: ${k.customerName}`, {
+        description: `Case ${k.id} · Consumer ${consumer.consumerCode} activated in real-time.`,
+      });
+    } else {
+      toast.success(`KYC approved: ${k.customerName}`, {
+        description: `Case ${k.id} · ${countryName(k.countryCode)} · no linked consumer record.`,
+      });
+    }
     setSelectedKyc(null);
   }
   function rejectKyc(k: KycCase) {
@@ -215,7 +318,26 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
       beforeValue: k.status,
       afterValue: "rejected",
     });
-    toast.error(`KYC rejected: ${k.customerName}`, { description: `Case ${k.id}` });
+    // Live-sync the linked consumer record — rejected cases restrict the account
+    const consumer = findConsumerForKyc(k);
+    if (consumer) {
+      adminData.updateConsumer(consumer.id, {
+        kycStatus: "rejected",
+        status: "restricted",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "consumer.kyc_rejected", "consumer", consumer.id, {
+        countryCode: consumer.countryCode,
+        beforeValue: `${consumer.kycStatus} / ${consumer.status}`,
+        afterValue: "rejected / restricted",
+        reason: `KYC case ${k.id} rejected`,
+      });
+      toast.error(`KYC rejected: ${k.customerName}`, {
+        description: `Case ${k.id} · Consumer ${consumer.consumerCode} restricted.`,
+      });
+    } else {
+      toast.error(`KYC rejected: ${k.customerName}`, { description: `Case ${k.id}` });
+    }
     setSelectedKyc(null);
   }
   function escalateKyc(k: KycCase) {
@@ -266,9 +388,28 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
       beforeValue: k.status,
       afterValue: "approved",
     });
-    toast.success(`KYB approved: ${k.merchantName}`, {
-      description: `Case ${k.id} · ${countryName(k.countryCode)}`,
-    });
+    // Live-sync the linked merchant record so the Merchant App sees the new status
+    const merchant = findMerchantForKyb(k);
+    if (merchant) {
+      adminData.updateMerchant(merchant.id, {
+        kybStatus: "approved",
+        status: "active",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "merchant.kyb_approved", "merchant", merchant.id, {
+        countryCode: merchant.countryCode,
+        beforeValue: `${merchant.kybStatus} / ${merchant.status}`,
+        afterValue: "approved / active",
+        reason: `KYB case ${k.id} approved`,
+      });
+      toast.success(`KYB approved: ${k.merchantName}`, {
+        description: `Case ${k.id} · Merchant ${merchant.merchantCode} activated in real-time.`,
+      });
+    } else {
+      toast.success(`KYB approved: ${k.merchantName}`, {
+        description: `Case ${k.id} · ${countryName(k.countryCode)} · no linked merchant record.`,
+      });
+    }
     setSelectedKyb(null);
   }
   function rejectKyb(k: KybCase) {
@@ -280,7 +421,26 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
       beforeValue: k.status,
       afterValue: "rejected",
     });
-    toast.error(`KYB rejected: ${k.merchantName}`, { description: `Case ${k.id}` });
+    // Live-sync the linked merchant record — rejected cases restrict the account
+    const merchant = findMerchantForKyb(k);
+    if (merchant) {
+      adminData.updateMerchant(merchant.id, {
+        kybStatus: "rejected",
+        status: "restricted",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "merchant.kyb_rejected", "merchant", merchant.id, {
+        countryCode: merchant.countryCode,
+        beforeValue: `${merchant.kybStatus} / ${merchant.status}`,
+        afterValue: "rejected / restricted",
+        reason: `KYB case ${k.id} rejected`,
+      });
+      toast.error(`KYB rejected: ${k.merchantName}`, {
+        description: `Case ${k.id} · Merchant ${merchant.merchantCode} restricted.`,
+      });
+    } else {
+      toast.error(`KYB rejected: ${k.merchantName}`, { description: `Case ${k.id}` });
+    }
     setSelectedKyb(null);
   }
   function escalateKyb(k: KybCase) {
@@ -479,6 +639,60 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
     );
   }
 
+  /** Small KYC tier chip (tier_1 / tier_2 / tier_3) — used inline in the queue table and detail sheet. */
+  function tierChip(tier: KycTier): React.ReactNode {
+    const t = KYC_TIER_STYLES[tier];
+    return (
+      <Badge variant="outline" className={cn("text-[10px] font-medium px-1.5 py-0", t.className)}>
+        <Layers className="size-2.5 mr-0.5" />
+        {t.label}
+      </Badge>
+    );
+  }
+
+  /** Small inline chip showing the linked merchant's risk category (separate from the case-level risk). */
+  function merchantRiskChip(cat: import("@/lib/types").RiskLevel): React.ReactNode {
+    const b = statusBadge("risk", cat);
+    return (
+      <Badge variant="outline" className={cn("text-[10px] font-medium capitalize px-1.5 py-0", b.className)}>
+        {b.label}
+      </Badge>
+    );
+  }
+
+  function consumerStatusBadge(status: ConsumerStatus): React.ReactNode {
+    const s = CONSUMER_STATUS_STYLES[status] ?? { label: status, className: "bg-slate-100 text-slate-700" };
+    return (
+      <Badge variant="secondary" className={cn("text-[10px]", s.className)}>
+        {s.label}
+      </Badge>
+    );
+  }
+
+  function merchantStatusBadge(status: MerchantStatus): React.ReactNode {
+    const s = MERCHANT_STATUS_STYLES[status] ?? { label: status, className: "bg-slate-100 text-slate-700" };
+    return (
+      <Badge variant="secondary" className={cn("text-[10px]", s.className)}>
+        {s.label}
+      </Badge>
+    );
+  }
+
+  function platformChips(platforms: PlatformKey[]): React.ReactNode {
+    if (!platforms || platforms.length === 0) {
+      return <span className="text-xs text-muted-foreground">—</span>;
+    }
+    return (
+      <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
+        {platforms.map((p) => (
+          <Badge key={p} variant="outline" className="text-[10px] font-normal px-1.5 py-0">
+            {PLATFORM_LABELS[p].label}
+          </Badge>
+        ))}
+      </div>
+    );
+  }
+
   /* ----------------------------- Render -------------------------- */
   return (
     <>
@@ -492,6 +706,17 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
         icon={ShieldCheck}
       />
       <ViewContainer>
+        {/* Live-sync info banner */}
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+          <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+          <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+            <span className="font-medium">Live entity sync:</span> KYC approvals update
+            consumer records in real-time. KYB approvals update merchant records. The
+            Consumer App and Merchant App read from the same database, so approved
+            accounts activate immediately and rejected accounts are restricted.
+          </div>
+        </div>
+
         {/* KPI strip */}
         <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
           <StatCard
@@ -629,13 +854,19 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
                     <TableBody>
                       {filteredKyc.map((k) => {
                         const badge = statusBadge("kyc", k.status);
+                        const linkedConsumer = findConsumerForKyc(k);
                         return (
                           <TableRow
                             key={k.id}
                             className="cursor-pointer"
                             onClick={() => setSelectedKyc(k)}
                           >
-                            <TableCell className="pl-4 font-medium">{k.customerName}</TableCell>
+                            <TableCell className="pl-4 font-medium">
+                              <div className="flex flex-col gap-1">
+                                <span>{k.customerName}</span>
+                                {linkedConsumer && tierChip(linkedConsumer.kycTier)}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-xs">
                               <span className="font-mono">{k.countryCode}</span>
                             </TableCell>
@@ -741,13 +972,19 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
                     <TableBody>
                       {filteredKyb.map((k) => {
                         const badge = statusBadge("kyb", k.status);
+                        const linkedMerchant = findMerchantForKyb(k);
                         return (
                           <TableRow
                             key={k.id}
                             className="cursor-pointer"
                             onClick={() => setSelectedKyb(k)}
                           >
-                            <TableCell className="pl-4 font-medium">{k.merchantName}</TableCell>
+                            <TableCell className="pl-4 font-medium">
+                              <div className="flex flex-col gap-1">
+                                <span>{k.merchantName}</span>
+                                {linkedMerchant && merchantRiskChip(linkedMerchant.riskCategory)}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-xs">
                               <span className="font-mono">{k.countryCode}</span>
                             </TableCell>
@@ -1121,6 +1358,7 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
           {selectedKyc && (
             <KycDetailSheet
               kyc={selectedKyc}
+              consumer={findConsumerForKyc(selectedKyc)}
               staffName={staffName}
               countryName={countryName}
               onClose={() => setSelectedKyc(null)}
@@ -1138,6 +1376,9 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
               riskScoreBadge={riskScoreBadge}
               slaBadge={slaBadge}
               docChips={docChips}
+              tierChip={tierChip}
+              consumerStatusBadge={consumerStatusBadge}
+              platformChips={platformChips}
             />
           )}
         </SheetContent>
@@ -1149,6 +1390,7 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
           {selectedKyb && (
             <KybDetailSheet
               kyb={selectedKyb}
+              merchant={findMerchantForKyb(selectedKyb)}
               staffName={staffName}
               countryName={countryName}
               onClose={() => setSelectedKyb(null)}
@@ -1165,6 +1407,8 @@ export function ComplianceView({ kycCases, kybCases, staff, countries }: Complia
               onAssign={() => assignReviewerKyb(selectedKyb)}
               slaBadge={slaBadge}
               docChips={docChips}
+              merchantStatusBadge={merchantStatusBadge}
+              platformChips={platformChips}
             />
           )}
         </SheetContent>
@@ -1316,6 +1560,7 @@ function ActionButtons({
 
 function KycDetailSheet({
   kyc,
+  consumer,
   staffName,
   countryName,
   onClose,
@@ -1327,8 +1572,12 @@ function KycDetailSheet({
   riskScoreBadge,
   slaBadge,
   docChips,
+  tierChip,
+  consumerStatusBadge,
+  platformChips,
 }: {
   kyc: KycCase;
+  consumer: Consumer | null;
   staffName: (id: string | null) => string;
   countryName: (code: string) => string;
   onClose: () => void;
@@ -1340,6 +1589,9 @@ function KycDetailSheet({
   riskScoreBadge: (s: number) => React.ReactNode;
   slaBadge: (d: number) => React.ReactNode;
   docChips: (d: string[], emptyLabel?: string) => React.ReactNode;
+  tierChip: (t: KycTier) => React.ReactNode;
+  consumerStatusBadge: (s: ConsumerStatus) => React.ReactNode;
+  platformChips: (p: PlatformKey[]) => React.ReactNode;
 }) {
   const badge = statusBadge("kyc", kyc.status);
   const canAct = kyc.status !== "approved" && kyc.status !== "rejected";
@@ -1357,6 +1609,7 @@ function KycDetailSheet({
           </Badge>
           {riskScoreBadge(kyc.riskScore)}
           {slaBadge(kyc.slaDeadline)}
+          {consumer && tierChip(consumer.kycTier)}
         </div>
       </SheetHeader>
 
@@ -1369,6 +1622,39 @@ function KycDetailSheet({
           <DetailRow label="Risk score" value={`${kyc.riskScore} / 100`} />
           <DetailRow label="Reviewer" value={staffName(kyc.assignedReviewer)} />
         </div>
+
+        {/* Linked consumer record */}
+        {consumer ? (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+              <User className="size-3" /> Linked consumer record
+              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1">
+                Live sync
+              </Badge>
+            </div>
+            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
+              <DetailRow label="Name" value={`${consumer.firstName} ${consumer.lastName}`} />
+              <DetailRow label="Consumer code" value={<span className="font-mono text-xs">{consumer.consumerCode}</span>} />
+              <DetailRow label="Email" value={<span className="text-xs">{consumer.email}</span>} />
+              <DetailRow label="Phone" value={<span className="text-xs">{consumer.phone}</span>} />
+              <DetailRow label="Nationality" value={consumer.nationality} />
+              <DetailRow label="Date of birth" value={consumer.dateOfBirth} />
+              <DetailRow label="KYC tier" value={tierChip(consumer.kycTier)} />
+              <DetailRow label="Risk score" value={riskScoreBadge(consumer.riskScore)} />
+              <DetailRow label="Current status" value={consumerStatusBadge(consumer.status)} />
+              <DetailRow label="Platforms" value={platformChips(consumer.platforms)} />
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              Approving this case will set this consumer to <span className="font-medium text-emerald-700 dark:text-emerald-400">KYC approved · Active</span>.
+              Rejecting will set them to <span className="font-medium text-orange-700 dark:text-orange-400">KYC rejected · Restricted</span>.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-amber-300 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+            <User className="size-3.5 inline mr-1 -mt-0.5" />
+            No linked consumer record — approval/rejection will be recorded on the case only.
+          </div>
+        )}
 
         <div>
           <div className="text-xs font-medium text-muted-foreground uppercase mb-2">
@@ -1409,6 +1695,7 @@ function KycDetailSheet({
 
 function KybDetailSheet({
   kyb,
+  merchant,
   staffName,
   countryName,
   onClose,
@@ -1419,8 +1706,11 @@ function KybDetailSheet({
   onAssign,
   slaBadge,
   docChips,
+  merchantStatusBadge,
+  platformChips,
 }: {
   kyb: KybCase;
+  merchant: Merchant | null;
   staffName: (id: string | null) => string;
   countryName: (code: string) => string;
   onClose: () => void;
@@ -1431,10 +1721,13 @@ function KybDetailSheet({
   onAssign: () => void;
   slaBadge: (d: number) => React.ReactNode;
   docChips: (d: string[], emptyLabel?: string) => React.ReactNode;
+  merchantStatusBadge: (s: MerchantStatus) => React.ReactNode;
+  platformChips: (p: PlatformKey[]) => React.ReactNode;
 }) {
   const badge = statusBadge("kyb", kyb.status);
   const canAct = kyb.status !== "approved" && kyb.status !== "rejected";
   const riskBadge = statusBadge("risk", kyb.riskCategory);
+  const merchantRisk = merchant ? statusBadge("risk", merchant.riskCategory) : null;
   return (
     <>
       <SheetHeader>
@@ -1451,6 +1744,11 @@ function KybDetailSheet({
             {riskBadge.label} risk
           </Badge>
           {slaBadge(kyb.slaDeadline)}
+          {merchant && merchantRisk && (
+            <Badge variant="outline" className={cn("text-[10px] capitalize", merchantRisk.className)}>
+              M·{merchantRisk.label}
+            </Badge>
+          )}
         </div>
       </SheetHeader>
 
@@ -1463,6 +1761,40 @@ function KybDetailSheet({
           <DetailRow label="Risk category" value={<span className="capitalize">{kyb.riskCategory}</span>} />
           <DetailRow label="Reviewer" value={staffName(kyb.assignedReviewer)} />
         </div>
+
+        {/* Linked merchant record */}
+        {merchant ? (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+              <Building2 className="size-3" /> Linked merchant record
+              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1">
+                Live sync
+              </Badge>
+            </div>
+            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
+              <DetailRow label="Trading name" value={merchant.tradingName} />
+              <DetailRow label="Legal name" value={merchant.legalName} />
+              <DetailRow label="Merchant code" value={<span className="font-mono text-xs">{merchant.merchantCode}</span>} />
+              <DetailRow label="Contact email" value={<span className="text-xs">{merchant.contactEmail}</span>} />
+              <DetailRow label="Contact phone" value={<span className="text-xs">{merchant.contactPhone}</span>} />
+              <DetailRow label="Owner" value={<span className="text-xs">{merchant.ownerName} · {merchant.ownerEmail}</span>} />
+              <DetailRow label="Business type" value={<span className="capitalize">{merchant.businessType.replace(/_/g, " ")}</span>} />
+              <DetailRow label="Industry" value={merchant.industry} />
+              <DetailRow label="Risk category" value={<span className="capitalize">{merchant.riskCategory}</span>} />
+              <DetailRow label="Current status" value={merchantStatusBadge(merchant.status)} />
+              <DetailRow label="Platforms" value={platformChips(merchant.platforms)} />
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              Approving this case will set this merchant to <span className="font-medium text-emerald-700 dark:text-emerald-400">KYB approved · Active</span>.
+              Rejecting will set them to <span className="font-medium text-orange-700 dark:text-orange-400">KYB rejected · Restricted</span>.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-amber-300 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+            <Building2 className="size-3.5 inline mr-1 -mt-0.5" />
+            No linked merchant record — approval/rejection will be recorded on the case only.
+          </div>
+        )}
 
         <div>
           <div className="text-xs font-medium text-muted-foreground uppercase mb-2">

@@ -16,15 +16,22 @@ import {
   TrendingDown,
   Clock,
   Eye,
+  Layers,
 } from "lucide-react";
 import { ViewHeader, ViewContainer, StatCard, EmptyState } from "@/components/portal/view-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { usePortalStore } from "@/hooks/use-portal-store";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency, formatNumber, formatCompact, statusBadge, timeAgo } from "@/lib/formatters";
-import type { CountryConfig, AdminStaff, KycCase, KybCase, FraudAlert, Settlement, SupportTicket } from "@/lib/types";
+import { PLATFORM_LABELS, type CountryConfig, type AdminStaff, type KycCase, type KybCase, type FraudAlert, type Settlement, type SupportTicket, type Merchant, type Consumer, type PlatformKey } from "@/lib/types";
 
 interface DashboardViewProps {
   countries: CountryConfig[];
@@ -34,7 +41,18 @@ interface DashboardViewProps {
   fraudAlerts: FraudAlert[];
   settlements: Settlement[];
   tickets: SupportTicket[];
+  merchants: Merchant[];
+  consumers: Consumer[];
 }
+
+const PLATFORM_ORDER: PlatformKey[] = [
+  "consumerApp",
+  "merchantApp",
+  "physicalTerminal",
+  "phonePos",
+  "nfcClosedLoop",
+  "onlineCheckout",
+];
 
 export function DashboardView({
   countries,
@@ -44,6 +62,8 @@ export function DashboardView({
   fraudAlerts,
   settlements,
   tickets,
+  merchants,
+  consumers,
 }: DashboardViewProps) {
   const { staff: currentStaff, isDemoMode } = useAuth();
   const { setView, selectCountry, setView: setPortalView } = usePortalStore();
@@ -55,6 +75,21 @@ export function DashboardView({
     const codes = new Set(currentStaff.countries.map((c) => c.countryCode));
     return countries.filter((c) => codes.has(c.countryCode));
   }, [countries, currentStaff]);
+
+  // Filter merchants/consumers to visible countries using the same logic
+  const visibleMerchants = useMemo(() => {
+    if (!currentStaff) return [];
+    if (currentStaff.departmentId === "dept_super_admin") return merchants;
+    const codes = new Set(currentStaff.countries.map((c) => c.countryCode));
+    return merchants.filter((m) => codes.has(m.countryCode));
+  }, [merchants, currentStaff]);
+
+  const visibleConsumers = useMemo(() => {
+    if (!currentStaff) return [];
+    if (currentStaff.departmentId === "dept_super_admin") return consumers;
+    const codes = new Set(currentStaff.countries.map((c) => c.countryCode));
+    return consumers.filter((c) => codes.has(c.countryCode));
+  }, [consumers, currentStaff]);
 
   // Aggregate KPIs across visible countries
   const kpis = useMemo(() => {
@@ -125,8 +160,8 @@ export function DashboardView({
           <StatCard label="Today's Volume" value={formatCompact(kpis.todayTxVolume)} hint="across visible countries" icon={Wallet} tone="info" />
           <StatCard label="Approval Rate" value={`${approvalRate.toFixed(1)}%`} hint={`${formatNumber(kpis.todayApproved)} approved · ${formatNumber(kpis.todayDeclined)} declined`} icon={TrendingUp} tone="success" />
           <StatCard label="Decline Rate" value={`${kpis.declineRate.toFixed(1)}%`} icon={TrendingDown} tone={kpis.declineRate > 5 ? "danger" : "default"} />
-          <StatCard label="Active Customers" value={formatCompact(kpis.activeCustomers)} icon={Users} />
-          <StatCard label="Active Merchants" value={formatCompact(kpis.activeMerchants)} icon={Building2} />
+          <StatCard label="Total Merchants" value={formatCompact(visibleMerchants.length)} hint="visible merchant records" icon={Building2} tone="success" />
+          <StatCard label="Total Consumers" value={formatCompact(visibleConsumers.length)} hint="visible consumer records" icon={Users} tone="success" />
         </div>
 
         {/* Compliance + Risk row */}
@@ -162,6 +197,7 @@ export function DashboardView({
               <div className="grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
                 {visibleCountries.map((c) => {
                   const badge = statusBadge("country", c.status);
+                  const enabledPlatforms = PLATFORM_ORDER.filter((key) => c.platforms?.[key] === true);
                   return (
                     <button
                       key={c.id}
@@ -199,6 +235,42 @@ export function DashboardView({
                         <span className="flex items-center gap-1"><Clock className="size-3" /> {c.pendingKyc} KYC</span>
                         <span className="flex items-center gap-1"><AlertTriangle className="size-3" /> {c.highRiskAlerts} risk</span>
                         <span className="flex items-center gap-1"><Scale className="size-3" /> {c.openDisputes} disp.</span>
+                      </div>
+                      {/* Platform scope chips */}
+                      <div className="flex items-center gap-1.5 mt-3 pt-3 border-t flex-wrap">
+                        <Layers className="size-3 text-emerald-600 shrink-0" />
+                        {enabledPlatforms.length === 0 ? (
+                          <span className="text-[11px] text-muted-foreground italic">No platforms enabled</span>
+                        ) : (
+                          <TooltipProvider delayDuration={200}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 cursor-help">
+                                  {enabledPlatforms.length} platform{enabledPlatforms.length === 1 ? "" : "s"}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <div className="space-y-1">
+                                  <div className="text-xs font-semibold mb-1">Enabled platforms</div>
+                                  {enabledPlatforms.map((key) => (
+                                    <div key={key} className="text-[11px]">{PLATFORM_LABELS[key].label}</div>
+                                  ))}
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                        <div className="flex items-center gap-1 flex-wrap ml-1">
+                          {enabledPlatforms.map((key) => (
+                            <Badge
+                              key={key}
+                              variant="outline"
+                              className="text-[9px] px-1.5 py-0 h-4 bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+                            >
+                              {PLATFORM_LABELS[key].label}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
                     </button>
                   );

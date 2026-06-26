@@ -107,6 +107,9 @@ export interface CountryConfig {
   deviceRules: Record<string, unknown>;
   settlementRules: Record<string, unknown>;
   riskRules: Record<string, unknown>;
+  // Platforms enabled for this country. Rules (KYC/KYB/device/settlement/risk)
+  // cut across ALL enabled platforms — set here, enforced everywhere.
+  platforms: PlatformConfig;
   // dashboard counters
   activeCustomers: number;
   activeMerchants: number;
@@ -125,6 +128,105 @@ export interface CountryConfig {
   complianceAlerts: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * Per-country platform enablement. When a platform is enabled, ALL country rules
+ * (KYC for consumers, KYB for merchants, device, settlement, risk) apply to it.
+ * This is the "cut across all platforms" enforcement point.
+ */
+export interface PlatformConfig {
+  consumerApp: boolean; // Customer-facing mobile app
+  merchantApp: boolean; // Merchant-facing mobile app
+  physicalTerminal: boolean; // Card POS devices
+  phonePos: boolean; // SoftPOS — merchant phone as terminal
+  nfcClosedLoop: boolean; // Faya's own NFC payment system
+  onlineCheckout: boolean; // E-commerce / web checkout
+}
+
+export type PlatformKey = keyof PlatformConfig;
+
+export const PLATFORM_LABELS: Record<PlatformKey, { label: string; description: string }> = {
+  consumerApp: { label: "Consumer App", description: "Customer-facing mobile app — KYC, payments, wallet" },
+  merchantApp: { label: "Merchant App", description: "Merchant-facing mobile app — sales, settlements, reports" },
+  physicalTerminal: { label: "Physical Terminals", description: "Card POS devices — tap, insert, swipe" },
+  phonePos: { label: "Phone POS (SoftPOS)", description: "Merchant phone as terminal via NFC" },
+  nfcClosedLoop: { label: "NFC Closed-Loop", description: "Faya's own NFC payment system" },
+  onlineCheckout: { label: "Online Checkout", description: "E-commerce / web payment gateway" },
+};
+
+export type MerchantStatus =
+  | "onboarding"
+  | "active"
+  | "restricted"
+  | "suspended"
+  | "closed";
+
+export type ConsumerStatus =
+  | "pending_kyc"
+  | "active"
+  | "restricted"
+  | "suspended"
+  | "closed";
+
+export type KycTier = "tier_1" | "tier_2" | "tier_3";
+
+export interface Merchant {
+  id: string;
+  merchantCode: string; // human-readable e.g. FAY-NG-M-00123
+  legalName: string;
+  tradingName: string;
+  businessType: string;
+  industry: string;
+  countryCode: string;
+  contactEmail: string;
+  contactPhone: string;
+  address: string;
+  city: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  kybStatus: KybStatus;
+  kybCaseId: string | null;
+  riskCategory: RiskLevel;
+  status: MerchantStatus;
+  platforms: PlatformKey[]; // which platforms this merchant uses
+  terminalCount: number;
+  phonePosCount: number;
+  lifetimeVolume: number;
+  monthlyVolume: number;
+  transactionCount: number;
+  chargebackRate: number; // percentage
+  settlementCurrency: string;
+  createdAt: number;
+  updatedAt: number;
+  notes: string;
+}
+
+export interface Consumer {
+  id: string;
+  consumerCode: string; // e.g. FAY-NG-C-00123
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  countryCode: string;
+  nationality: string;
+  dateOfBirth: string;
+  kycStatus: KycStatus;
+  kycTier: KycTier;
+  kycCaseId: string | null;
+  riskScore: number;
+  status: ConsumerStatus;
+  platforms: PlatformKey[]; // which platforms this consumer uses
+  lifetimeVolume: number;
+  monthlyVolume: number;
+  transactionCount: number;
+  walletBalance: number;
+  currency: string;
+  createdAt: number;
+  updatedAt: number;
+  notes: string;
 }
 
 export interface KycCase {

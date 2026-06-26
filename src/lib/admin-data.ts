@@ -44,6 +44,8 @@ import type {
   Terminal,
   AuditLog,
   ApprovalRequest,
+  Merchant,
+  Consumer,
 } from "./types";
 import {
   SEED_DEPARTMENTS,
@@ -60,6 +62,8 @@ import {
   SEED_TERMINALS,
   SEED_AUDIT_LOGS,
   SEED_APPROVALS,
+  SEED_MERCHANTS,
+  SEED_CONSUMERS,
 } from "./seed-data";
 
 const PREFIX = "faya_admin_";
@@ -79,6 +83,8 @@ export const COLLECTIONS = {
   terminals: `${PREFIX}terminals`,
   auditLogs: `${PREFIX}audit_logs`,
   approvals: `${PREFIX}approvals`,
+  merchants: `${PREFIX}merchants`,
+  consumers: `${PREFIX}consumers`,
   meta: `${PREFIX}meta`,
 } as const;
 
@@ -181,6 +187,8 @@ export async function ensureSeedData(): Promise<void> {
       await seedBatch(COLLECTIONS.terminals, SEED_TERMINALS);
       await seedBatch(COLLECTIONS.auditLogs, SEED_AUDIT_LOGS);
       await seedBatch(COLLECTIONS.approvals, SEED_APPROVALS);
+      await seedBatch(COLLECTIONS.merchants, SEED_MERCHANTS);
+      await seedBatch(COLLECTIONS.consumers, SEED_CONSUMERS);
 
       await setDoc(doc(d, COLLECTIONS.meta, "seed_status"), {
         seeded: true,
@@ -466,6 +474,14 @@ export const adminData = {
   // Approvals
   subscribeApprovals: (cb: (items: ApprovalRequest[]) => void) =>
     subscribe<ApprovalRequest>(COLLECTIONS.approvals, cb, orderBy("createdAt", "desc")),
+  // Merchants — managed via Compliance (KYB) + Risk (restrict) + Country rules.
+  // The merchant app is a separate application that reads from this same database.
+  subscribeMerchants: (cb: (items: Merchant[]) => void) =>
+    subscribe<Merchant>(COLLECTIONS.merchants, cb, orderBy("createdAt", "desc")),
+  // Consumers — managed via Compliance (KYC) + Risk (restrict) + Country rules.
+  // The consumer app is a separate application that reads from this same database.
+  subscribeConsumers: (cb: (items: Consumer[]) => void) =>
+    subscribe<Consumer>(COLLECTIONS.consumers, cb, orderBy("createdAt", "desc")),
 
   // Single-doc filters
   subscribeStaffById: (id: string, cb: (item: AdminStaff | null) => void) => {
@@ -509,6 +525,16 @@ export const adminData = {
   updateTicket: (id: string, patchData: Partial<SupportTicket>) => patch<SupportTicket>(COLLECTIONS.tickets, id, patchData),
   updateDispute: (id: string, patchData: Partial<Dispute>) => patch<Dispute>(COLLECTIONS.disputes, id, patchData),
   updateTerminal: (id: string, patchData: Partial<Terminal>) => patch<Terminal>(COLLECTIONS.terminals, id, patchData),
+
+  // Merchant & Consumer mutations — admin manages these entities; the separate
+  // merchant/consumer apps read from the same Firestore collections.
+  createMerchant: (merchant: Merchant) => upsert(COLLECTIONS.merchants, merchant),
+  updateMerchant: (id: string, patchData: Partial<Merchant>) => patch<Merchant>(COLLECTIONS.merchants, id, patchData),
+  deleteMerchant: (id: string) => remove(COLLECTIONS.merchants, id),
+
+  createConsumer: (consumer: Consumer) => upsert(COLLECTIONS.consumers, consumer),
+  updateConsumer: (id: string, patchData: Partial<Consumer>) => patch<Consumer>(COLLECTIONS.consumers, id, patchData),
+  deleteConsumer: (id: string) => remove(COLLECTIONS.consumers, id),
 
   createApproval: (req: ApprovalRequest) => upsert(COLLECTIONS.approvals, req),
   updateApproval: (id: string, patchData: Partial<ApprovalRequest>) => patch<ApprovalRequest>(COLLECTIONS.approvals, id, patchData),

@@ -20,6 +20,8 @@ import type {
   Terminal,
   AuditLog,
   ApprovalRequest,
+  Merchant,
+  Consumer,
 } from "@/lib/types";
 import { LoginScreen } from "@/components/portal/login-screen";
 import { PortalShell } from "@/components/portal/portal-shell";
@@ -64,6 +66,8 @@ export function PortalApp() {
   const [terminals, setTerminals] = useState<Terminal[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [merchants, setMerchants] = useState<Merchant[]>([]);
+  const [consumers, setConsumers] = useState<Consumer[]>([]);
 
   // Seed the database on first mount
   useEffect(() => {
@@ -99,6 +103,8 @@ export function PortalApp() {
       unsubs.push(adminData.subscribeTerminals(setTerminals));
       unsubs.push(adminData.subscribeAudit(setAuditLogs));
       unsubs.push(adminData.subscribeApprovals(setApprovals));
+      unsubs.push(adminData.subscribeMerchants(setMerchants));
+      unsubs.push(adminData.subscribeConsumers(setConsumers));
     } catch (e) {
       console.error("[PortalApp] subscription error:", e);
     }
@@ -144,6 +150,8 @@ export function PortalApp() {
           terminals={terminals}
           auditLogs={auditLogs}
           approvals={approvals}
+          merchants={merchants}
+          consumers={consumers}
         />
       </PortalShell>
       <SonnerToaster richColors closeButton position="bottom-right" />
@@ -166,6 +174,8 @@ function PortalContent(props: {
   terminals: Terminal[];
   auditLogs: AuditLog[];
   approvals: ApprovalRequest[];
+  merchants: Merchant[];
+  consumers: Consumer[];
 }) {
   const { view } = usePortalStore();
 
@@ -186,6 +196,8 @@ function PortalContent(props: {
           fraudAlerts={props.fraudAlerts}
           settlements={props.settlements}
           tickets={props.tickets}
+          merchants={props.merchants}
+          consumers={props.consumers}
         />
       );
     case "staff":
@@ -208,7 +220,7 @@ function PortalContent(props: {
     case "countries":
       return <CountriesView countries={props.countries} />;
     case "country_detail":
-      return <CountryDetailView countries={props.countries} />;
+      return <CountryDetailView countries={props.countries} merchants={props.merchants} consumers={props.consumers} />;
     case "compliance":
       return (
         <ComplianceView
@@ -216,10 +228,12 @@ function PortalContent(props: {
           kybCases={props.kybCases}
           staff={props.staffList}
           countries={props.countries}
+          consumers={props.consumers}
+          merchants={props.merchants}
         />
       );
     case "risk":
-      return <RiskView fraudAlerts={props.fraudAlerts} countries={props.countries} />;
+      return <RiskView fraudAlerts={props.fraudAlerts} countries={props.countries} merchants={props.merchants} consumers={props.consumers} />;
     case "devices":
       return <DevicesView terminals={props.terminals} countries={props.countries} />;
     case "finance":
@@ -233,7 +247,7 @@ function PortalContent(props: {
     case "approvals":
       return <ApprovalsView approvals={props.approvals} />;
     default:
-      return <DashboardView countries={props.countries} staff={props.staffList} kycCases={props.kycCases} kybCases={props.kybCases} fraudAlerts={props.fraudAlerts} settlements={props.settlements} tickets={props.tickets} />;
+      return <DashboardView countries={props.countries} staff={props.staffList} kycCases={props.kycCases} kybCases={props.kybCases} fraudAlerts={props.fraudAlerts} settlements={props.settlements} tickets={props.tickets} merchants={props.merchants} consumers={props.consumers} />;
   }
 }
 

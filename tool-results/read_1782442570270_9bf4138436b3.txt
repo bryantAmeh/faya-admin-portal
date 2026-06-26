@@ -1,0 +1,1203 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Risk & Fraud Operations View (spec §11.2)
+     5→ *
+     6→ * Tabs:
+     7→ *   - Fraud Alerts            : table of FraudAlert + filters + row actions
+     8→ *   - Device Risk             : placeholder workflow (future feature)
+     9→ *   - Transaction Monitoring  : placeholder workflow (future feature)
+    10→ *   - Watchlists              : placeholder workflow (future feature)
+    11→ *   - Risk Cases              : placeholder workflow (future feature)
+    12→ *
+    13→ * Country scoping: Super Admin sees all countries; other staff see only the
+    14→ * country codes listed on their `staff.countries` access record.
+    15→ *
+    16→ * Every action is mirrored to the audit log via `logAudit(...)` with action
+    17→ * keys: account.restrict / device.block / settlement.hold / fraud.escalate /
+    18→ * fraud.close_false_positive / watchlist.add.
+    19→ */
+    20→import { useMemo, useState } from "react";
+    21→import {
+    22→  AlertTriangle,
+    23→  Search,
+    24→  Filter,
+    25→  ShieldBan,
+    26→  Ban,
+    27→  PauseCircle,
+    28→  ArrowUpCircle,
+    29→  CheckCircle2,
+    30→  EyeOff,
+    31→  MoreHorizontal,
+    32→  ShieldAlert,
+    33→  Activity,
+    34→  FolderLock,
+    35→  Smartphone,
+    36→  Clock,
+    37→  OctagonAlert,
+    38→  PowerOff,
+    39→  User,
+    40→  Building2,
+    41→  Info,
+    42→} from "lucide-react";
+    43→import { toast } from "sonner";
+    44→import { ViewHeader, ViewContainer, EmptyState, StatCard } from "@/components/portal/view-helpers";
+    45→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    46→import { Badge } from "@/components/ui/badge";
+    47→import { Button } from "@/components/ui/button";
+    48→import { Input } from "@/components/ui/input";
+    49→import { Separator } from "@/components/ui/separator";
+    50→import {
+    51→  TableBody,
+    52→  TableCell,
+    53→  TableHead,
+    54→  TableHeader,
+    55→  TableRow,
+    56→} from "@/components/ui/table";
+    57→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    58→import {
+    59→  Select,
+    60→  SelectContent,
+    61→  SelectItem,
+    62→  SelectTrigger,
+    63→  SelectValue,
+    64→} from "@/components/ui/select";
+    65→import {
+    66→  Sheet,
+    67→  SheetContent,
+    68→  SheetDescription,
+    69→  SheetFooter,
+    70→  SheetHeader,
+    71→  SheetTitle,
+    72→} from "@/components/ui/sheet";
+    73→import {
+    74→  AlertDialog,
+    75→  AlertDialogAction,
+    76→  AlertDialogCancel,
+    77→  AlertDialogContent,
+    78→  AlertDialogDescription,
+    79→  AlertDialogFooter,
+    80→  AlertDialogHeader,
+    81→  AlertDialogTitle,
+    82→} from "@/components/ui/alert-dialog";
+    83→import {
+    84→  DropdownMenu,
+    85→  DropdownMenuContent,
+    86→  DropdownMenuItem,
+    87→  DropdownMenuLabel,
+    88→  DropdownMenuSeparator,
+    89→  DropdownMenuTrigger,
+    90→} from "@/components/ui/dropdown-menu";
+    91→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+    92→import { useAuth } from "@/hooks/use-auth";
+    93→import { adminData, logAudit } from "@/lib/admin-data";
+    94→import { formatCurrency, formatDateTime, statusBadge, timeAgo } from "@/lib/formatters";
+    95→import type {
+    96→  FraudAlert,
+    97→  CountryConfig,
+    98→  RiskLevel,
+    99→  Merchant,
+   100→  Consumer,
+   101→  ConsumerStatus,
+   102→  MerchantStatus,
+   103→  PlatformKey,
+   104→} from "@/lib/types";
+   105→import { PLATFORM_LABELS } from "@/lib/types";
+   106→import { cn } from "@/lib/utils";
+   107→
+   108→interface RiskViewProps {
+   109→  fraudAlerts: FraudAlert[];
+   110→  countries: CountryConfig[];
+   111→  merchants: Merchant[];
+   112→  consumers: Consumer[];
+   113→}
+   114→
+   115→const SUPER_ADMIN_DEPT = "dept_super_admin";
+   116→
+   117→/** Badge styling for Consumer.status (not in shared formatters). */
+   118→const CONSUMER_STATUS_STYLES: Record<ConsumerStatus, { label: string; className: string }> = {
+   119→  pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   120→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   121→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   122→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   123→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   124→};
+   125→
+   126→/** Badge styling for Merchant.status (not in shared formatters). */
+   127→const MERCHANT_STATUS_STYLES: Record<MerchantStatus, { label: string; className: string }> = {
+   128→  onboarding: { label: "Onboarding", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   129→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   130→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   131→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   132→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   133→};
+   134→
+   135→const SEVERITY_OPTIONS = [
+   136→  { value: "all", label: "All severities" },
+   137→  { value: "low", label: "Low" },
+   138→  { value: "medium", label: "Medium" },
+   139→  { value: "high", label: "High" },
+   140→  { value: "critical", label: "Critical" },
+   141→] as const;
+   142→
+   143→const STATUS_OPTIONS = [
+   144→  { value: "all", label: "All statuses" },
+   145→  { value: "open", label: "Open" },
+   146→  { value: "investigating", label: "Investigating" },
+   147→  { value: "escalated", label: "Escalated" },
+   148→  { value: "closed", label: "Closed" },
+   149→] as const;
+   150→
+   151→/** Custom badge styling for FraudAlert.status (not covered by STATUS_BADGE). */
+   152→const FRAUD_STATUS_STYLES: Record<FraudAlert["status"], { label: string; className: string }> = {
+   153→  open: { label: "Open", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   154→  investigating: { label: "Investigating", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   155→  escalated: { label: "Escalated", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   156→  closed: { label: "Closed", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   157→};
+   158→
+   159→type LinkedEntity =
+   160→  | { kind: "consumer"; consumer: Consumer }
+   161→  | { kind: "merchant"; merchant: Merchant };
+   162→
+   163→type ConfirmAction =
+   164→  | { kind: "restrict"; alert: FraudAlert }
+   165→  | { kind: "suspend"; alert: FraudAlert }
+   166→  | { kind: "reactivate"; alert: FraudAlert }
+   167→  | { kind: "block_device"; alert: FraudAlert }
+   168→  | { kind: "hold_settlement"; alert: FraudAlert }
+   169→  | { kind: "close_false_positive"; alert: FraudAlert };
+   170→
+   171→export function RiskView({ fraudAlerts, countries, merchants, consumers }: RiskViewProps) {
+   172→  const { staff: currentStaff } = useAuth();
+   173→  const [activeTab, setActiveTab] = useState<string>("fraud");
+   174→
+   175→  /* ------------- Linked entity lookup (alert → consumer / merchant) ------------- */
+   176→  // Tries exact-name match first against consumer.firstName+lastName / merchant.tradingName / legalName.
+   177→  // Falls back to a fuzzy partial-contains match. Returns null when no link can be resolved.
+   178→  function findLinkedEntity(a: FraudAlert): LinkedEntity | null {
+   179→    if (a.entityType === "customer") {
+   180→      const target = a.entityName.trim().toLowerCase();
+   181→      if (!target) return null;
+   182→      // Exact match on full name
+   183→      let c = consumers.find(
+   184→        (x) => `${x.firstName} ${x.lastName}`.trim().toLowerCase() === target,
+   185→      );
+   186→      // Fuzzy: full name appears inside the entityName (or vice-versa)
+   187→      if (!c) {
+   188→        c = consumers.find((x) => {
+   189→          const full = `${x.firstName} ${x.lastName}`.trim().toLowerCase();
+   190→          return full.length > 2 && (target.includes(full) || full.includes(target));
+   191→        });
+   192→      }
+   193→      // Exact match on email / phone / consumer code
+   194→      if (!c) {
+   195→        c = consumers.find(
+   196→          (x) =>
+   197→            x.email.toLowerCase() === target ||
+   198→            x.phone.toLowerCase() === target ||
+   199→            x.consumerCode.toLowerCase() === target,
+   200→        );
+   201→      }
+   202→      return c ? { kind: "consumer", consumer: c } : null;
+   203→    }
+   204→    if (a.entityType === "merchant") {
+   205→      const target = a.entityName.trim().toLowerCase();
+   206→      if (!target) return null;
+   207→      // Exact match on tradingName / legalName
+   208→      let m =
+   209→        merchants.find((x) => x.tradingName.trim().toLowerCase() === target) ??
+   210→        merchants.find((x) => x.legalName.trim().toLowerCase() === target);
+   211→      // Fuzzy partial match on trading / legal name
+   212→      if (!m) {
+   213→        m = merchants.find((x) => {
+   214→          const t = x.tradingName.trim().toLowerCase();
+   215→          const l = x.legalName.trim().toLowerCase();
+   216→          return (
+   217→            (t.length > 2 && (target.includes(t) || t.includes(target))) ||
+   218→            (l.length > 2 && (target.includes(l) || l.includes(target)))
+   219→          );
+   220→        });
+   221→      }
+   222→      // Exact match on merchant code / contact email
+   223→      if (!m) {
+   224→        m = merchants.find(
+   225→          (x) =>
+   226→            x.merchantCode.toLowerCase() === target ||
+   227→            x.contactEmail.toLowerCase() === target,
+   228→        );
+   229→      }
+   230→      return m ? { kind: "merchant", merchant: m } : null;
+   231→    }
+   232→    // Device alerts have no consumer/merchant link
+   233→    return null;
+   234→  }
+   235→
+   236→  /* ----------------------- Country scoping ----------------------- */
+   237→  const visibleCountryCodes = useMemo(() => {
+   238→    if (!currentStaff) return new Set<string>();
+   239→    if (currentStaff.departmentId === SUPER_ADMIN_DEPT) {
+   240→      return new Set(countries.map((c) => c.countryCode));
+   241→    }
+   242→    return new Set(currentStaff.countries.map((c) => c.countryCode));
+   243→  }, [currentStaff, countries]);
+   244→
+   245→  const isSuperAdmin = currentStaff?.departmentId === SUPER_ADMIN_DEPT;
+   246→
+   247→  const filterableCountries = useMemo(
+   248→    () =>
+   249→      isSuperAdmin
+   250→        ? countries
+   251→        : countries.filter((c) => visibleCountryCodes.has(c.countryCode)),
+   252→    [countries, isSuperAdmin, visibleCountryCodes],
+   253→  );
+   254→
+   255→  const visibleAlerts = useMemo(
+   256→    () => fraudAlerts.filter((a) => visibleCountryCodes.has(a.countryCode)),
+   257→    [fraudAlerts, visibleCountryCodes],
+   258→  );
+   259→
+   260→  /* --------------------------- Filters --------------------------- */
+   261→  const [countryFilter, setCountryFilter] = useState<string>("all");
+   262→  const [severityFilter, setSeverityFilter] = useState<string>("all");
+   263→  const [statusFilter, setStatusFilter] = useState<string>("all");
+   264→  const [search, setSearch] = useState("");
+   265→
+   266→  const filteredAlerts = useMemo(() => {
+   267→    let list = visibleAlerts;
+   268→    if (countryFilter !== "all") list = list.filter((a) => a.countryCode === countryFilter);
+   269→    if (severityFilter !== "all") list = list.filter((a) => a.severity === severityFilter);
+   270→    if (statusFilter !== "all") list = list.filter((a) => a.status === statusFilter);
+   271→    if (search.trim()) {
+   272→      const q = search.trim().toLowerCase();
+   273→      list = list.filter(
+   274→        (a) =>
+   275→          a.entityName.toLowerCase().includes(q) ||
+   276→          a.id.toLowerCase().includes(q) ||
+   277→          a.trigger.toLowerCase().includes(q),
+   278→      );
+   279→    }
+   280→    return list;
+   281→  }, [visibleAlerts, countryFilter, severityFilter, statusFilter, search]);
+   282→
+   283→  /* --------------------- Detail sheet + dialog ------------------- */
+   284→  const [selectedAlert, setSelectedAlert] = useState<FraudAlert | null>(null);
+   285→  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+   286→
+   287→  /* --------------------------- Audit actor ----------------------- */
+   288→  const actor = useMemo(() => {
+   289→    if (!currentStaff) return null;
+   290→    return {
+   291→      staffId: currentStaff.id,
+   292→      staffName: `${currentStaff.firstName} ${currentStaff.lastName}`,
+   293→      department: currentStaff.departmentId,
+   294→      role: currentStaff.roleId,
+   295→    };
+   296→  }, [currentStaff]);
+   297→
+   298→  /* --------------------------- Lookups --------------------------- */
+   299→  function countryName(code: string): string {
+   300→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   301→  }
+   302→
+   303→  /* ----------------------- KPI calculations ---------------------- */
+   304→  const stats = useMemo(() => {
+   305→    const startOfToday = new Date();
+   306→    startOfToday.setHours(0, 0, 0, 0);
+   307→    const todayMs = startOfToday.getTime();
+   308→    return {
+   309→      openAlerts: visibleAlerts.filter((a) => a.status === "open" || a.status === "investigating").length,
+   310→      critical: visibleAlerts.filter((a) => a.severity === "critical" && a.status !== "closed").length,
+   311→      escalated: visibleAlerts.filter((a) => a.status === "escalated").length,
+   312→      closedToday: visibleAlerts.filter((a) => a.status === "closed" && a.createdAt >= todayMs).length,
+   313→    };
+   314→  }, [visibleAlerts]);
+   315→
+   316→  /* ----------------------- Fraud mutations ----------------------- */
+   317→  function restrictAccount(a: FraudAlert) {
+   318→    if (!actor) return;
+   319→    // Actually update the linked consumer / merchant record so the separate app
+   320→    // immediately reflects the restricted status.
+   321→    const linked = findLinkedEntity(a);
+   322→    if (linked?.kind === "consumer") {
+   323→      adminData.updateConsumer(linked.consumer.id, {
+   324→        status: "restricted",
+   325→        updatedAt: Date.now(),
+   326→      });
+   327→      logAudit(actor, "account.restrict", "consumer", linked.consumer.id, {
+   328→        countryCode: a.countryCode,
+   329→        beforeValue: linked.consumer.status,
+   330→        afterValue: "restricted",
+   331→        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+   332→      });
+   333→    } else if (linked?.kind === "merchant") {
+   334→      adminData.updateMerchant(linked.merchant.id, {
+   335→        status: "restricted",
+   336→        updatedAt: Date.now(),
+   337→      });
+   338→      logAudit(actor, "account.restrict", "merchant", linked.merchant.id, {
+   339→        countryCode: a.countryCode,
+   340→        beforeValue: linked.merchant.status,
+   341→        afterValue: "restricted",
+   342→        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+   343→      });
+   344→    } else {
+   345→      // No linked record — audit only (legacy behaviour)
+   346→      logAudit(actor, "account.restrict", a.entityType, a.entityName, {
+   347→        countryCode: a.countryCode,
+   348→        reason: `Fraud alert ${a.id} — ${a.trigger} (no linked record)`,
+   349→      });
+   350→    }
+   351→    toast.warning(`Account restricted: ${a.entityName}`, {
+   352→      description: linked
+   353→        ? `${linked.kind === "consumer" ? linked.consumer.consumerCode : linked.merchant.merchantCode} now restricted — app reflects in real-time.`
+   354→        : `No linked consumer/merchant record found — audit logged only.`,
+   355→    });
+   356→  }
+   357→
+   358→  function suspendAccount(a: FraudAlert) {
+   359→    if (!actor) return;
+   360→    const linked = findLinkedEntity(a);
+   361→    if (linked?.kind === "consumer") {
+   362→      adminData.updateConsumer(linked.consumer.id, {
+   363→        status: "suspended",
+   364→        updatedAt: Date.now(),
+   365→      });
+   366→      logAudit(actor, "account.suspend", "consumer", linked.consumer.id, {
+   367→        countryCode: a.countryCode,
+   368→        beforeValue: linked.consumer.status,
+   369→        afterValue: "suspended",
+   370→        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+   371→      });
+   372→    } else if (linked?.kind === "merchant") {
+   373→      adminData.updateMerchant(linked.merchant.id, {
+   374→        status: "suspended",
+   375→        updatedAt: Date.now(),
+   376→      });
+   377→      logAudit(actor, "account.suspend", "merchant", linked.merchant.id, {
+   378→        countryCode: a.countryCode,
+   379→        beforeValue: linked.merchant.status,
+   380→        afterValue: "suspended",
+   381→        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+   382→      });
+   383→    } else {
+   384→      logAudit(actor, "account.suspend", a.entityType, a.entityName, {
+   385→        countryCode: a.countryCode,
+   386→        reason: `Fraud alert ${a.id} — ${a.trigger} (no linked record)`,
+   387→      });
+   388→    }
+   389→    toast.error(`Account suspended: ${a.entityName}`, {
+   390→      description: linked
+   391→        ? `${linked.kind === "consumer" ? linked.consumer.consumerCode : linked.merchant.merchantCode} fully suspended — login blocked in the app.`
+   392→        : `No linked consumer/merchant record found — audit logged only.`,
+   393→    });
+   394→  }
+   395→
+   396→  function reactivateAccount(a: FraudAlert) {
+   397→    if (!actor) return;
+   398→    const linked = findLinkedEntity(a);
+   399→    if (linked?.kind === "consumer") {
+   400→      adminData.updateConsumer(linked.consumer.id, {
+   401→        status: "active",
+   402→        updatedAt: Date.now(),
+   403→      });
+   404→      logAudit(actor, "account.reactivate", "consumer", linked.consumer.id, {
+   405→        countryCode: a.countryCode,
+   406→        beforeValue: linked.consumer.status,
+   407→        afterValue: "active",
+   408→        reason: `Reactivated from fraud alert ${a.id}`,
+   409→      });
+   410→    } else if (linked?.kind === "merchant") {
+   411→      adminData.updateMerchant(linked.merchant.id, {
+   412→        status: "active",
+   413→        updatedAt: Date.now(),
+   414→      });
+   415→      logAudit(actor, "account.reactivate", "merchant", linked.merchant.id, {
+   416→        countryCode: a.countryCode,
+   417→        beforeValue: linked.merchant.status,
+   418→        afterValue: "active",
+   419→        reason: `Reactivated from fraud alert ${a.id}`,
+   420→      });
+   421→    } else {
+   422→      logAudit(actor, "account.reactivate", a.entityType, a.entityName, {
+   423→        countryCode: a.countryCode,
+   424→        reason: `Reactivated from fraud alert ${a.id} (no linked record)`,
+   425→      });
+   426→    }
+   427→    toast.success(`Account reactivated: ${a.entityName}`, {
+   428→      description: linked
+   429→        ? `${linked.kind === "consumer" ? linked.consumer.consumerCode : linked.merchant.merchantCode} restored to active.`
+   430→        : `No linked consumer/merchant record found — audit logged only.`,
+   431→    });
+   432→  }
+   433→
+   434→  function blockDevice(a: FraudAlert) {
+   435→    if (!actor) return;
+   436→    adminData.updateFraud(a.id, { status: "closed" });
+   437→    logAudit(actor, "device.block", "device", a.device, {
+   438→      countryCode: a.countryCode,
+   439→      beforeValue: a.status,
+   440→      afterValue: "closed",
+   441→      reason: `Fraud alert ${a.id} — ${a.trigger}`,
+   442→    });
+   443→    toast.error(`Device blocked: ${a.device}`, {
+   444→      description: `Alert ${a.id} closed and device fingerprint added to blocklist.`,
+   445→    });
+   446→  }
+   447→
+   448→  function holdSettlement(a: FraudAlert) {
+   449→    if (!actor) return;
+   450→    logAudit(actor, "settlement.hold", a.entityType, a.entityName, {
+   451→      countryCode: a.countryCode,
+   452→      reason: `Fraud alert ${a.id} — ${a.trigger}`,
+   453→    });
+   454→    toast.info(`Settlement hold requested: ${a.entityName}`, {
+   455→      description: `Finance team notified to hold settlements for ${countryName(a.countryCode)}.`,
+   456→    });
+   457→  }
+   458→
+   459→  function escalateToCompliance(a: FraudAlert) {
+   460→    if (!actor) return;
+   461→    adminData.updateFraud(a.id, { status: "escalated" });
+   462→    logAudit(actor, "fraud.escalate", "fraud_alert", a.id, {
+   463→      countryCode: a.countryCode,
+   464→      beforeValue: a.status,
+   465→      afterValue: "escalated",
+   466→    });
+   467→    toast.success(`Escalated to compliance: ${a.entityName}`, {
+   468→      description: `Alert ${a.id} moved to the compliance escalation queue.`,
+   469→    });
+   470→    setSelectedAlert(null);
+   471→  }
+   472→
+   473→  function closeFalsePositive(a: FraudAlert) {
+   474→    if (!actor) return;
+   475→    adminData.updateFraud(a.id, { status: "closed" });
+   476→    logAudit(actor, "fraud.close_false_positive", "fraud_alert", a.id, {
+   477→      countryCode: a.countryCode,
+   478→      beforeValue: a.status,
+   479→      afterValue: "closed",
+   480→      reason: "False positive — no fraud confirmed",
+   481→    });
+   482→    toast.success(`Closed as false positive: ${a.entityName}`, {
+   483→      description: `Alert ${a.id} resolved without further action.`,
+   484→    });
+   485→    setSelectedAlert(null);
+   486→  }
+   487→
+   488→  function addToWatchlist(a: FraudAlert) {
+   489→    if (!actor) return;
+   490→    logAudit(actor, "watchlist.add", a.entityType, a.entityName, {
+   491→      countryCode: a.countryCode,
+   492→      reason: `From fraud alert ${a.id}`,
+   493→    });
+   494→    toast.success(`Added to watchlist: ${a.entityName}`, {
+   495→      description: `${a.entityType} will be monitored on all future transactions.`,
+   496→    });
+   497→  }
+   498→
+   499→  /* ----------------------- Confirm dispatcher --------------------- */
+   500→  function runConfirm() {
+   501→    if (!confirmAction) return;
+   502→    switch (confirmAction.kind) {
+   503→      case "restrict":
+   504→        restrictAccount(confirmAction.alert);
+   505→        break;
+   506→      case "suspend":
+   507→        suspendAccount(confirmAction.alert);
+   508→        break;
+   509→      case "reactivate":
+   510→        reactivateAccount(confirmAction.alert);
+   511→        break;
+   512→      case "block_device":
+   513→        blockDevice(confirmAction.alert);
+   514→        break;
+   515→      case "hold_settlement":
+   516→        holdSettlement(confirmAction.alert);
+   517→        break;
+   518→      case "close_false_positive":
+   519→        closeFalsePositive(confirmAction.alert);
+   520→        break;
+   521→    }
+   522→    setConfirmAction(null);
+   523→  }
+   524→
+   525→  /* ------------------------- Badge helpers ----------------------- */
+   526→  function severityBadge(level: RiskLevel): React.ReactNode {
+   527→    const b = statusBadge("risk", level);
+   528→    return (
+   529→      <Badge variant="secondary" className={cn("text-[10px] capitalize", b.className)}>
+   530→        {b.label}
+   531→      </Badge>
+   532→    );
+   533→  }
+   534→
+   535→  function fraudStatusBadge(s: FraudAlert["status"]): React.ReactNode {
+   536→    const b = FRAUD_STATUS_STYLES[s] ?? { label: s, className: "bg-slate-100 text-slate-800" };
+   537→    return (
+   538→      <Badge variant="secondary" className={cn("text-[10px]", b.className)}>
+   539→        {b.label}
+   540→      </Badge>
+   541→    );
+   542→  }
+   543→
+   544→  function entityTypeBadge(t: FraudAlert["entityType"]): React.ReactNode {
+   545→    const map: Record<FraudAlert["entityType"], { label: string; cls: string }> = {
+   546→      customer: { label: "Customer", cls: "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800" },
+   547→      merchant: { label: "Merchant", cls: "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800" },
+   548→      device: { label: "Device", cls: "text-slate-700 border-slate-300 bg-slate-50 dark:bg-slate-900/30 dark:text-slate-300 dark:border-slate-700" },
+   549→    };
+   550→    const m = map[t];
+   551→    return (
+   552→      <Badge variant="outline" className={cn("text-[10px]", m.cls)}>
+   553→        {m.label}
+   554→      </Badge>
+   555→    );
+   556→  }
+   557→
+   558→  function consumerStatusBadge(s: ConsumerStatus): React.ReactNode {
+   559→    const v = CONSUMER_STATUS_STYLES[s] ?? { label: s, className: "bg-slate-100 text-slate-700" };
+   560→    return (
+   561→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+   562→        {v.label}
+   563→      </Badge>
+   564→    );
+   565→  }
+   566→
+   567→  function merchantStatusBadge(s: MerchantStatus): React.ReactNode {
+   568→    const v = MERCHANT_STATUS_STYLES[s] ?? { label: s, className: "bg-slate-100 text-slate-700" };
+   569→    return (
+   570→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+   571→        {v.label}
+   572→      </Badge>
+   573→    );
+   574→  }
+   575→
+   576→  /** Renders the linked entity's current status as a small badge — used inline in the alerts table. */
+   577→  function linkedStatusBadge(a: FraudAlert): React.ReactNode {
+   578→    const linked = findLinkedEntity(a);
+   579→    if (!linked) {
+   580→      return <span className="text-[10px] text-muted-foreground italic">No link</span>;
+   581→    }
+   582→    if (linked.kind === "consumer") return consumerStatusBadge(linked.consumer.status);
+   583→    return merchantStatusBadge(linked.merchant.status);
+   584→  }
+   585→
+   586→  function platformChips(platforms: PlatformKey[]): React.ReactNode {
+   587→    if (!platforms || platforms.length === 0) {
+   588→      return <span className="text-xs text-muted-foreground">—</span>;
+   589→    }
+   590→    return (
+   591→      <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
+   592→        {platforms.map((p) => (
+   593→          <Badge key={p} variant="outline" className="text-[10px] font-normal px-1.5 py-0">
+   594→            {PLATFORM_LABELS[p].label}
+   595→          </Badge>
+   596→        ))}
+   597→      </div>
+   598→    );
+   599→  }
+   600→
+   601→  /* ----------------------------- Render -------------------------- */
+   602→  return (
+   603→    <>
+   604→      <ViewHeader
+   605→        title="Risk & Fraud Operations"
+   606→        description={
+   607→          isSuperAdmin
+   608→            ? "Triage fraud alerts, restrict accounts, block devices and escalate to compliance across all countries."
+   609→            : `Scoped to your countries: ${[...visibleCountryCodes].join(", ") || "—"}`
+   610→        }
+   611→        icon={AlertTriangle}
+   612→      />
+   613→      <ViewContainer>
+   614→        {/* Live-sync info banner */}
+   615→        <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+   616→          <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+   617→          <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+   618→            <span className="font-medium">Live entity sync:</span> Restrict, suspend and
+   619→            reactivate actions now update the linked consumer / merchant record in
+   620→            real-time. The Consumer App and Merchant App read from the same database, so
+   621→            account-state changes take effect immediately.
+   622→          </div>
+   623→        </div>
+   624→
+   625→        {/* KPI strip */}
+   626→        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+   627→          <StatCard
+   628→            label="Open Alerts"
+   629→            value={stats.openAlerts}
+   630→            hint="open + investigating"
+   631→            icon={AlertTriangle}
+   632→            tone={stats.openAlerts > 0 ? "danger" : "default"}
+   633→          />
+   634→          <StatCard
+   635→            label="Critical Severity"
+   636→            value={stats.critical}
+   637→            hint="open critical alerts"
+   638→            icon={ShieldAlert}
+   639→            tone="danger"
+   640→          />
+   641→          <StatCard
+   642→            label="Escalated"
+   643→            value={stats.escalated}
+   644→            hint="awaiting compliance"
+   645→            icon={ArrowUpCircle}
+   646→            tone="warning"
+   647→          />
+   648→          <StatCard
+   649→            label="Closed Today"
+   650→            value={stats.closedToday}
+   651→            hint="false positives + resolved"
+   652→            icon={CheckCircle2}
+   653→            tone="success"
+   654→          />
+   655→        </div>
+   656→
+   657→        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+   658→          <TabsList className="h-auto flex-wrap justify-start gap-1">
+   659→            <TabsTrigger value="fraud" className="text-xs">
+   660→              <AlertTriangle className="size-3.5" /> Fraud Alerts
+   661→            </TabsTrigger>
+   662→            <TabsTrigger value="device_risk" className="text-xs">
+   663→              <Smartphone className="size-3.5" /> Device Risk
+   664→            </TabsTrigger>
+   665→            <TabsTrigger value="tx_monitoring" className="text-xs">
+   666→              <Activity className="size-3.5" /> Transaction Monitoring
+   667→            </TabsTrigger>
+   668→            <TabsTrigger value="watchlists" className="text-xs">
+   669→              <EyeOff className="size-3.5" /> Watchlists
+   670→            </TabsTrigger>
+   671→            <TabsTrigger value="cases" className="text-xs">
+   672→              <FolderLock className="size-3.5" /> Risk Cases
+   673→            </TabsTrigger>
+   674→          </TabsList>
+   675→
+   676→          {/* ---------------------- FRAUD ALERTS ---------------------- */}
+   677→          <TabsContent value="fraud">
+   678→            <Card>
+   679→              <CardHeader className="pb-3">
+   680→                <CardTitle className="text-sm flex items-center gap-2">
+   681→                  <AlertTriangle className="size-4 text-emerald-600" />
+   682→                  Fraud Alerts
+   683→                  <Badge variant="secondary" className="text-[10px]">
+   684→                    {filteredAlerts.length}
+   685→                  </Badge>
+   686→                </CardTitle>
+   687→                <div className="flex flex-wrap items-center gap-2 pt-1">
+   688→                  <div className="relative">
+   689→                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   690→                    <Input
+   691→                      placeholder="Search entity name, ID, trigger..."
+   692→                      value={search}
+   693→                      onChange={(e) => setSearch(e.target.value)}
+   694→                      className="pl-7 h-8 w-64 text-xs"
+   695→                    />
+   696→                  </div>
+   697→                  <Select value={countryFilter} onValueChange={setCountryFilter}>
+   698→                    <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   699→                      <Filter className="size-3 mr-1 text-muted-foreground" />
+   700→                      <SelectValue placeholder="Country" />
+   701→                    </SelectTrigger>
+   702→                    <SelectContent>
+   703→                      <SelectItem value="all">All countries</SelectItem>
+   704→                      {filterableCountries.map((c) => (
+   705→                        <SelectItem key={c.countryCode} value={c.countryCode}>
+   706→                          {c.countryCode} · {c.countryName}
+   707→                        </SelectItem>
+   708→                      ))}
+   709→                    </SelectContent>
+   710→                  </Select>
+   711→                  <Select value={severityFilter} onValueChange={setSeverityFilter}>
+   712→                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   713→                      <SelectValue placeholder="Severity" />
+   714→                    </SelectTrigger>
+   715→                    <SelectContent>
+   716→                      {SEVERITY_OPTIONS.map((o) => (
+   717→                        <SelectItem key={o.value} value={o.value}>
+   718→                          {o.label}
+   719→                        </SelectItem>
+   720→                      ))}
+   721→                    </SelectContent>
+   722→                  </Select>
+   723→                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+   724→                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   725→                      <SelectValue placeholder="Status" />
+   726→                    </SelectTrigger>
+   727→                    <SelectContent>
+   728→                      {STATUS_OPTIONS.map((o) => (
+   729→                        <SelectItem key={o.value} value={o.value}>
+   730→                          {o.label}
+   731→                        </SelectItem>
+   732→                      ))}
+   733→                    </SelectContent>
+   734→                  </Select>
+   735→                </div>
+   736→              </CardHeader>
+   737→              <CardContent className="p-0">
+   738→                {filteredAlerts.length === 0 ? (
+   739→                  <EmptyState
+   740→                    icon={AlertTriangle}
+   741→                    title="No fraud alerts match"
+   742→                    description="Adjust the filters above. New fraud alerts from the monitoring engine will appear here in real time."
+   743→                  />
+   744→                ) : (
+   745→                  <ScrollTable>
+   746→                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   747→                      <TableRow>
+   748→                        <TableHead className="pl-4">Alert ID</TableHead>
+   749→                        <TableHead>Country</TableHead>
+   750→                        <TableHead className="hidden md:table-cell">Entity</TableHead>
+   751→                        <TableHead>Entity name</TableHead>
+   752→                        <TableHead className="hidden lg:table-cell">Trigger</TableHead>
+   753→                        <TableHead>Severity</TableHead>
+   754→                        <TableHead className="hidden sm:table-cell">Amount</TableHead>
+   755→                        <TableHead className="hidden xl:table-cell">Device</TableHead>
+   756→                        <TableHead className="hidden md:table-cell">Created</TableHead>
+   757→                        <TableHead>Status</TableHead>
+   758→                        <TableHead className="hidden lg:table-cell">Entity status</TableHead>
+   759→                        <TableHead className="text-right pr-4">Actions</TableHead>
+   760→                      </TableRow>
+   761→                    </TableHeader>
+   762→                    <TableBody>
+   763→                      {filteredAlerts.map((a) => {
+   764→                        const canAct = a.status !== "closed";
+   765→                        const linked = findLinkedEntity(a);
+   766→                        return (
+   767→                          <TableRow
+   768→                            key={a.id}
+   769→                            className="cursor-pointer"
+   770→                            onClick={() => setSelectedAlert(a)}
+   771→                          >
+   772→                            <TableCell className="pl-4 font-mono text-[11px] text-muted-foreground">
+   773→                              {a.id}
+   774→                            </TableCell>
+   775→                            <TableCell className="text-xs">
+   776→                              <span className="font-mono">{a.countryCode}</span>
+   777→                            </TableCell>
+   778→                            <TableCell className="hidden md:table-cell">
+   779→                              {entityTypeBadge(a.entityType)}
+   780→                            </TableCell>
+   781→                            <TableCell className="font-medium">{a.entityName}</TableCell>
+   782→                            <TableCell className="hidden lg:table-cell text-xs text-muted-foreground max-w-[220px] truncate" title={a.trigger}>
+   783→                              {a.trigger}
+   784→                            </TableCell>
+   785→                            <TableCell>{severityBadge(a.severity)}</TableCell>
+   786→                            <TableCell className="hidden sm:table-cell text-xs tabular-nums">
+   787→                              {formatCurrency(a.transactionAmount, "USD")}
+   788→                            </TableCell>
+   789→                            <TableCell className="hidden xl:table-cell text-xs font-mono text-muted-foreground max-w-[160px] truncate" title={a.device}>
+   790→                              {a.device}
+   791→                            </TableCell>
+   792→                            <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+   793→                              <span title={formatDateTime(a.createdAt)}>{timeAgo(a.createdAt)}</span>
+   794→                            </TableCell>
+   795→                            <TableCell>{fraudStatusBadge(a.status)}</TableCell>
+   796→                            <TableCell className="hidden lg:table-cell">{linkedStatusBadge(a)}</TableCell>
+   797→                            <TableCell className="text-right pr-4" onClick={(e) => e.stopPropagation()}>
+   798→                              <DropdownMenu>
+   799→                                <DropdownMenuTrigger asChild>
+   800→                                  <Button
+   801→                                    variant="ghost"
+   802→                                    size="icon"
+   803→                                    className="size-8"
+   804→                                    aria-label={`Actions for alert ${a.id}`}
+   805→                                  >
+   806→                                    <MoreHorizontal className="size-4" />
+   807→                                  </Button>
+   808→                                </DropdownMenuTrigger>
+   809→                                <DropdownMenuContent align="end">
+   810→                                  <DropdownMenuLabel>Alert actions</DropdownMenuLabel>
+   811→                                  <DropdownMenuSeparator />
+   812→                                  <DropdownMenuItem
+   813→                                    onClick={() => setSelectedAlert(a)}
+   814→                                  >
+   815→                                    <AlertTriangle className="size-4" /> View details
+   816→                                  </DropdownMenuItem>
+   817→                                  <DropdownMenuSeparator />
+   818→                                  <DropdownMenuItem
+   819→                                    disabled={!canAct || !linked}
+   820→                                    onClick={() => setConfirmAction({ kind: "restrict", alert: a })}
+   821→                                  >
+   822→                                    <ShieldBan className="size-4" /> Restrict account
+   823→                                  </DropdownMenuItem>
+   824→                                  <DropdownMenuItem
+   825→                                    disabled={!canAct || !linked}
+   826→                                    variant="destructive"
+   827→                                    onClick={() => setConfirmAction({ kind: "suspend", alert: a })}
+   828→                                  >
+   829→                                    <OctagonAlert className="size-4" /> Suspend account
+   830→                                  </DropdownMenuItem>
+   831→                                  <DropdownMenuItem
+   832→                                    disabled={!canAct || !linked}
+   833→                                    onClick={() => setConfirmAction({ kind: "reactivate", alert: a })}
+   834→                                  >
+   835→                                    <PowerOff className="size-4" /> Reactivate account
+   836→                                  </DropdownMenuItem>
+   837→                                  <DropdownMenuItem
+   838→                                    disabled={!canAct}
+   839→                                    variant="destructive"
+   840→                                    onClick={() => setConfirmAction({ kind: "block_device", alert: a })}
+   841→                                  >
+   842→                                    <Ban className="size-4" /> Block device
+   843→                                  </DropdownMenuItem>
+   844→                                  <DropdownMenuItem
+   845→                                    disabled={!canAct}
+   846→                                    onClick={() => setConfirmAction({ kind: "hold_settlement", alert: a })}
+   847→                                  >
+   848→                                    <PauseCircle className="size-4" /> Hold settlement
+   849→                                  </DropdownMenuItem>
+   850→                                  <DropdownMenuItem
+   851→                                    disabled={!canAct}
+   852→                                    onClick={() => escalateToCompliance(a)}
+   853→                                  >
+   854→                                    <ArrowUpCircle className="size-4" /> Escalate to compliance
+   855→                                  </DropdownMenuItem>
+   856→                                  <DropdownMenuItem
+   857→                                    disabled={!canAct}
+   858→                                    onClick={() => setConfirmAction({ kind: "close_false_positive", alert: a })}
+   859→                                  >
+   860→                                    <CheckCircle2 className="size-4" /> Close false positive
+   861→                                  </DropdownMenuItem>
+   862→                                  <DropdownMenuSeparator />
+   863→                                  <DropdownMenuItem onClick={() => addToWatchlist(a)}>
+   864→                                    <EyeOff className="size-4" /> Add to watchlist
+   865→                                  </DropdownMenuItem>
+   866→                                </DropdownMenuContent>
+   867→                              </DropdownMenu>
+   868→                            </TableCell>
+   869→                          </TableRow>
+   870→                        );
+   871→                      })}
+   872→                    </TableBody>
+   873→                  </ScrollTable>
+   874→                )}
+   875→              </CardContent>
+   876→            </Card>
+   877→          </TabsContent>
+   878→
+   879→          {/* --------------------- DEVICE RISK ---------------------- */}
+   880→          <TabsContent value="device_risk">
+   881→            <FutureFeatureCard
+   882→              icon={Smartphone}
+   883→              title="Device Risk Signals"
+   884→              description="Aggregate device-fingerprint risk scores, velocity checks, and emulator/root detection across all active terminals and Phone POS installs. Risky devices will be auto-flagged here for review and possible blocklisting."
+   885→              steps={[
+   886→                { title: "Ingest device signals", desc: "Fingerprint hash, root/emulator flags, GPS vs IP geo mismatch, SIM country, app tamper signals." },
+   887→                { title: "Score & bucket", desc: "Each device gets a 0–100 risk score; high-risk devices are surfaced for analyst review." },
+   888→                { title: "Act on risk", desc: "Soft-restrict, hard-block, or whitelist a device directly from this view." },
+   889→              ]}
+   890→            />
+   891→          </TabsContent>
+   892→
+   893→          {/* ----------------- TRANSACTION MONITORING --------------- */}
+   894→          <TabsContent value="tx_monitoring">
+   895→            <FutureFeatureCard
+   896→              icon={Activity}
+   897→              title="Real-Time Transaction Monitoring"
+   898→              description="Live feed of transactions scored by the fraud rules engine. Spike detection, velocity rules, and ML model decisions will be visible here with the ability to intervene mid-flight."
+   899→              steps={[
+   900→                { title: "Live stream", desc: "Every transaction across all countries flows through the rules engine and lands here in real time." },
+   901→                { title: "Rule hits", desc: "Each row shows which rules fired (velocity, geo-velocity, card testing, BIN attack, etc.)." },
+   902→                { title: "Intervene", desc: "Approve, decline, challenge (3DS), or hold for manual review without leaving the feed." },
+   903→              ]}
+   904→            />
+   905→          </TabsContent>
+   906→
+   907→          {/* ----------------------- WATCHLISTS --------------------- */}
+   908→          <TabsContent value="watchlists">
+   909→            <FutureFeatureCard
+   910→              icon={EyeOff}
+   911→              title="Watchlists"
+   912→              description="Curated lists of customers, merchants, devices, cards and IPs under enhanced monitoring. Add entries manually or from a fraud alert; remove them once cleared by an analyst."
+   913→              steps={[
+   914→                { title: "Manage lists", desc: "Create lists per type (customer / merchant / device / card / IP) with TTL and reason." },
+   915→                { title: "Bulk import", desc: "Upload CSV/STIX feeds from regulators, partners, or your own investigations." },
+   916→                { title: "Match & alert", desc: "Transactions touching a watched entity are auto-flagged for analyst review." },
+   917→              ]}
+   918→            />
+   919→          </TabsContent>
+   920→
+   921→          {/* ----------------------- RISK CASES --------------------- */}
+   922→          <TabsContent value="cases">
+   923→            <FutureFeatureCard
+   924→              icon={FolderLock}
+   925→              title="Risk Cases"
+   926→              description="Long-form investigations that group related fraud alerts, transactions, and entities into a single case file. Used by the AML investigator and senior compliance team for SAR/STR preparation."
+   927→              steps={[
+   928→                { title: "Open a case", desc: "From one or many fraud alerts, create a case with a lead investigator and SLA." },
+   929→                { title: "Build the file", desc: "Attach transactions, devices, documents, and analyst notes as evidence." },
+   930→                { title: "Decide & report", desc: "Close as no-action, restrict entities, or escalate to SAR/STR filing." },
+   931→              ]}
+   932→            />
+   933→          </TabsContent>
+   934→        </Tabs>
+   935→      </ViewContainer>
+   936→
+   937→      {/* -------------------- Detail sheet -------------------- */}
+   938→      <Sheet open={!!selectedAlert} onOpenChange={(o) => !o && setSelectedAlert(null)}>
+   939→        <SheetContent side="right" className="w-full sm:max-w-md flex flex-col">
+   940→          {selectedAlert && (
+   941→            <FraudDetailSheet
+   942→              alert={selectedAlert}
+   943→              countryName={countryName}
+   944→              severityBadge={severityBadge}
+   945→              fraudStatusBadge={fraudStatusBadge}
+   946→              entityTypeBadge={entityTypeBadge}
+   947→              onClose={() => setSelectedAlert(null)}
+   948→              onRestrict={() => setConfirmAction({ kind: "restrict", alert: selectedAlert })}
+   949→              onBlockDevice={() => setConfirmAction({ kind: "block_device", alert: selectedAlert })}
+   950→              onHoldSettlement={() => setConfirmAction({ kind: "hold_settlement", alert: selectedAlert })}
+   951→              onEscalate={() => escalateToCompliance(selectedAlert)}
+   952→              onCloseFalsePositive={() => setConfirmAction({ kind: "close_false_positive", alert: selectedAlert })}
+   953→              onWatchlist={() => addToWatchlist(selectedAlert)}
+   954→            />
+   955→          )}
+   956→        </SheetContent>
+   957→      </Sheet>
+   958→
+   959→      {/* ----------------- Confirmation dialog ----------------- */}
+   960→      <AlertDialog open={!!confirmAction} onOpenChange={(o) => !o && setConfirmAction(null)}>
+   961→        <AlertDialogContent>
+   962→          <AlertDialogHeader>
+   963→            <AlertDialogTitle>{confirmTitle(confirmAction)}</AlertDialogTitle>
+   964→            <AlertDialogDescription>{confirmDescription(confirmAction)}</AlertDialogDescription>
+   965→          </AlertDialogHeader>
+   966→          <AlertDialogFooter>
+   967→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   968→            <AlertDialogAction
+   969→              className={cn(
+   970→                "text-white",
+   971→                confirmAction?.kind === "block_device" || confirmAction?.kind === "restrict"
+   972→                  ? "bg-red-600 hover:bg-red-700"
+   973→                  : "bg-emerald-600 hover:bg-emerald-700",
+   974→              )}
+   975→              onClick={runConfirm}
+   976→            >
+   977→              <CheckCircle2 className="size-4" /> Confirm
+   978→            </AlertDialogAction>
+   979→          </AlertDialogFooter>
+   980→        </AlertDialogContent>
+   981→      </AlertDialog>
+   982→
+   983→      <SonnerToaster richColors closeButton position="bottom-right" />
+   984→    </>
+   985→  );
+   986→
+   987→  function confirmTitle(c: ConfirmAction | null): string {
+   988→    if (!c) return "";
+   989→    switch (c.kind) {
+   990→      case "restrict":
+   991→        return "Restrict this account?";
+   992→      case "block_device":
+   993→        return "Block this device?";
+   994→      case "hold_settlement":
+   995→        return "Request settlement hold?";
+   996→      case "close_false_positive":
+   997→        return "Close as false positive?";
+   998→    }
+   999→  }
+  1000→
+  1001→  function confirmDescription(c: ConfirmAction | null): string {
+  1002→    if (!c) return "";
+  1003→    const a = c.alert;
+  1004→    const base = `Entity: ${a.entityName} · Alert ${a.id} · ${countryName(a.countryCode)}.`;
+  1005→    switch (c.kind) {
+  1006→      case "restrict":
+  1007→        return `${base} The account will be frozen from withdrawals and new transactions. The action is recorded in the audit log.`;
+  1008→      case "block_device":
+  1009→        return `${base} The device fingerprint ${a.device} will be added to the blocklist and the alert will be closed. This cannot be undone from this view.`;
+  1010→      case "hold_settlement":
+  1011→        return `${base} A settlement-hold request will be sent to the Finance team. The alert itself remains open for further investigation.`;
+  1012→      case "close_false_positive":
+  1013→        return `${base} The alert will be closed with reason "false positive". No further action will be taken on the entity.`;
+  1014→    }
+  1015→  }
+  1016→}
+  1017→
+  1018→/* ============================ Sub-components ============================ */
+  1019→
+  1020→/**
+  1021→ * Scrollable table wrapper with sticky-header support and custom scrollbar.
+  1022→ *
+  1023→ * NOTE: we use a raw <table> here (not the Table primitive) because the
+  1024→ * Table primitive wraps the table in its own `overflow-x-auto` div, which
+  1025→ * becomes a separate scroll container and prevents the <thead> from sticking
+  1026→ * to this outer vertical-scroll viewport.
+  1027→ */
+  1028→function ScrollTable({ children }: { children: React.ReactNode }) {
+  1029→  return (
+  1030→    <div
+  1031→      className={
+  1032→        "max-h-[60vh] overflow-auto " +
+  1033→        "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+  1034→        "[&::-webkit-scrollbar-thumb]:rounded-full " +
+  1035→        "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+  1036→        "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+  1037→      }
+  1038→    >
+  1039→      <table className="w-full caption-bottom text-sm">{children}</table>
+  1040→    </div>
+  1041→  );
+  1042→}
+  1043→
+  1044→function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  1045→  return (
+  1046→    <div className="flex items-start justify-between gap-3 py-1.5">
+  1047→      <span className="text-xs text-muted-foreground uppercase tracking-wide">{label}</span>
+  1048→      <span className="text-sm text-right min-w-0">{value}</span>
+  1049→    </div>
+  1050→  );
+  1051→}
+  1052→
+  1053→function FraudDetailSheet({
+  1054→  alert,
+  1055→  countryName,
+  1056→  severityBadge,
+  1057→  fraudStatusBadge,
+  1058→  entityTypeBadge,
+  1059→  onClose,
+  1060→  onRestrict,
+  1061→  onBlockDevice,
+  1062→  onHoldSettlement,
+  1063→  onEscalate,
+  1064→  onCloseFalsePositive,
+  1065→  onWatchlist,
+  1066→}: {
+  1067→  alert: FraudAlert;
+  1068→  countryName: (code: string) => string;
+  1069→  severityBadge: (l: RiskLevel) => React.ReactNode;
+  1070→  fraudStatusBadge: (s: FraudAlert["status"]) => React.ReactNode;
+  1071→  entityTypeBadge: (t: FraudAlert["entityType"]) => React.ReactNode;
+  1072→  onClose: () => void;
+  1073→  onRestrict: () => void;
+  1074→  onBlockDevice: () => void;
+  1075→  onHoldSettlement: () => void;
+  1076→  onEscalate: () => void;
+  1077→  onCloseFalsePositive: () => void;
+  1078→  onWatchlist: () => void;
+  1079→}) {
+  1080→  const canAct = alert.status !== "closed";
+  1081→  return (
+  1082→    <>
+  1083→      <SheetHeader>
+  1084→        <SheetDescription className="text-[11px] font-mono">{alert.id}</SheetDescription>
+  1085→        <SheetTitle className="text-lg flex items-center gap-2">
+  1086→          <AlertTriangle className="size-5 text-emerald-600" />
+  1087→          {alert.entityName}
+  1088→        </SheetTitle>
+  1089→        <div className="flex flex-wrap items-center gap-2 mt-1">
+  1090→          {fraudStatusBadge(alert.status)}
+  1091→          {severityBadge(alert.severity)}
+  1092→          {entityTypeBadge(alert.entityType)}
+  1093→        </div>
+  1094→      </SheetHeader>
+  1095→
+  1096→      <div className="flex-1 overflow-y-auto px-4 space-y-4 text-sm">
+  1097→        <div className="rounded-md border divide-y">
+  1098→          <DetailRow label="Country" value={`${alert.countryCode} · ${countryName(alert.countryCode)}`} />
+  1099→          <DetailRow label="Trigger" value={<span className="text-amber-800 dark:text-amber-300">{alert.trigger}</span>} />
+  1100→          <DetailRow label="Transaction" value={formatCurrency(alert.transactionAmount, "USD")} />
+  1101→          <DetailRow label="Device" value={<span className="font-mono text-xs">{alert.device}</span>} />
+  1102→          <DetailRow label="Created" value={formatDateTime(alert.createdAt)} />
+  1103→        </div>
+  1104→
+  1105→        {alert.status === "closed" ? (
+  1106→          <div className="text-center text-xs text-muted-foreground py-3 border rounded-md bg-muted/30">
+  1107→            Alert is <span className="font-medium">closed</span> — no further actions available.
+  1108→          </div>
+  1109→        ) : (
+  1110→          <div className="space-y-2">
+  1111→            <div className="grid grid-cols-2 gap-2">
+  1112→              <Button
+  1113→                onClick={onRestrict}
+  1114→                variant="outline"
+  1115→                className="text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-800 dark:hover:bg-amber-900/20"
+  1116→              >
+  1117→                <ShieldBan className="size-4" /> Restrict
+  1118→              </Button>
+  1119→              <Button onClick={onBlockDevice} variant="destructive">
+  1120→                <Ban className="size-4" /> Block device
+  1121→              </Button>
+  1122→            </div>
+  1123→            <div className="grid grid-cols-2 gap-2">
+  1124→              <Button onClick={onHoldSettlement} variant="outline">
+  1125→                <PauseCircle className="size-4" /> Hold settlement
+  1126→              </Button>
+  1127→              <Button
+  1128→                onClick={onEscalate}
+  1129→                variant="outline"
+  1130→                className="text-purple-700 border-purple-300 hover:bg-purple-50 dark:text-purple-300 dark:border-purple-800 dark:hover:bg-purple-900/20"
+  1131→              >
+  1132→                <ArrowUpCircle className="size-4" /> Escalate
+  1133→              </Button>
+  1134→            </div>
+  1135→            <Button onClick={onCloseFalsePositive} variant="secondary" className="w-full">
+  1136→              <CheckCircle2 className="size-4" /> Close as false positive
+  1137→            </Button>
+  1138→            <Button onClick={onWatchlist} variant="ghost" className="w-full">
+  1139→              <EyeOff className="size-4" /> Add to watchlist
+  1140→            </Button>
+  1141→          </div>
+  1142→        )}
+  1143→      </div>
+  1144→
+  1145→      <SheetFooter className="flex flex-col gap-2 items-stretch">
+  1146→        <Button variant="ghost" onClick={onClose}>Close</Button>
+  1147→      </SheetFooter>
+  1148→    </>
+  1149→  );
+  1150→}
+  1151→
+  1152→/** Placeholder card for future-feature tabs. */
+  1153→function FutureFeatureCard({
+  1154→  icon: Icon,
+  1155→  title,
+  1156→  description,
+  1157→  steps,
+  1158→}: {
+  1159→  icon: React.ComponentType<{ className?: string }>;
+  1160→  title: string;
+  1161→  description: string;
+  1162→  steps: { title: string; desc: string }[];
+  1163→}) {
+  1164→  return (
+  1165→    <Card>
+  1166→      <CardHeader className="pb-3">
+  1167→        <CardTitle className="text-sm flex items-center gap-2">
+  1168→          <Icon className="size-4 text-emerald-600" />
+  1169→          {title}
+  1170→          <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800">
+  1171→            Planned
+  1172→          </Badge>
+  1173→        </CardTitle>
+  1174→      </CardHeader>
+  1175→      <CardContent className="pt-0">
+  1176→        <EmptyState
+  1177→          icon={Icon}
+  1178→          title={title}
+  1179→          description={description}
+  1180→        />
+  1181→        <Separator className="my-4" />
+  1182→        <ol className="space-y-3 text-sm">
+  1183→          {steps.map((step, i) => (
+  1184→            <li key={i} className="flex gap-3">
+  1185→              <span className="size-6 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center text-xs font-semibold">
+  1186→                {i + 1}
+  1187→              </span>
+  1188→              <div>
+  1189→                <div className="font-medium">{step.title}</div>
+  1190→                <div className="text-xs text-muted-foreground mt-0.5">{step.desc}</div>
+  1191→              </div>
+  1192→            </li>
+  1193→          ))}
+  1194→        </ol>
+  1195→        <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+  1196→          <Clock className="size-3.5" />
+  1197→          This module is on the Phase 4/5 roadmap. Use the Fraud Alerts tab in the meantime.
+  1198→        </div>
+  1199→      </CardContent>
+  1200→    </Card>
+  1201→  );
+  1202→}
+  1203→

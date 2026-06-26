@@ -34,6 +34,11 @@ import {
   FolderLock,
   Smartphone,
   Clock,
+  OctagonAlert,
+  PowerOff,
+  User,
+  Building2,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ViewHeader, ViewContainer, EmptyState, StatCard } from "@/components/portal/view-helpers";
@@ -87,15 +92,45 @@ import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { adminData, logAudit } from "@/lib/admin-data";
 import { formatCurrency, formatDateTime, statusBadge, timeAgo } from "@/lib/formatters";
-import type { FraudAlert, CountryConfig, RiskLevel } from "@/lib/types";
+import type {
+  FraudAlert,
+  CountryConfig,
+  RiskLevel,
+  Merchant,
+  Consumer,
+  ConsumerStatus,
+  MerchantStatus,
+  PlatformKey,
+} from "@/lib/types";
+import { PLATFORM_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface RiskViewProps {
   fraudAlerts: FraudAlert[];
   countries: CountryConfig[];
+  merchants: Merchant[];
+  consumers: Consumer[];
 }
 
 const SUPER_ADMIN_DEPT = "dept_super_admin";
+
+/** Badge styling for Consumer.status (not in shared formatters). */
+const CONSUMER_STATUS_STYLES: Record<ConsumerStatus, { label: string; className: string }> = {
+  pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+};
+
+/** Badge styling for Merchant.status (not in shared formatters). */
+const MERCHANT_STATUS_STYLES: Record<MerchantStatus, { label: string; className: string }> = {
+  onboarding: { label: "Onboarding", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+};
 
 const SEVERITY_OPTIONS = [
   { value: "all", label: "All severities" },
@@ -121,15 +156,82 @@ const FRAUD_STATUS_STYLES: Record<FraudAlert["status"], { label: string; classNa
   closed: { label: "Closed", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
 };
 
+type LinkedEntity =
+  | { kind: "consumer"; consumer: Consumer }
+  | { kind: "merchant"; merchant: Merchant };
+
 type ConfirmAction =
   | { kind: "restrict"; alert: FraudAlert }
+  | { kind: "suspend"; alert: FraudAlert }
+  | { kind: "reactivate"; alert: FraudAlert }
   | { kind: "block_device"; alert: FraudAlert }
   | { kind: "hold_settlement"; alert: FraudAlert }
   | { kind: "close_false_positive"; alert: FraudAlert };
 
-export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
+export function RiskView({ fraudAlerts, countries, merchants, consumers }: RiskViewProps) {
   const { staff: currentStaff } = useAuth();
   const [activeTab, setActiveTab] = useState<string>("fraud");
+
+  /* ------------- Linked entity lookup (alert → consumer / merchant) ------------- */
+  // Tries exact-name match first against consumer.firstName+lastName / merchant.tradingName / legalName.
+  // Falls back to a fuzzy partial-contains match. Returns null when no link can be resolved.
+  function findLinkedEntity(a: FraudAlert): LinkedEntity | null {
+    if (a.entityType === "customer") {
+      const target = a.entityName.trim().toLowerCase();
+      if (!target) return null;
+      // Exact match on full name
+      let c = consumers.find(
+        (x) => `${x.firstName} ${x.lastName}`.trim().toLowerCase() === target,
+      );
+      // Fuzzy: full name appears inside the entityName (or vice-versa)
+      if (!c) {
+        c = consumers.find((x) => {
+          const full = `${x.firstName} ${x.lastName}`.trim().toLowerCase();
+          return full.length > 2 && (target.includes(full) || full.includes(target));
+        });
+      }
+      // Exact match on email / phone / consumer code
+      if (!c) {
+        c = consumers.find(
+          (x) =>
+            x.email.toLowerCase() === target ||
+            x.phone.toLowerCase() === target ||
+            x.consumerCode.toLowerCase() === target,
+        );
+      }
+      return c ? { kind: "consumer", consumer: c } : null;
+    }
+    if (a.entityType === "merchant") {
+      const target = a.entityName.trim().toLowerCase();
+      if (!target) return null;
+      // Exact match on tradingName / legalName
+      let m =
+        merchants.find((x) => x.tradingName.trim().toLowerCase() === target) ??
+        merchants.find((x) => x.legalName.trim().toLowerCase() === target);
+      // Fuzzy partial match on trading / legal name
+      if (!m) {
+        m = merchants.find((x) => {
+          const t = x.tradingName.trim().toLowerCase();
+          const l = x.legalName.trim().toLowerCase();
+          return (
+            (t.length > 2 && (target.includes(t) || t.includes(target))) ||
+            (l.length > 2 && (target.includes(l) || l.includes(target)))
+          );
+        });
+      }
+      // Exact match on merchant code / contact email
+      if (!m) {
+        m = merchants.find(
+          (x) =>
+            x.merchantCode.toLowerCase() === target ||
+            x.contactEmail.toLowerCase() === target,
+        );
+      }
+      return m ? { kind: "merchant", merchant: m } : null;
+    }
+    // Device alerts have no consumer/merchant link
+    return null;
+  }
 
   /* ----------------------- Country scoping ----------------------- */
   const visibleCountryCodes = useMemo(() => {
@@ -214,12 +316,118 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
   /* ----------------------- Fraud mutations ----------------------- */
   function restrictAccount(a: FraudAlert) {
     if (!actor) return;
-    logAudit(actor, "account.restrict", a.entityType, a.entityName, {
-      countryCode: a.countryCode,
-      reason: `Fraud alert ${a.id} — ${a.trigger}`,
-    });
+    // Actually update the linked consumer / merchant record so the separate app
+    // immediately reflects the restricted status.
+    const linked = findLinkedEntity(a);
+    if (linked?.kind === "consumer") {
+      adminData.updateConsumer(linked.consumer.id, {
+        status: "restricted",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "account.restrict", "consumer", linked.consumer.id, {
+        countryCode: a.countryCode,
+        beforeValue: linked.consumer.status,
+        afterValue: "restricted",
+        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+      });
+    } else if (linked?.kind === "merchant") {
+      adminData.updateMerchant(linked.merchant.id, {
+        status: "restricted",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "account.restrict", "merchant", linked.merchant.id, {
+        countryCode: a.countryCode,
+        beforeValue: linked.merchant.status,
+        afterValue: "restricted",
+        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+      });
+    } else {
+      // No linked record — audit only (legacy behaviour)
+      logAudit(actor, "account.restrict", a.entityType, a.entityName, {
+        countryCode: a.countryCode,
+        reason: `Fraud alert ${a.id} — ${a.trigger} (no linked record)`,
+      });
+    }
     toast.warning(`Account restricted: ${a.entityName}`, {
-      description: `${a.entityType} flagged on alert ${a.id} · ${countryName(a.countryCode)}`,
+      description: linked
+        ? `${linked.kind === "consumer" ? linked.consumer.consumerCode : linked.merchant.merchantCode} now restricted — app reflects in real-time.`
+        : `No linked consumer/merchant record found — audit logged only.`,
+    });
+  }
+
+  function suspendAccount(a: FraudAlert) {
+    if (!actor) return;
+    const linked = findLinkedEntity(a);
+    if (linked?.kind === "consumer") {
+      adminData.updateConsumer(linked.consumer.id, {
+        status: "suspended",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "account.suspend", "consumer", linked.consumer.id, {
+        countryCode: a.countryCode,
+        beforeValue: linked.consumer.status,
+        afterValue: "suspended",
+        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+      });
+    } else if (linked?.kind === "merchant") {
+      adminData.updateMerchant(linked.merchant.id, {
+        status: "suspended",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "account.suspend", "merchant", linked.merchant.id, {
+        countryCode: a.countryCode,
+        beforeValue: linked.merchant.status,
+        afterValue: "suspended",
+        reason: `Fraud alert ${a.id} — ${a.trigger}`,
+      });
+    } else {
+      logAudit(actor, "account.suspend", a.entityType, a.entityName, {
+        countryCode: a.countryCode,
+        reason: `Fraud alert ${a.id} — ${a.trigger} (no linked record)`,
+      });
+    }
+    toast.error(`Account suspended: ${a.entityName}`, {
+      description: linked
+        ? `${linked.kind === "consumer" ? linked.consumer.consumerCode : linked.merchant.merchantCode} fully suspended — login blocked in the app.`
+        : `No linked consumer/merchant record found — audit logged only.`,
+    });
+  }
+
+  function reactivateAccount(a: FraudAlert) {
+    if (!actor) return;
+    const linked = findLinkedEntity(a);
+    if (linked?.kind === "consumer") {
+      adminData.updateConsumer(linked.consumer.id, {
+        status: "active",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "account.reactivate", "consumer", linked.consumer.id, {
+        countryCode: a.countryCode,
+        beforeValue: linked.consumer.status,
+        afterValue: "active",
+        reason: `Reactivated from fraud alert ${a.id}`,
+      });
+    } else if (linked?.kind === "merchant") {
+      adminData.updateMerchant(linked.merchant.id, {
+        status: "active",
+        updatedAt: Date.now(),
+      });
+      logAudit(actor, "account.reactivate", "merchant", linked.merchant.id, {
+        countryCode: a.countryCode,
+        beforeValue: linked.merchant.status,
+        afterValue: "active",
+        reason: `Reactivated from fraud alert ${a.id}`,
+      });
+    } else {
+      logAudit(actor, "account.reactivate", a.entityType, a.entityName, {
+        countryCode: a.countryCode,
+        reason: `Reactivated from fraud alert ${a.id} (no linked record)`,
+      });
+    }
+    toast.success(`Account reactivated: ${a.entityName}`, {
+      description: linked
+        ? `${linked.kind === "consumer" ? linked.consumer.consumerCode : linked.merchant.merchantCode} restored to active.`
+        : `No linked consumer/merchant record found — audit logged only.`,
     });
   }
 
@@ -295,6 +503,12 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
       case "restrict":
         restrictAccount(confirmAction.alert);
         break;
+      case "suspend":
+        suspendAccount(confirmAction.alert);
+        break;
+      case "reactivate":
+        reactivateAccount(confirmAction.alert);
+        break;
       case "block_device":
         blockDevice(confirmAction.alert);
         break;
@@ -341,6 +555,49 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
     );
   }
 
+  function consumerStatusBadge(s: ConsumerStatus): React.ReactNode {
+    const v = CONSUMER_STATUS_STYLES[s] ?? { label: s, className: "bg-slate-100 text-slate-700" };
+    return (
+      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+        {v.label}
+      </Badge>
+    );
+  }
+
+  function merchantStatusBadge(s: MerchantStatus): React.ReactNode {
+    const v = MERCHANT_STATUS_STYLES[s] ?? { label: s, className: "bg-slate-100 text-slate-700" };
+    return (
+      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+        {v.label}
+      </Badge>
+    );
+  }
+
+  /** Renders the linked entity's current status as a small badge — used inline in the alerts table. */
+  function linkedStatusBadge(a: FraudAlert): React.ReactNode {
+    const linked = findLinkedEntity(a);
+    if (!linked) {
+      return <span className="text-[10px] text-muted-foreground italic">No link</span>;
+    }
+    if (linked.kind === "consumer") return consumerStatusBadge(linked.consumer.status);
+    return merchantStatusBadge(linked.merchant.status);
+  }
+
+  function platformChips(platforms: PlatformKey[]): React.ReactNode {
+    if (!platforms || platforms.length === 0) {
+      return <span className="text-xs text-muted-foreground">—</span>;
+    }
+    return (
+      <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
+        {platforms.map((p) => (
+          <Badge key={p} variant="outline" className="text-[10px] font-normal px-1.5 py-0">
+            {PLATFORM_LABELS[p].label}
+          </Badge>
+        ))}
+      </div>
+    );
+  }
+
   /* ----------------------------- Render -------------------------- */
   return (
     <>
@@ -354,6 +611,17 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
         icon={AlertTriangle}
       />
       <ViewContainer>
+        {/* Live-sync info banner */}
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+          <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+          <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+            <span className="font-medium">Live entity sync:</span> Restrict, suspend and
+            reactivate actions now update the linked consumer / merchant record in
+            real-time. The Consumer App and Merchant App read from the same database, so
+            account-state changes take effect immediately.
+          </div>
+        </div>
+
         {/* KPI strip */}
         <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
           <StatCard
@@ -487,12 +755,14 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
                         <TableHead className="hidden xl:table-cell">Device</TableHead>
                         <TableHead className="hidden md:table-cell">Created</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead className="hidden lg:table-cell">Entity status</TableHead>
                         <TableHead className="text-right pr-4">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredAlerts.map((a) => {
                         const canAct = a.status !== "closed";
+                        const linked = findLinkedEntity(a);
                         return (
                           <TableRow
                             key={a.id}
@@ -523,6 +793,7 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
                               <span title={formatDateTime(a.createdAt)}>{timeAgo(a.createdAt)}</span>
                             </TableCell>
                             <TableCell>{fraudStatusBadge(a.status)}</TableCell>
+                            <TableCell className="hidden lg:table-cell">{linkedStatusBadge(a)}</TableCell>
                             <TableCell className="text-right pr-4" onClick={(e) => e.stopPropagation()}>
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
@@ -545,10 +816,23 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
                                   </DropdownMenuItem>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
-                                    disabled={!canAct}
+                                    disabled={!canAct || !linked}
                                     onClick={() => setConfirmAction({ kind: "restrict", alert: a })}
                                   >
                                     <ShieldBan className="size-4" /> Restrict account
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={!canAct || !linked}
+                                    variant="destructive"
+                                    onClick={() => setConfirmAction({ kind: "suspend", alert: a })}
+                                  >
+                                    <OctagonAlert className="size-4" /> Suspend account
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={!canAct || !linked}
+                                    onClick={() => setConfirmAction({ kind: "reactivate", alert: a })}
+                                  >
+                                    <PowerOff className="size-4" /> Reactivate account
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     disabled={!canAct}
@@ -656,12 +940,18 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
           {selectedAlert && (
             <FraudDetailSheet
               alert={selectedAlert}
+              linked={findLinkedEntity(selectedAlert)}
               countryName={countryName}
               severityBadge={severityBadge}
               fraudStatusBadge={fraudStatusBadge}
               entityTypeBadge={entityTypeBadge}
+              consumerStatusBadge={consumerStatusBadge}
+              merchantStatusBadge={merchantStatusBadge}
+              platformChips={platformChips}
               onClose={() => setSelectedAlert(null)}
               onRestrict={() => setConfirmAction({ kind: "restrict", alert: selectedAlert })}
+              onSuspend={() => setConfirmAction({ kind: "suspend", alert: selectedAlert })}
+              onReactivate={() => setConfirmAction({ kind: "reactivate", alert: selectedAlert })}
               onBlockDevice={() => setConfirmAction({ kind: "block_device", alert: selectedAlert })}
               onHoldSettlement={() => setConfirmAction({ kind: "hold_settlement", alert: selectedAlert })}
               onEscalate={() => escalateToCompliance(selectedAlert)}
@@ -684,7 +974,9 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
             <AlertDialogAction
               className={cn(
                 "text-white",
-                confirmAction?.kind === "block_device" || confirmAction?.kind === "restrict"
+                confirmAction?.kind === "block_device" ||
+                  confirmAction?.kind === "restrict" ||
+                  confirmAction?.kind === "suspend"
                   ? "bg-red-600 hover:bg-red-700"
                   : "bg-emerald-600 hover:bg-emerald-700",
               )}
@@ -705,6 +997,10 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
     switch (c.kind) {
       case "restrict":
         return "Restrict this account?";
+      case "suspend":
+        return "Suspend this account?";
+      case "reactivate":
+        return "Reactivate this account?";
       case "block_device":
         return "Block this device?";
       case "hold_settlement":
@@ -717,10 +1013,20 @@ export function RiskView({ fraudAlerts, countries }: RiskViewProps) {
   function confirmDescription(c: ConfirmAction | null): string {
     if (!c) return "";
     const a = c.alert;
-    const base = `Entity: ${a.entityName} · Alert ${a.id} · ${countryName(a.countryCode)}.`;
+    const linked = findLinkedEntity(a);
+    const linkedLabel = linked
+      ? linked.kind === "consumer"
+        ? `consumer ${linked.consumer.consumerCode}`
+        : `merchant ${linked.merchant.merchantCode}`
+      : "(no linked record — audit only)";
+    const base = `Entity: ${a.entityName} · Alert ${a.id} · ${countryName(a.countryCode)}. Linked: ${linkedLabel}.`;
     switch (c.kind) {
       case "restrict":
-        return `${base} The account will be frozen from withdrawals and new transactions. The action is recorded in the audit log.`;
+        return `${base} The account will be frozen from withdrawals and new transactions. The Consumer/Merchant App will reflect this in real time. Recorded in the audit log.`;
+      case "suspend":
+        return `${base} The account will be fully suspended — login blocked in the Consumer/Merchant App. This is more severe than restrict. Use only when fraud is confirmed.`;
+      case "reactivate":
+        return `${base} The account will be restored to active status. Only do this after confirming the alert was a false positive or the issue has been resolved.`;
       case "block_device":
         return `${base} The device fingerprint ${a.device} will be added to the blocklist and the alert will be closed. This cannot be undone from this view.`;
       case "hold_settlement":
@@ -768,12 +1074,18 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 function FraudDetailSheet({
   alert,
+  linked,
   countryName,
   severityBadge,
   fraudStatusBadge,
   entityTypeBadge,
+  consumerStatusBadge,
+  merchantStatusBadge,
+  platformChips,
   onClose,
   onRestrict,
+  onSuspend,
+  onReactivate,
   onBlockDevice,
   onHoldSettlement,
   onEscalate,
@@ -781,12 +1093,18 @@ function FraudDetailSheet({
   onWatchlist,
 }: {
   alert: FraudAlert;
+  linked: LinkedEntity | null;
   countryName: (code: string) => string;
   severityBadge: (l: RiskLevel) => React.ReactNode;
   fraudStatusBadge: (s: FraudAlert["status"]) => React.ReactNode;
   entityTypeBadge: (t: FraudAlert["entityType"]) => React.ReactNode;
+  consumerStatusBadge: (s: ConsumerStatus) => React.ReactNode;
+  merchantStatusBadge: (s: MerchantStatus) => React.ReactNode;
+  platformChips: (p: PlatformKey[]) => React.ReactNode;
   onClose: () => void;
   onRestrict: () => void;
+  onSuspend: () => void;
+  onReactivate: () => void;
   onBlockDevice: () => void;
   onHoldSettlement: () => void;
   onEscalate: () => void;
@@ -794,6 +1112,7 @@ function FraudDetailSheet({
   onWatchlist: () => void;
 }) {
   const canAct = alert.status !== "closed";
+  const canTouchAccount = canAct && !!linked;
   return (
     <>
       <SheetHeader>
@@ -806,6 +1125,10 @@ function FraudDetailSheet({
           {fraudStatusBadge(alert.status)}
           {severityBadge(alert.severity)}
           {entityTypeBadge(alert.entityType)}
+          {linked &&
+            (linked.kind === "consumer"
+              ? consumerStatusBadge(linked.consumer.status)
+              : merchantStatusBadge(linked.merchant.status))}
         </div>
       </SheetHeader>
 
@@ -818,6 +1141,65 @@ function FraudDetailSheet({
           <DetailRow label="Created" value={formatDateTime(alert.createdAt)} />
         </div>
 
+        {/* Linked consumer / merchant record */}
+        {linked ? (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+              {linked.kind === "consumer" ? (
+                <User className="size-3" />
+              ) : (
+                <Building2 className="size-3" />
+              )}
+              Linked {linked.kind} record
+              <Badge
+                variant="outline"
+                className="text-[9px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1"
+              >
+                Live sync
+              </Badge>
+            </div>
+            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
+              {linked.kind === "consumer" ? (
+                <>
+                  <DetailRow label="Name" value={`${linked.consumer.firstName} ${linked.consumer.lastName}`} />
+                  <DetailRow label="Consumer code" value={<span className="font-mono text-xs">{linked.consumer.consumerCode}</span>} />
+                  <DetailRow label="Email" value={<span className="text-xs">{linked.consumer.email}</span>} />
+                  <DetailRow label="Phone" value={<span className="text-xs">{linked.consumer.phone}</span>} />
+                  <DetailRow label="Nationality" value={linked.consumer.nationality} />
+                  <DetailRow label="KYC tier" value={<span className="capitalize">{linked.consumer.kycTier.replace("_", " ")}</span>} />
+                  <DetailRow label="Risk score" value={`${linked.consumer.riskScore} / 100`} />
+                  <DetailRow label="Current status" value={consumerStatusBadge(linked.consumer.status)} />
+                  <DetailRow label="Platforms" value={platformChips(linked.consumer.platforms)} />
+                </>
+              ) : (
+                <>
+                  <DetailRow label="Trading name" value={linked.merchant.tradingName} />
+                  <DetailRow label="Legal name" value={linked.merchant.legalName} />
+                  <DetailRow label="Merchant code" value={<span className="font-mono text-xs">{linked.merchant.merchantCode}</span>} />
+                  <DetailRow label="Contact email" value={<span className="text-xs">{linked.merchant.contactEmail}</span>} />
+                  <DetailRow label="Owner" value={<span className="text-xs">{linked.merchant.ownerName}</span>} />
+                  <DetailRow label="Business type" value={<span className="capitalize">{linked.merchant.businessType.replace(/_/g, " ")}</span>} />
+                  <DetailRow label="Risk category" value={<span className="capitalize">{linked.merchant.riskCategory}</span>} />
+                  <DetailRow label="Current status" value={merchantStatusBadge(linked.merchant.status)} />
+                  <DetailRow label="Platforms" value={platformChips(linked.merchant.platforms)} />
+                </>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              Restricting or suspending will update this {linked.kind} record in real-time —
+              the {linked.kind === "consumer" ? "Consumer App" : "Merchant App"} reads from the
+              same database.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-amber-300 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+            <Info className="size-3.5 inline mr-1 -mt-0.5" />
+            No linked consumer or merchant record. Account-level actions (restrict / suspend /
+            reactivate) are disabled — use Block device, Hold settlement, Escalate, or Close as
+            false positive instead.
+          </div>
+        )}
+
         {alert.status === "closed" ? (
           <div className="text-center text-xs text-muted-foreground py-3 border rounded-md bg-muted/30">
             Alert is <span className="font-medium">closed</span> — no further actions available.
@@ -827,10 +1209,28 @@ function FraudDetailSheet({
             <div className="grid grid-cols-2 gap-2">
               <Button
                 onClick={onRestrict}
+                disabled={!canTouchAccount}
                 variant="outline"
                 className="text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-800 dark:hover:bg-amber-900/20"
               >
                 <ShieldBan className="size-4" /> Restrict
+              </Button>
+              <Button
+                onClick={onSuspend}
+                disabled={!canTouchAccount}
+                variant="destructive"
+              >
+                <OctagonAlert className="size-4" /> Suspend
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                onClick={onReactivate}
+                disabled={!canTouchAccount}
+                variant="outline"
+                className="text-emerald-700 border-emerald-300 hover:bg-emerald-50 dark:text-emerald-300 dark:border-emerald-800 dark:hover:bg-emerald-900/20"
+              >
+                <PowerOff className="size-4" /> Reactivate
               </Button>
               <Button onClick={onBlockDevice} variant="destructive">
                 <Ban className="size-4" /> Block device
