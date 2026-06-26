@@ -1,0 +1,1468 @@
+     1→=== PAGE 1 ===
+     2→Faya Admin Portal — Country Operations, Staff
+     3→Roles & Department Access
+     4→1. Product Name
+     5→Faya Admin Portal
+     6→2. Product Purpose
+     7→The Faya Admin Portal is the internal web/admin system used by Faya staff to manage the platform
+     8→across different African countries.
+     9→It controls:
+    10→• Country-by-country operations
+    11→• Country-specific compliance rules
+    12→• Customer KYC review
+    13→• Merchant KYB review
+    14→• Merchant devices and terminals
+    15→• Staff accounts
+    16→• Staff departments
+    17→• Staff roles
+    18→• Country permissions
+    19→• Audit logs
+    20→• Risk monitoring
+    21→• Disputes
+    22→• Settlements
+    23→• Support
+    24→• Compliance investigations
+    25→• Fraud operations
+    26→• Regulatory reporting
+    27→The Admin Portal must support different staff logins, different departments, and different permission
+    28→levels per country.
+    29→Example:
+    30→A Nigeria compliance officer should be able to review Nigerian KYC/KYB cases, but not automatically
+    31→access Ghana, Kenya, South Africa, or Egypt unless granted permission.
+    32→3. Core Admin Concept
+    33→Every admin user must have:
+    34→• Staff profile
+    35→• Department
+    36→• Role
+    37→1
+    38→
+    39→=== PAGE 2 ===
+    40→• Country access
+    41→• Permission set
+    42→• Login credentials
+    43→• MFA enabled
+    44→• Status
+    45→• Audit trail
+    46→Access must be controlled by:
+    47→Department + Role + Country + Permission
+    48→Example:
+    49→Department: Compliance
+    50→Role: KYC Reviewer
+    51→Country Access: Nigeria
+    52→Permissions: View KYC, Review KYC, Request Documents, Approve Low Risk
+    53→Another example:
+    54→Department: Operations
+    55→Role: Terminal Operations Agent
+    56→Country Access: Ghana, Kenya
+    57→Permissions: View Terminal Requests, Update Shipping Status, Assign Terminal
+    58→4. Admin Portal Departments
+    59→The Admin Portal should support these departments.
+    60→4.1 Super Admin
+    61→Purpose:
+    62→Highest internal access. Used only by founders, CTO, Head of Operations, or trusted platform
+    63→administrators.
+    64→Can:
+    65→• Create countries
+    66→• Activate/deactivate countries
+    67→• Create admin staff
+    68→• Assign departments
+    69→• Assign roles
+    70→• Assign country access
+    71→• Configure global platform settings
+    72→• Override country settings
+    73→• View all audit logs
+    74→2
+    75→
+    76→=== PAGE 3 ===
+    77→• Suspend staff
+    78→• Reset staff MFA
+    79→• Approve high-risk manual actions
+    80→• Access emergency controls
+    81→Should be limited to very few users.
+    82→4.2 Country Admin
+    83→Purpose:
+    84→Responsible for one country or a group of assigned countries.
+    85→Can:
+    86→• View dashboard for assigned country
+    87→• Manage country-specific KYC/KYB rules
+    88→• View customers in assigned country
+    89→• View merchants in assigned country
+    90→• View terminals/devices in assigned country
+    91→• View country settlements
+    92→• View country disputes
+    93→• View country support tickets
+    94→• Invite country staff, if allowed
+    95→• Escalate to Super Admin
+    96→• Generate country reports
+    97→Cannot:
+    98→• Access unassigned countries
+    99→• Change global rules
+   100→• Create Super Admins
+   101→• Disable audit logs
+   102→• Modify financial ledger directly
+   103→4.3 Compliance Department
+   104→Purpose:
+   105→Handles KYC, KYB, sanctions, PEP, AML, regulatory review, risk flags, and document verification.
+   106→Roles:
+   107→• KYC Reviewer
+   108→• KYB Reviewer
+   109→• Senior Compliance Analyst
+   110→• Compliance Manager
+   111→• AML Investigator
+   112→• Sanctions/PEP Analyst
+   113→• Regulatory Reporting Officer
+   114→3
+   115→
+   116→=== PAGE 4 ===
+   117→Can:
+   118→• Review customer identity submissions
+   119→• Review merchant business submissions
+   120→• Approve/reject KYC
+   121→• Approve/reject KYB
+   122→• Request additional documents
+   123→• Run sanctions/PEP review
+   124→• Mark cases for manual review
+   125→• Escalate suspicious cases
+   126→• Freeze account for compliance reason
+   127→• Recommend account closure
+   128→• Export compliance reports
+   129→• View regulatory reporting data
+   130→Cannot:
+   131→• Change payment processor settings
+   132→• Change settlement bank account without approval workflow
+   133→• Delete customer records
+   134→• Delete merchant records
+   135→• Approve their own escalated case if dual approval is required
+   136→4.4 Risk and Fraud Department
+   137→Purpose:
+   138→Monitors transaction risk, device risk, merchant abuse, fraud patterns, chargebacks, suspicious activity,
+   139→and compromised accounts.
+   140→Roles:
+   141→• Fraud Analyst
+   142→• Risk Analyst
+   143→• Senior Risk Analyst
+   144→• Fraud Manager
+   145→• Device Risk Analyst
+   146→• Transaction Monitoring Analyst
+   147→Can:
+   148→• View transaction risk alerts
+   149→• View fraud scores
+   150→• View suspicious devices
+   151→• Block device
+   152→• Restrict merchant
+   153→• Restrict customer
+   154→• Flag transaction
+   155→• Hold settlement
+   156→• Escalate to Compliance
+   157→• Review unusual transaction patterns
+   158→4
+   159→
+   160→=== PAGE 5 ===
+   161→• Add merchant/customer to watchlist
+   162→• Create fraud case
+   163→• View card/NFC failure patterns
+   164→Cannot:
+   165→• Approve KYB unless compliance permission is granted
+   166→• Change country compliance rules
+   167→• Change fees
+   168→• Create admin users
+   169→4.5 Merchant Operations Department
+   170→Purpose:
+   171→Manages merchant onboarding, merchant support, terminal requests, phone POS setup, branch/staff
+   172→support, and merchant account operations.
+   173→Roles:
+   174→• Merchant Support Agent
+   175→• Merchant Onboarding Agent
+   176→• Merchant Operations Analyst
+   177→• Terminal Operations Agent
+   178→• Merchant Operations Manager
+   179→Can:
+   180→• View merchant profile
+   181→• Assist merchant onboarding
+   182→• View KYB status
+   183→• Request missing merchant documents
+   184→• View terminal requests
+   185→• Update terminal delivery status
+   186→• Assign terminal to merchant
+   187→• View phone POS requests
+   188→• Help merchants assign devices
+   189→• Open merchant support tickets
+   190→• View merchant transaction summaries
+   191→• Escalate merchant risk/compliance issues
+   192→Cannot:
+   193→• Approve high-risk KYB alone
+   194→• Manually credit merchant balance
+   195→• Change settlement status
+   196→• Override risk holds
+   197→• Access unassigned countries
+   198→4.6 Terminal and Device Operations Department
+   199→Purpose:
+   200→5
+   201→
+   202→=== PAGE 6 ===
+   203→Handles physical terminals, SoftPOS devices, device activation, logistics, device blocking, replacements,
+   204→and device monitoring.
+   205→Roles:
+   206→• Device Support Agent
+   207→• Terminal Logistics Agent
+   208→• Terminal Activation Agent
+   209→• Device Risk Agent
+   210→• Device Operations Manager
+   211→Can:
+   212→• View device inventory
+   213→• View terminal serial numbers
+   214→• View terminal requests
+   215→• Update delivery/shipping status
+   216→• Activate terminal
+   217→• Block lost terminal
+   218→• Mark terminal damaged
+   219→• Request replacement
+   220→• Approve phone POS device after checks
+   221→• View device health
+   222→• View device audit events
+   223→Cannot:
+   224→• See full settlement bank details unless permitted
+   225→• Approve merchant KYB unless assigned
+   226→• Change fees
+   227→• Change country rules
+   228→4.7 Finance and Settlement Department
+   229→Purpose:
+   230→Manages merchant settlements, settlement failures, bank account validation, reconciliation, fees,
+   231→reserves, and payout reporting.
+   232→Roles:
+   233→• Settlement Analyst
+   234→• Reconciliation Analyst
+   235→• Finance Analyst
+   236→• Finance Manager
+   237→• Fee Operations Analyst
+   238→• Reserve Analyst
+   239→Can:
+   240→• View settlement batches
+   241→• View merchant bank account verification status
+   242→6
+   243→
+   244→=== PAGE 7 ===
+   245→• View payout failures
+   246→• Retry settlement where allowed
+   247→• Hold settlement with approval
+   248→• Release settlement hold with approval
+   249→• Download settlement reports
+   250→• Reconcile processor/acquirer reports
+   251→• View fee breakdown
+   252→• View reserve rules
+   253→• Export finance reports
+   254→Cannot:
+   255→• Approve KYC/KYB unless compliance permission is granted
+   256→• Change merchant ownership
+   257→• Delete transactions
+   258→• Change transaction amount
+   259→• Manually edit ledger balances without controlled workflow
+   260→4.8 Customer Support Department
+   261→Purpose:
+   262→Handles customer tickets, merchant tickets, disputes, app issues, account help, payment complaints,
+   263→terminal support, and basic operational support.
+   264→Roles:
+   265→• Customer Support Agent
+   266→• Merchant Support Agent
+   267→• Support Supervisor
+   268→• Support Manager
+   269→• Dispute Support Agent
+   270→Can:
+   271→• View support tickets
+   272→• Respond to tickets
+   273→• View limited customer profile
+   274→• View limited merchant profile
+   275→• View transaction status
+   276→• Resend receipt
+   277→• Escalate to Risk, Compliance, Finance, or Device Ops
+   278→• Request document resubmission
+   279→• Add notes to case
+   280→Cannot:
+   281→• View full identity documents unless permitted
+   282→• Approve KYC/KYB
+   283→• Change settlement details
+   284→• Refund without permission
+   285→• Block accounts except through escalation
+   286→7
+   287→
+   288→=== PAGE 8 ===
+   289→4.9 Disputes and Chargebacks Department
+   290→Purpose:
+   291→Handles card disputes, chargebacks, merchant evidence, customer complaints, and acquirer/scheme
+   292→dispute timelines.
+   293→Roles:
+   294→• Dispute Analyst
+   295→• Chargeback Analyst
+   296→• Senior Dispute Analyst
+   297→• Dispute Manager
+   298→Can:
+   299→• View disputed transactions
+   300→• Request merchant evidence
+   301→• Upload evidence to processor/acquirer workflow
+   302→• Track dispute deadlines
+   303→• Mark dispute won/lost
+   304→• Escalate fraud cases
+   305→• Communicate with merchant support
+   306→• View receipts and transaction metadata
+   307→Cannot:
+   308→• Change transaction amount
+   309→• Delete dispute record
+   310→• Approve merchant KYB
+   311→• Change merchant settlement account
+   312→4.10 Engineering and Technical Operations
+   313→Purpose:
+   314→Used by engineering, DevOps, and technical operations to monitor systems without exposing
+   315→unnecessary sensitive data.
+   316→Roles:
+   317→• Developer Read Only
+   318→• Technical Support Engineer
+   319→• DevOps Engineer
+   320→• Security Engineer
+   321→• Engineering Manager
+   322→Can:
+   323→• View system health
+   324→• View logs with masked sensitive data
+   325→• View API errors
+   326→8
+   327→
+   328→=== PAGE 9 ===
+   329→• View device connectivity status
+   330→• View processor/acquirer integration status
+   331→• View deployment status
+   332→• Trigger safe re-sync jobs
+   333→• View non-sensitive transaction metadata
+   334→Cannot by default:
+   335→• View full identity documents
+   336→• View raw personal documents
+   337→• View full bank details
+   338→• Approve compliance
+   339→• Change financial records
+   340→• Manually edit balances
+   341→Sensitive access must require additional permission and audit.
+   342→4.11 Legal and Regulatory
+   343→Purpose:
+   344→Handles regulator requests, legal holds, law enforcement requests, country reporting, and compliance
+   345→governance.
+   346→Roles:
+   347→• Legal Officer
+   348→• Regulatory Officer
+   349→• Data Protection Officer
+   350→• Legal Manager
+   351→Can:
+   352→• View regulatory reports
+   353→• View legal hold cases
+   354→• Export approved legal data
+   355→• Track regulator submissions
+   356→• View customer/merchant compliance history
+   357→• Add legal hold
+   358→• Add regulatory note
+   359→Cannot:
+   360→• Modify transactions
+   361→• Approve payments
+   362→• Manually release settlements
+   363→• Create staff unless admin permission granted
+   364→9
+   365→
+   366→=== PAGE 10 ===
+   367→5. Country Management
+   368→5.1 Country Admin Page
+   369→Each country must have its own admin page.
+   370→Example country pages:
+   371→• Nigeria Admin
+   372→• Ghana Admin
+   373→• Kenya Admin
+   374→• South Africa Admin
+   375→• Egypt Admin
+   376→• Morocco Admin
+   377→• Rwanda Admin
+   378→• Uganda Admin
+   379→Country page URL pattern:
+   380→/admin/countries/{countryCode}
+   381→Example:
+   382→/admin/countries/NG
+   383→/admin/countries/GH
+   384→/admin/countries/KE
+   385→5.2 Country Dashboard
+   386→Each country dashboard shows:
+   387→• Country name
+   388→• Country code
+   389→• Country status
+   390→• Currency
+   391→• Time zone
+   392→• Local regulator
+   393→• Country launch status
+   394→• Active customers
+   395→• Active merchants
+   396→• Pending KYC
+   397→• Pending KYB
+   398→• High-risk alerts
+   399→• Active terminals
+   400→• Active phone POS devices
+   401→• Today’s transaction volume
+   402→• Today’s approved transactions
+   403→• Today’s declined transactions
+   404→10
+   405→
+   406→=== PAGE 11 ===
+   407→• Pending settlements
+   408→• Held settlements
+   409→• Open disputes
+   410→• Open support tickets
+   411→• Compliance alerts
+   412→Country statuses:
+   413→• Draft
+   414→• Internal testing
+   415→• Pilot
+   416→• Live
+   417→• Restricted
+   418→• Suspended
+   419→• Closed
+   420→5.3 Country Configuration
+   421→Country Admin can configure:
+   422→• Currency
+   423→• Supported payment methods
+   424→• Settlement currency
+   425→• KYC requirements
+   426→• KYB requirements
+   427→• Accepted identity documents
+   428→• Required identity numbers
+   429→• Proof of address rules
+   430→• Liveness requirements
+   431→• Merchant onboarding rules
+   432→• Terminal availability
+   433→• Phone POS availability
+   434→• Transaction limits
+   435→• Settlement schedule
+   436→• Risk thresholds
+   437→• High-risk industries
+   438→• Support operating hours
+   439→• Local tax/VAT settings
+   440→• Regulatory reporting schedule
+   441→5.4 Country KYC Rules
+   442→For each country, admin should configure:
+   443→• Required customer identity number
+   444→• Accepted government ID documents
+   445→• Liveness required or not
+   446→• Proof of address required or risk-based
+   447→• Minimum age
+   448→• Sanctions/PEP required
+   449→• Local database verification provider
+   450→• Manual review threshold
+   451→11
+   452→
+   453→=== PAGE 12 ===
+   454→• KYC tier levels
+   455→• Documents for citizens
+   456→• Documents for foreign residents
+   457→• Documents for diaspora users
+   458→Example Nigeria:
+   459→{
+   460→"country": "NG",
+   461→"requiredIdentityNumbers": ["BVN", "NIN"],
+   462→"acceptedDocuments": [
+   463→"national_id",
+   464→"passport",
+   465→"drivers_license",
+   466→"voters_card",
+   467→"residence_permit"
+   468→],
+   469→"livenessRequired": true,
+   470→"proofOfAddress": "risk_based",
+   471→"sanctionsPepRequired": true
+   472→}
+   473→Example Ghana:
+   474→{
+   475→"country": "GH",
+   476→"requiredIdentityNumbers": ["ghana_card_pin"],
+   477→"acceptedDocuments": [
+   478→"ghana_card",
+   479→"passport",
+   480→"drivers_license",
+   481→"residence_permit"
+   482→],
+   483→"livenessRequired": true,
+   484→"proofOfAddress": "risk_based",
+   485→"sanctionsPepRequired": true
+   486→}
+   487→5.5 Country KYB Rules
+   488→For each country, admin should configure:
+   489→• Business types allowed
+   490→• Required business registration documents
+   491→• Required tax documents
+   492→• Required owner/director documents
+   493→• Beneficial owner requirements
+   494→• Business address proof
+   495→• Local licence requirements
+   496→12
+   497→
+   498→=== PAGE 13 ===
+   499→• High-risk merchant categories
+   500→• Merchant transaction limits
+   501→• Settlement bank validation rules
+   502→• Phone POS eligibility
+   503→• Physical terminal eligibility
+   504→5.6 Country Device Rules
+   505→For each country:
+   506→• Physical terminal enabled: yes/no
+   507→• Phone POS enabled: yes/no
+   508→• Faya closed-loop NFC enabled: yes/no
+   509→• Allowed terminal models
+   510→• Allowed phone POS providers
+   511→• Minimum Android version
+   512→• NFC required
+   513→• Device integrity required
+   514→• Location requirement
+   515→• Staff PIN required
+   516→• Max transaction amount by device type
+   517→• Max daily device volume
+   518→• Terminal replacement policy
+   519→• Device inactivity policy
+   520→5.7 Country Settlement Rules
+   521→For each country:
+   522→• Settlement cycle
+   523→• Settlement bank country
+   524→• Supported settlement currency
+   525→• Settlement cutoff time
+   526→• Minimum settlement amount
+   527→• Rolling reserve rules
+   528→• Risk hold rules
+   529→• Manual review threshold
+   530→• Failed settlement retry rules
+   531→• Bank account name-match rules
+   532→Settlement cycle examples:
+   533→• T+1
+   534→• T+2
+   535→• Weekly
+   536→• Manual settlement during pilot
+   537→13
+   538→
+   539→=== PAGE 14 ===
+   540→6. Staff Admin Page
+   541→6.1 Staff List
+   542→The Staff Admin page shows:
+   543→• Staff name
+   544→• Email
+   545→• Phone
+   546→• Department
+   547→• Role
+   548→• Countries assigned
+   549→• Status
+   550→• MFA status
+   551→• Last login
+   552→• Created by
+   553→• Created date
+   554→Filters:
+   555→• Department
+   556→• Role
+   557→• Country
+   558→• Status
+   559→• MFA enabled
+   560→• Last login date
+   561→• Created date
+   562→Staff statuses:
+   563→• Invited
+   564→• Active
+   565→• Suspended
+   566→• Locked
+   567→• Removed
+   568→6.2 Create Staff
+   569→Fields:
+   570→• First name
+   571→• Last name
+   572→• Work email
+   573→• Phone number
+   574→• Department
+   575→• Role
+   576→• Countries assigned
+   577→• Permission group
+   578→• Manager
+   579→• Require MFA
+   580→• Temporary password or invite link
+   581→14
+   582→
+   583→=== PAGE 15 ===
+   584→• Start date
+   585→• Notes
+   586→Rules:
+   587→• Staff email must be unique.
+   588→• MFA required for all admin users.
+   589→• Super Admin approval required for high-risk roles.
+   590→• Staff must have at least one country unless global role.
+   591→• Staff must have department and role.
+   592→• Staff cannot assign permissions higher than their own.
+   593→6.3 Staff Profile
+   594→Shows:
+   595→• Staff ID
+   596→• Name
+   597→• Email
+   598→• Phone
+   599→• Department
+   600→• Role
+   601→• Country access
+   602→• Permission list
+   603→• MFA status
+   604→• Status
+   605→• Last login
+   606→• Failed login count
+   607→• Active sessions
+   608→• Audit history
+   609→• Manager
+   610→• Notes
+   611→Actions:
+   612→• Edit role
+   613→• Edit country access
+   614→• Reset password
+   615→• Reset MFA
+   616→• Suspend staff
+   617→• Unlock staff
+   618→• Remove staff
+   619→• Force logout
+   620→• View audit logs
+   621→7. Staff Login System
+   622→7.1 Login Methods
+   623→Admin staff login must support:
+   624→• Email + password
+   625→15
+   626→
+   627→=== PAGE 16 ===
+   628→• MFA code
+   629→• Backup recovery code
+   630→• SSO later, optional
+   631→• Device/session trust, optional
+   632→Login flow:
+   633→1. Staff enters email and password.
+   634→2. Backend checks staff status.
+   635→3. Backend checks department/role.
+   636→4. Backend requires MFA.
+   637→5. Backend creates session.
+   638→6. Backend loads country access.
+   639→7. Backend loads permissions.
+   640→8. Admin lands on allowed dashboard.
+   641→7.2 MFA Rules
+   642→MFA is mandatory for:
+   643→• Super Admin
+   644→• Country Admin
+   645→• Compliance
+   646→• Finance
+   647→• Risk/Fraud
+   648→• Device Operations
+   649→• Legal
+   650→• Engineering with production access
+   651→MFA methods:
+   652→• Authenticator app
+   653→• SMS fallback, optional
+   654→• Email fallback, optional
+   655→• Recovery codes
+   656→7.3 Login Restrictions
+   657→Block login when:
+   658→• Staff is suspended
+   659→• Staff is removed
+   660→• Staff account is locked
+   661→• MFA not completed
+   662→• Password expired
+   663→• Role removed
+   664→• No country access assigned
+   665→• IP/device policy fails, if enabled
+   666→16
+   667→
+   668→=== PAGE 17 ===
+   669→7.4 Session Rules
+   670→Sessions must:
+   671→• Expire after inactivity
+   672→• Require re-auth for sensitive actions
+   673→• Support forced logout
+   674→• Support single-session policy for high-risk roles, optional
+   675→• Record IP address
+   676→• Record device/browser fingerprint
+   677→• Record login country/location where available
+   678→Sensitive actions requiring re-auth:
+   679→• Approve KYB
+   680→• Reject KYB
+   681→• Release settlement hold
+   682→• Block account
+   683→• Create staff
+   684→• Change staff role
+   685→• Reset MFA
+   686→• Export sensitive data
+   687→• Change country rules
+   688→• Approve terminal activation
+   689→• Change risk limits
+   690→8. Permission Model
+   691→8.1 Permission Format
+   692→Permissions should use this format:
+   693→resource.action.scope
+   694→Examples:
+   695→kyc.view.country
+   696→kyc.approve.country
+   697→kyb.review.country
+   698→merchant.view.country
+   699→merchant.restrict.country
+   700→settlement.view.country
+   701→settlement.hold.country
+   702→staff.create.country
+   703→staff.manage.global
+   704→country.configure.global
+   705→device.block.country
+   706→17
+   707→
+   708→=== PAGE 18 ===
+   709→terminal.assign.country
+   710→support.respond.country
+   711→8.2 Permission Scopes
+   712→Scopes:
+   713→• Own
+   714→• Branch
+   715→• Country
+   716→• Region
+   717→• Global
+   718→Examples:
+   719→A support agent may have:
+   720→support.view.country
+   721→support.respond.country
+   722→customer.view_limited.country
+   723→merchant.view_limited.country
+   724→A compliance manager may have:
+   725→kyc.view.country
+   726→kyc.approve.country
+   727→kyc.reject.country
+   728→kyb.view.country
+   729→kyb.approve.country
+   730→kyb.reject.country
+   731→sanctions.review.country
+   732→account.restrict.country
+   733→A finance analyst may have:
+   734→settlement.view.country
+   735→settlement.export.country
+   736→reconciliation.view.country
+   737→fees.view.country
+   738→9. Role-Based Access Matrix
+   739→9.1 Super Admin
+   740→Countries:
+   741→• All countries
+   742→18
+   743→
+   744→=== PAGE 19 ===
+   745→Permissions:
+   746→• Full global access
+   747→• Staff management
+   748→• Country management
+   749→• Emergency controls
+   750→• Audit logs
+   751→• System configuration
+   752→Restrictions:
+   753→• Dual approval required for destructive financial actions.
+   754→9.2 Country Admin
+   755→Countries:
+   756→• Assigned countries only
+   757→Permissions:
+   758→• View country dashboard
+   759→• Manage country staff, if allowed
+   760→• View country merchants
+   761→• View country customers
+   762→• View country operations
+   763→• View reports
+   764→• Escalate issues
+   765→Restrictions:
+   766→• Cannot create Super Admin
+   767→• Cannot access unassigned countries
+   768→• Cannot modify global settings
+   769→9.3 KYC Reviewer
+   770→Countries:
+   771→• Assigned countries only
+   772→Permissions:
+   773→• View customer KYC
+   774→• Review documents
+   775→• Request resubmission
+   776→• Approve low-risk KYC
+   777→• Reject invalid KYC
+   778→• Add review notes
+   779→Restrictions:
+   780→• Cannot approve high-risk KYC alone
+   781→19
+   782→
+   783→=== PAGE 20 ===
+   784→• Cannot change country rules
+   785→• Cannot view merchant settlement details unless assigned
+   786→9.4 KYB Reviewer
+   787→Countries:
+   788→• Assigned countries only
+   789→Permissions:
+   790→• View merchant KYB
+   791→• Review business documents
+   792→• Review owner/director documents
+   793→• Request additional documents
+   794→• Approve low-risk KYB
+   795→• Reject invalid KYB
+   796→• Add review notes
+   797→Restrictions:
+   798→• High-risk merchant approval requires senior compliance.
+   799→• Cannot release settlement holds.
+   800→9.5 AML Investigator
+   801→Countries:
+   802→• Assigned countries only or regional
+   803→Permissions:
+   804→• View suspicious activity
+   805→• View transaction monitoring alerts
+   806→• View customer/merchant risk profile
+   807→• Freeze account for AML reason
+   808→• Escalate SAR/STR case
+   809→• Add investigation notes
+   810→• Export investigation report
+   811→Restrictions:
+   812→• Cannot delete records
+   813→• Cannot manually edit transaction data
+   814→9.6 Fraud Analyst
+   815→Countries:
+   816→• Assigned countries only
+   817→20
+   818→
+   819→=== PAGE 21 ===
+   820→Permissions:
+   821→• View fraud alerts
+   822→• View device risk
+   823→• View transaction risk
+   824→• Restrict device
+   825→• Restrict account
+   826→• Hold suspicious transaction
+   827→• Escalate to compliance
+   828→Restrictions:
+   829→• Cannot approve KYC/KYB unless granted
+   830→• Cannot change settlement account
+   831→9.7 Settlement Analyst
+   832→Countries:
+   833→• Assigned countries only
+   834→Permissions:
+   835→• View settlements
+   836→• View settlement failures
+   837→• Retry payout, if allowed
+   838→• Export settlement report
+   839→• Add settlement note
+   840→• Escalate failed payout
+   841→Restrictions:
+   842→• Settlement hold/release requires approval.
+   843→• Cannot edit transaction amount.
+   844→• Cannot approve KYB.
+   845→9.8 Device Operations Agent
+   846→Countries:
+   847→• Assigned countries only
+   848→Permissions:
+   849→• View physical terminals
+   850→• View phone POS devices
+   851→• Update terminal request status
+   852→• Assign terminal
+   853→• Block lost device
+   854→• View device health
+   855→• View activation requests
+   856→21
+   857→
+   858→=== PAGE 22 ===
+   859→Restrictions:
+   860→• Cannot approve merchant KYB
+   861→• Cannot view full settlement account
+   862→• Cannot change merchant limits
+   863→9.9 Support Agent
+   864→Countries:
+   865→• Assigned countries only
+   866→Permissions:
+   867→• View support tickets
+   868→• Respond to tickets
+   869→• View limited customer profile
+   870→• View limited merchant profile
+   871→• View transaction status
+   872→• Resend receipt
+   873→• Escalate case
+   874→Restrictions:
+   875→• Cannot approve KYC/KYB
+   876→• Cannot view full documents by default
+   877→• Cannot block account without escalation
+   878→9.10 Dispute Analyst
+   879→Countries:
+   880→• Assigned countries only
+   881→Permissions:
+   882→• View disputes
+   883→• Request merchant evidence
+   884→• Upload dispute evidence
+   885→• Update dispute status
+   886→• View receipt
+   887→• View transaction metadata
+   888→Restrictions:
+   889→• Cannot change transaction amount
+   890→• Cannot release settlement
+   891→• Cannot approve KYB
+   892→22
+   893→
+   894→=== PAGE 23 ===
+   895→9.11 Engineering Read-Only
+   896→Countries:
+   897→• Depends on assignment
+   898→Permissions:
+   899→• View system health
+   900→• View masked logs
+   901→• View non-sensitive errors
+   902→• View integration status
+   903→• Trigger safe sync jobs
+   904→Restrictions:
+   905→• No PII documents by default
+   906→• No financial action
+   907→• No compliance approval
+   908→• No staff creation
+   909→10. Country-Based Data Access
+   910→Every sensitive record must include country code.
+   911→Examples:
+   912→• Customer countryOfResidence
+   913→• Merchant countryOfOperation
+   914→• Transaction country
+   915→• Settlement country
+   916→• Device country
+   917→• Support ticket country
+   918→• KYC country
+   919→• KYB country
+   920→When staff opens a page, backend must check:
+   921→Does staff have this country?
+   922→Does staff have this department permission?
+   923→Does staff role allow this action?
+   924→Does the action require approval?
+   925→A frontend-only check is not enough. Backend must enforce all permissions.
+   926→23
+   927→
+   928→=== PAGE 24 ===
+   929→11. Admin Pages by Department
+   930→11.1 Compliance Admin Pages
+   931→Pages:
+   932→• KYC Queue
+   933→• KYB Queue
+   934→• Sanctions/PEP Queue
+   935→• Manual Review
+   936→• Rejected Cases
+   937→• Approved Cases
+   938→• Document Requests
+   939→• Regulatory Reports
+   940→• AML Cases
+   941→KYC Queue fields:
+   942→• Customer name
+   943→• Country
+   944→• Nationality
+   945→• Risk score
+   946→• Submitted date
+   947→• Required documents
+   948→• Status
+   949→• Assigned reviewer
+   950→• SLA timer
+   951→KYB Queue fields:
+   952→• Merchant name
+   953→• Country
+   954→• Business type
+   955→• Risk category
+   956→• Submitted date
+   957→• Missing documents
+   958→• Status
+   959→• Assigned reviewer
+   960→• SLA timer
+   961→Actions:
+   962→• Open case
+   963→• Approve
+   964→• Reject
+   965→• Request document
+   966→• Escalate
+   967→• Assign reviewer
+   968→• Add note
+   969→24
+   970→
+   971→=== PAGE 25 ===
+   972→11.2 Risk/Fraud Admin Pages
+   973→Pages:
+   974→• Fraud Alerts
+   975→• Device Risk
+   976→• Transaction Monitoring
+   977→• Suspicious Merchants
+   978→• Suspicious Customers
+   979→• Velocity Rules
+   980→• Watchlists
+   981→• Risk Cases
+   982→Fraud alert fields:
+   983→• Alert ID
+   984→• Country
+   985→• Entity type
+   986→• Entity name
+   987→• Trigger
+   988→• Severity
+   989→• Transaction amount
+   990→• Device
+   991→• Created date
+   992→• Status
+   993→Actions:
+   994→• Restrict account
+   995→• Block device
+   996→• Hold settlement
+   997→• Escalate to compliance
+   998→• Close false positive
+   999→• Add watchlist entry
+  1000→11.3 Merchant Operations Pages
+  1001→Pages:
+  1002→• Merchant List
+  1003→• Merchant Onboarding
+  1004→• Terminal Requests
+  1005→• Phone POS Requests
+  1006→• Branches
+  1007→• Merchant Staff
+  1008→• Merchant Support
+  1009→• Merchant Activity
+  1010→Actions:
+  1011→• View merchant
+  1012→• Request documents
+  1013→25
+  1014→
+  1015→=== PAGE 26 ===
+  1016→• Update terminal request
+  1017→• Assign device
+  1018→• Escalate KYB
+  1019→• Contact merchant
+  1020→• Create support case
+  1021→11.4 Device Operations Pages
+  1022→Pages:
+  1023→• Terminal Inventory
+  1024→• Terminal Requests
+  1025→• Terminal Activation
+  1026→• Phone POS Devices
+  1027→• Device Health
+  1028→• Lost/Damaged Devices
+  1029→• Device Events
+  1030→Actions:
+  1031→• Assign terminal
+  1032→• Mark shipped
+  1033→• Mark delivered
+  1034→• Activate terminal
+  1035→• Block terminal
+  1036→• Replace terminal
+  1037→• Approve phone POS device
+  1038→• Reject phone POS device
+  1039→11.5 Finance Pages
+  1040→Pages:
+  1041→• Settlement Batches
+  1042→• Failed Settlements
+  1043→• Reconciliation
+  1044→• Merchant Fees
+  1045→• Reserves
+  1046→• Payout Accounts
+  1047→• Finance Reports
+  1048→Actions:
+  1049→• View settlement
+  1050→• Export report
+  1051→• Retry failed settlement
+  1052→• Recommend hold
+  1053→• Recommend release
+  1054→• Add finance note
+  1055→26
+  1056→
+  1057→=== PAGE 27 ===
+  1058→11.6 Support Pages
+  1059→Pages:
+  1060→• Customer Tickets
+  1061→• Merchant Tickets
+  1062→• Terminal Tickets
+  1063→• Payment Tickets
+  1064→• Escalations
+  1065→• SLA Dashboard
+  1066→Actions:
+  1067→• Reply
+  1068→• Assign
+  1069→• Escalate
+  1070→• Close ticket
+  1071→• Add internal note
+  1072→• Link transaction
+  1073→• Link merchant
+  1074→• Link device
+  1075→11.7 Dispute Pages
+  1076→Pages:
+  1077→• New Disputes
+  1078→• Awaiting Merchant Evidence
+  1079→• Evidence Submitted
+  1080→• Under Review
+  1081→• Won/Lost
+  1082→• Expired
+  1083→Actions:
+  1084→• Request evidence
+  1085→• Upload evidence
+  1086→• Update status
+  1087→• Add note
+  1088→• Escalate fraud
+  1089→12. Approval Workflows
+  1090→Some actions must require one or two approvals.
+  1091→12.1 Single Approval
+  1092→Examples:
+  1093→• Approve low-risk KYC
+  1094→• Approve low-risk KYB
+  1095→27
+  1096→
+  1097→=== PAGE 28 ===
+  1098→• Approve phone POS device
+  1099→• Block lost terminal
+  1100→• Update terminal delivery status
+  1101→12.2 Dual Approval
+  1102→Examples:
+  1103→• Release settlement hold
+  1104→• Approve high-risk merchant
+  1105→• Approve PEP customer
+  1106→• Create country admin
+  1107→• Change country KYC rules
+  1108→• Change country transaction limits
+  1109→• Manually adjust merchant fees
+  1110→• Unblock fraud-restricted account
+  1111→• Export large sensitive dataset
+  1112→12.3 Approval Record
+  1113→Each approval must store:
+  1114→• Request ID
+  1115→• Requested by
+  1116→• Approved by
+  1117→• Approval level
+  1118→• Reason
+  1119→• Timestamp
+  1120→• Country
+  1121→• Entity affected
+  1122→• Before value
+  1123→• After value
+  1124→• IP address
+  1125→• Device/browser
+  1126→13. Admin Audit Logs
+  1127→Every admin action must be logged.
+  1128→Audit log fields:
+  1129→• id
+  1130→• staffId
+  1131→• staffName
+  1132→• department
+  1133→• role
+  1134→• country
+  1135→• action
+  1136→• entityType
+  1137→• entityId
+  1138→• beforeValue
+  1139→28
+  1140→
+  1141→=== PAGE 29 ===
+  1142→• afterValue
+  1143→• reason
+  1144→• ipAddress
+  1145→• deviceFingerprint
+  1146→• createdAt
+  1147→Audit log must be immutable.
+  1148→Logged actions:
+  1149→• Login
+  1150→• Failed login
+  1151→• MFA success/failure
+  1152→• View sensitive document
+  1153→• Approve KYC
+  1154→• Reject KYC
+  1155→• Approve KYB
+  1156→• Reject KYB
+  1157→• Block account
+  1158→• Unblock account
+  1159→• Hold settlement
+  1160→• Release settlement
+  1161→• Create staff
+  1162→• Change staff role
+  1163→• Change country rule
+  1164→• Export report
+  1165→• View full document
+  1166→• Download document
+  1167→• Reset MFA
+  1168→• Force logout
+  1169→14. Admin Security Requirements
+  1170→Admin Portal must enforce:
+  1171→• MFA for all staff
+  1172→• Strong passwords
+  1173→• Role-based access control
+  1174→• Country-based access control
+  1175→• Department-based access control
+  1176→• Session timeout
+  1177→• Sensitive action re-auth
+  1178→• IP/device logging
+  1179→• Export limits
+  1180→• Immutable audit logs
+  1181→• Staff status checks
+  1182→• Backend permission enforcement
+  1183→• Least privilege access
+  1184→• No shared accounts
+  1185→29
+  1186→
+  1187→=== PAGE 30 ===
+  1188→Admin Portal must block:
+  1189→• Suspended staff
+  1190→• Removed staff
+  1191→• Staff with no country access
+  1192→• Staff with no department
+  1193→• Staff with expired password
+  1194→• Staff without MFA
+  1195→• Login from blocked IP/device where enabled
+  1196→15. Admin Database Tables
+  1197→admin_staff
+  1198→• id
+  1199→• firstName
+  1200→• lastName
+  1201→• email
+  1202→• phone
+  1203→• departmentId
+  1204→• roleId
+  1205→• managerId
+  1206→• status
+  1207→• mfaEnabled
+  1208→• passwordHash
+  1209→• lastLoginAt
+  1210→• failedLoginCount
+  1211→• createdBy
+  1212→• createdAt
+  1213→• updatedAt
+  1214→admin_departments
+  1215→• id
+  1216→• name
+  1217→• description
+  1218→• status
+  1219→• createdAt
+  1220→• updatedAt
+  1221→admin_roles
+  1222→• id
+  1223→• departmentId
+  1224→• name
+  1225→• description
+  1226→• riskLevel
+  1227→• status
+  1228→• createdAt
+  1229→• updatedAt
+  1230→30
+  1231→
+  1232→=== PAGE 31 ===
+  1233→admin_permissions
+  1234→• id
+  1235→• key
+  1236→• resource
+  1237→• action
+  1238→• scope
+  1239→• description
+  1240→• status
+  1241→admin_role_permissions
+  1242→• id
+  1243→• roleId
+  1244→• permissionId
+  1245→admin_staff_countries
+  1246→• id
+  1247→• staffId
+  1248→• countryCode
+  1249→• accessLevel
+  1250→• createdBy
+  1251→• createdAt
+  1252→admin_staff_permissions
+  1253→• id
+  1254→• staffId
+  1255→• permissionId
+  1256→• reason
+  1257→• expiresAt
+  1258→• createdBy
+  1259→• createdAt
+  1260→admin_sessions
+  1261→• id
+  1262→• staffId
+  1263→• tokenHash
+  1264→• ipAddress
+  1265→• deviceFingerprint
+  1266→• userAgent
+  1267→• status
+  1268→• createdAt
+  1269→• expiresAt
+  1270→• lastActivityAt
+  1271→admin_audit_logs
+  1272→• id
+  1273→• staffId
+  1274→• department
+  1275→31
+  1276→
+  1277→=== PAGE 32 ===
+  1278→• role
+  1279→• countryCode
+  1280→• action
+  1281→• entityType
+  1282→• entityId
+  1283→• beforeValue
+  1284→• afterValue
+  1285→• reason
+  1286→• ipAddress
+  1287→• deviceFingerprint
+  1288→• createdAt
+  1289→country_configs
+  1290→• id
+  1291→• countryCode
+  1292→• countryName
+  1293→• currency
+  1294→• status
+  1295→• kycRules
+  1296→• kybRules
+  1297→• deviceRules
+  1298→• settlementRules
+  1299→• riskRules
+  1300→• createdAt
+  1301→• updatedAt
+  1302→admin_approval_requests
+  1303→• id
+  1304→• requestedBy
+  1305→• countryCode
+  1306→• action
+  1307→• entityType
+  1308→• entityId
+  1309→• payload
+  1310→• status
+  1311→• requiredApprovals
+  1312→• currentApprovals
+  1313→• reason
+  1314→• createdAt
+  1315→• updatedAt
+  1316→admin_approval_actions
+  1317→• id
+  1318→• approvalRequestId
+  1319→• approvedBy
+  1320→• decision
+  1321→• note
+  1322→• createdAt
+  1323→32
+  1324→
+  1325→=== PAGE 33 ===
+  1326→16. Admin API Endpoints
+  1327→Auth
+  1328→• POST /admin/auth/login
+  1329→• POST /admin/auth/mfa/verify
+  1330→• POST /admin/auth/logout
+  1331→• POST /admin/auth/refresh
+  1332→• POST /admin/auth/password/reset
+  1333→• POST /admin/auth/re-authenticate
+  1334→Staff
+  1335→• GET /admin/staff
+  1336→• POST /admin/staff
+  1337→• GET /admin/staff/{staffId}
+  1338→• PATCH /admin/staff/{staffId}
+  1339→• POST /admin/staff/{staffId}/suspend
+  1340→• POST /admin/staff/{staffId}/unlock
+  1341→• POST /admin/staff/{staffId}/reset-mfa
+  1342→• POST /admin/staff/{staffId}/force-logout
+  1343→• PATCH /admin/staff/{staffId}/countries
+  1344→• PATCH /admin/staff/{staffId}/permissions
+  1345→Departments and roles
+  1346→• GET /admin/departments
+  1347→• POST /admin/departments
+  1348→• GET /admin/roles
+  1349→• POST /admin/roles
+  1350→• PATCH /admin/roles/{roleId}
+  1351→• GET /admin/permissions
+  1352→• PATCH /admin/roles/{roleId}/permissions
+  1353→Countries
+  1354→• GET /admin/countries
+  1355→• POST /admin/countries
+  1356→• GET /admin/countries/{countryCode}
+  1357→• PATCH /admin/countries/{countryCode}
+  1358→• GET /admin/countries/{countryCode}/dashboard
+  1359→• PATCH /admin/countries/{countryCode}/kyc-rules
+  1360→• PATCH /admin/countries/{countryCode}/kyb-rules
+  1361→• PATCH /admin/countries/{countryCode}/device-rules
+  1362→• PATCH /admin/countries/{countryCode}/settlement-rules
+  1363→• PATCH /admin/countries/{countryCode}/risk-rules
+  1364→Compliance
+  1365→• GET /admin/compliance/kyc-cases
+  1366→• GET /admin/compliance/kyc-cases/{caseId}
+  1367→• POST /admin/compliance/kyc-cases/{caseId}/approve
+  1368→33
+  1369→
+  1370→=== PAGE 34 ===
+  1371→• POST /admin/compliance/kyc-cases/{caseId}/reject
+  1372→• POST /admin/compliance/kyc-cases/{caseId}/request-documents
+  1373→• POST /admin/compliance/kyc-cases/{caseId}/escalate
+  1374→• GET /admin/compliance/kyb-cases
+  1375→• GET /admin/compliance/kyb-cases/{caseId}
+  1376→• POST /admin/compliance/kyb-cases/{caseId}/approve
+  1377→• POST /admin/compliance/kyb-cases/{caseId}/reject
+  1378→• POST /admin/compliance/kyb-cases/{caseId}/request-documents
+  1379→• POST /admin/compliance/kyb-cases/{caseId}/escalate
+  1380→Risk
+  1381→• GET /admin/risk/alerts
+  1382→• GET /admin/risk/cases
+  1383→• POST /admin/risk/cases/{caseId}/restrict
+  1384→• POST /admin/risk/cases/{caseId}/close
+  1385→• POST /admin/risk/entities/{entityId}/watchlist
+  1386→Devices
+  1387→• GET /admin/devices/terminals
+  1388→• GET /admin/devices/phone-pos
+  1389→• POST /admin/devices/{deviceId}/block
+  1390→• POST /admin/devices/{deviceId}/unblock
+  1391→• POST /admin/devices/{deviceId}/approve
+  1392→• POST /admin/devices/{deviceId}/reject
+  1393→Finance
+  1394→• GET /admin/finance/settlements
+  1395→• GET /admin/finance/settlements/{settlementId}
+  1396→• POST /admin/finance/settlements/{settlementId}/hold
+  1397→• POST /admin/finance/settlements/{settlementId}/release-request
+  1398→• GET /admin/finance/reconciliation
+  1399→Support
+  1400→• GET /admin/support/tickets
+  1401→• GET /admin/support/tickets/{ticketId}
+  1402→• POST /admin/support/tickets/{ticketId}/reply
+  1403→• POST /admin/support/tickets/{ticketId}/assign
+  1404→• POST /admin/support/tickets/{ticketId}/escalate
+  1405→• POST /admin/support/tickets/{ticketId}/close
+  1406→Audit
+  1407→• GET /admin/audit-logs
+  1408→• GET /admin/audit-logs/{logId}
+  1409→34
+  1410→
+  1411→=== PAGE 35 ===
+  1412→Approvals
+  1413→• GET /admin/approval-requests
+  1414→• POST /admin/approval-requests
+  1415→• POST /admin/approval-requests/{requestId}/approve
+  1416→• POST /admin/approval-requests/{requestId}/reject
+  1417→17. Admin MVP Build Order
+  1418→Phase 1: Core Staff and Country Access
+  1419→Build:
+  1420→• Admin login
+  1421→• MFA
+  1422→• Staff list
+  1423→• Create staff
+  1424→• Departments
+  1425→• Roles
+  1426→• Permissions
+  1427→• Country access
+  1428→• Audit logs
+  1429→Phase 2: Country Admin
+  1430→Build:
+  1431→• Country list
+  1432→• Country dashboard
+  1433→• Country KYC rules
+  1434→• Country KYB rules
+  1435→• Country device rules
+  1436→• Country settlement rules
+  1437→• Country risk rules
+  1438→Phase 3: Operations
+  1439→Build:
+  1440→• KYC queue
+  1441→• KYB queue
+  1442→• Merchant list
+  1443→• Customer list
+  1444→• Terminal requests
+  1445→• Phone POS requests
+  1446→• Support tickets
+  1447→Phase 4: Finance, Risk, Disputes
+  1448→Build:
+  1449→• Settlement dashboard
+  1450→35
+  1451→
+  1452→=== PAGE 36 ===
+  1453→• Reconciliation
+  1454→• Risk alerts
+  1455→• Fraud cases
+  1456→• Disputes
+  1457→• Approval workflows
+  1458→Phase 5: Advanced Controls
+  1459→Build:
+  1460→• Dual approvals
+  1461→• Export controls
+  1462→• Regulatory reports
+  1463→• Advanced audit search
+  1464→• SLA dashboards
+  1465→• Regional admin hierarchy
+  1466→36
+  1467→
+  1468→

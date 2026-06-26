@@ -1,0 +1,190 @@
+     1→{
+     2→  "status": "success",
+     3→  "data": {
+     4→    "total_pages": 36,
+     5→    "extracted_pages": 36,
+     6→    "total_chars": 30728,
+     7→    "pages": [
+     8→      {
+     9→        "page": 1,
+    10→        "chars": 1014,
+    11→        "text": "Faya Admin Portal — Country Operations, Staff\nRoles & Department Access\n1. Product Name\nFaya Admin Portal\n2. Product Purpose\nThe Faya Admin Portal is the internal web/admin system used by Faya staff to manage the platform\nacross different African countries.\nIt controls:\n• Country-by-country operations\n• Country-specific compliance rules\n• Customer KYC review\n• Merchant KYB review\n• Merchant devices and terminals\n• Staff accounts\n• Staff departments\n• Staff roles\n• Country permissions\n• Audit logs\n• Risk monitoring\n• Disputes\n• Settlements\n• Support\n• Compliance investigations\n• Fraud operations\n• Regulatory reporting\nThe Admin Portal must support different staff logins, different departments, and different permission\nlevels per country.\nExample:\nA Nigeria compliance officer should be able to review Nigerian KYC/KYB cases, but not automatically\naccess Ghana, Kenya, South Africa, or Egypt unless granted permission.\n3. Core Admin Concept\nEvery admin user must have:\n• Staff profile\n• Department\n• Role\n1"
+    12→      },
+    13→      {
+    14→        "page": 2,
+    15→        "chars": 924,
+    16→        "text": "• Country access\n• Permission set\n• Login credentials\n• MFA enabled\n• Status\n• Audit trail\nAccess must be controlled by:\nDepartment + Role + Country + Permission\nExample:\nDepartment: Compliance\nRole: KYC Reviewer\nCountry Access: Nigeria\nPermissions: View KYC, Review KYC, Request Documents, Approve Low Risk\nAnother example:\nDepartment: Operations\nRole: Terminal Operations Agent\nCountry Access: Ghana, Kenya\nPermissions: View Terminal Requests, Update Shipping Status, Assign Terminal\n4. Admin Portal Departments\nThe Admin Portal should support these departments.\n4.1 Super Admin\nPurpose:\nHighest internal access. Used only by founders, CTO, Head of Operations, or trusted platform\nadministrators.\nCan:\n• Create countries\n• Activate/deactivate countries\n• Create admin staff\n• Assign departments\n• Assign roles\n• Assign country access\n• Configure global platform settings\n• Override country settings\n• View all audit logs\n2"
+    17→      },
+    18→      {
+    19→        "page": 3,
+    20→        "chars": 1026,
+    21→        "text": "• Suspend staff\n• Reset staff MFA\n• Approve high-risk manual actions\n• Access emergency controls\nShould be limited to very few users.\n4.2 Country Admin\nPurpose:\nResponsible for one country or a group of assigned countries.\nCan:\n• View dashboard for assigned country\n• Manage country-specific KYC/KYB rules\n• View customers in assigned country\n• View merchants in assigned country\n• View terminals/devices in assigned country\n• View country settlements\n• View country disputes\n• View country support tickets\n• Invite country staff, if allowed\n• Escalate to Super Admin\n• Generate country reports\nCannot:\n• Access unassigned countries\n• Change global rules\n• Create Super Admins\n• Disable audit logs\n• Modify financial ledger directly\n4.3 Compliance Department\nPurpose:\nHandles KYC, KYB, sanctions, PEP, AML, regulatory review, risk flags, and document verification.\nRoles:\n• KYC Reviewer\n• KYB Reviewer\n• Senior Compliance Analyst\n• Compliance Manager\n• AML Investigator\n• Sanctions/PEP Analyst\n• Regulatory Reporting Officer\n3"
+    22→      },
+    23→      {
+    24→        "page": 4,
+    25→        "chars": 1129,
+    26→        "text": "Can:\n• Review customer identity submissions\n• Review merchant business submissions\n• Approve/reject KYC\n• Approve/reject KYB\n• Request additional documents\n• Run sanctions/PEP review\n• Mark cases for manual review\n• Escalate suspicious cases\n• Freeze account for compliance reason\n• Recommend account closure\n• Export compliance reports\n• View regulatory reporting data\nCannot:\n• Change payment processor settings\n• Change settlement bank account without approval workflow\n• Delete customer records\n• Delete merchant records\n• Approve their own escalated case if dual approval is required\n4.4 Risk and Fraud Department\nPurpose:\nMonitors transaction risk, device risk, merchant abuse, fraud patterns, chargebacks, suspicious activity,\nand compromised accounts.\nRoles:\n• Fraud Analyst\n• Risk Analyst\n• Senior Risk Analyst\n• Fraud Manager\n• Device Risk Analyst\n• Transaction Monitoring Analyst\nCan:\n• View transaction risk alerts\n• View fraud scores\n• View suspicious devices\n• Block device\n• Restrict merchant\n• Restrict customer\n• Flag transaction\n• Hold settlement\n• Escalate to Compliance\n• Review unusual transaction patterns\n4"
+    27→      },
+    28→      {
+    29→        "page": 5,
+    30→        "chars": 1132,
+    31→        "text": "• Add merchant/customer to watchlist\n• Create fraud case\n• View card/NFC failure patterns\nCannot:\n• Approve KYB unless compliance permission is granted\n• Change country compliance rules\n• Change fees\n• Create admin users\n4.5 Merchant Operations Department\nPurpose:\nManages merchant onboarding, merchant support, terminal requests, phone POS setup, branch/staff\nsupport, and merchant account operations.\nRoles:\n• Merchant Support Agent\n• Merchant Onboarding Agent\n• Merchant Operations Analyst\n• Terminal Operations Agent\n• Merchant Operations Manager\nCan:\n• View merchant profile\n• Assist merchant onboarding\n• View KYB status\n• Request missing merchant documents\n• View terminal requests\n• Update terminal delivery status\n• Assign terminal to merchant\n• View phone POS requests\n• Help merchants assign devices\n• Open merchant support tickets\n• View merchant transaction summaries\n• Escalate merchant risk/compliance issues\nCannot:\n• Approve high-risk KYB alone\n• Manually credit merchant balance\n• Change settlement status\n• Override risk holds\n• Access unassigned countries\n4.6 Terminal and Device Operations Department\nPurpose:\n5"
+    32→      },
+    33→      {
+    34→        "page": 6,
+    35→        "chars": 1083,
+    36→        "text": "Handles physical terminals, SoftPOS devices, device activation, logistics, device blocking, replacements,\nand device monitoring.\nRoles:\n• Device Support Agent\n• Terminal Logistics Agent\n• Terminal Activation Agent\n• Device Risk Agent\n• Device Operations Manager\nCan:\n• View device inventory\n• View terminal serial numbers\n• View terminal requests\n• Update delivery/shipping status\n• Activate terminal\n• Block lost terminal\n• Mark terminal damaged\n• Request replacement\n• Approve phone POS device after checks\n• View device health\n• View device audit events\nCannot:\n• See full settlement bank details unless permitted\n• Approve merchant KYB unless assigned\n• Change fees\n• Change country rules\n4.7 Finance and Settlement Department\nPurpose:\nManages merchant settlements, settlement failures, bank account validation, reconciliation, fees,\nreserves, and payout reporting.\nRoles:\n• Settlement Analyst\n• Reconciliation Analyst\n• Finance Analyst\n• Finance Manager\n• Fee Operations Analyst\n• Reserve Analyst\nCan:\n• View settlement batches\n• View merchant bank account verification status\n6"
+    37→      },
+    38→      {
+    39→        "page": 7,
+    40→        "chars": 1215,
+    41→        "text": "• View payout failures\n• Retry settlement where allowed\n• Hold settlement with approval\n• Release settlement hold with approval\n• Download settlement reports\n• Reconcile processor/acquirer reports\n• View fee breakdown\n• View reserve rules\n• Export finance reports\nCannot:\n• Approve KYC/KYB unless compliance permission is granted\n• Change merchant ownership\n• Delete transactions\n• Change transaction amount\n• Manually edit ledger balances without controlled workflow\n4.8 Customer Support Department\nPurpose:\nHandles customer tickets, merchant tickets, disputes, app issues, account help, payment complaints,\nterminal support, and basic operational support.\nRoles:\n• Customer Support Agent\n• Merchant Support Agent\n• Support Supervisor\n• Support Manager\n• Dispute Support Agent\nCan:\n• View support tickets\n• Respond to tickets\n• View limited customer profile\n• View limited merchant profile\n• View transaction status\n• Resend receipt\n• Escalate to Risk, Compliance, Finance, or Device Ops\n• Request document resubmission\n• Add notes to case\nCannot:\n• View full identity documents unless permitted\n• Approve KYC/KYB\n• Change settlement details\n• Refund without permission\n• Block accounts except through escalation\n7"
+    42→      },
+    43→      {
+    44→        "page": 8,
+    45→        "chars": 1005,
+    46→        "text": "4.9 Disputes and Chargebacks Department\nPurpose:\nHandles card disputes, chargebacks, merchant evidence, customer complaints, and acquirer/scheme\ndispute timelines.\nRoles:\n• Dispute Analyst\n• Chargeback Analyst\n• Senior Dispute Analyst\n• Dispute Manager\nCan:\n• View disputed transactions\n• Request merchant evidence\n• Upload evidence to processor/acquirer workflow\n• Track dispute deadlines\n• Mark dispute won/lost\n• Escalate fraud cases\n• Communicate with merchant support\n• View receipts and transaction metadata\nCannot:\n• Change transaction amount\n• Delete dispute record\n• Approve merchant KYB\n• Change merchant settlement account\n4.10 Engineering and Technical Operations\nPurpose:\nUsed by engineering, DevOps, and technical operations to monitor systems without exposing\nunnecessary sensitive data.\nRoles:\n• Developer Read Only\n• Technical Support Engineer\n• DevOps Engineer\n• Security Engineer\n• Engineering Manager\nCan:\n• View system health\n• View logs with masked sensitive data\n• View API errors\n8"
+    47→      },
+    48→      {
+    49→        "page": 9,
+    50→        "chars": 974,
+    51→        "text": "• View device connectivity status\n• View processor/acquirer integration status\n• View deployment status\n• Trigger safe re-sync jobs\n• View non-sensitive transaction metadata\nCannot by default:\n• View full identity documents\n• View raw personal documents\n• View full bank details\n• Approve compliance\n• Change financial records\n• Manually edit balances\nSensitive access must require additional permission and audit.\n4.11 Legal and Regulatory\nPurpose:\nHandles regulator requests, legal holds, law enforcement requests, country reporting, and compliance\ngovernance.\nRoles:\n• Legal Officer\n• Regulatory Officer\n• Data Protection Officer\n• Legal Manager\nCan:\n• View regulatory reports\n• View legal hold cases\n• Export approved legal data\n• Track regulator submissions\n• View customer/merchant compliance history\n• Add legal hold\n• Add regulatory note\nCannot:\n• Modify transactions\n• Approve payments\n• Manually release settlements\n• Create staff unless admin permission granted\n9"
+    52→      },
+    53→      {
+    54→        "page": 10,
+    55→        "chars": 752,
+    56→        "text": "5. Country Management\n5.1 Country Admin Page\nEach country must have its own admin page.\nExample country pages:\n• Nigeria Admin\n• Ghana Admin\n• Kenya Admin\n• South Africa Admin\n• Egypt Admin\n• Morocco Admin\n• Rwanda Admin\n• Uganda Admin\nCountry page URL pattern:\n/admin/countries/{countryCode}\nExample:\n/admin/countries/NG\n/admin/countries/GH\n/admin/countries/KE\n5.2 Country Dashboard\nEach country dashboard shows:\n• Country name\n• Country code\n• Country status\n• Currency\n• Time zone\n• Local regulator\n• Country launch status\n• Active customers\n• Active merchants\n• Pending KYC\n• Pending KYB\n• High-risk alerts\n• Active terminals\n• Active phone POS devices\n• Today’s transaction volume\n• Today’s approved transactions\n• Today’s declined transactions\n10"
+    57→      },
+    58→      {
+    59→        "page": 11,
+    60→        "chars": 1009,
+    61→        "text": "• Pending settlements\n• Held settlements\n• Open disputes\n• Open support tickets\n• Compliance alerts\nCountry statuses:\n• Draft\n• Internal testing\n• Pilot\n• Live\n• Restricted\n• Suspended\n• Closed\n5.3 Country Configuration\nCountry Admin can configure:\n• Currency\n• Supported payment methods\n• Settlement currency\n• KYC requirements\n• KYB requirements\n• Accepted identity documents\n• Required identity numbers\n• Proof of address rules\n• Liveness requirements\n• Merchant onboarding rules\n• Terminal availability\n• Phone POS availability\n• Transaction limits\n• Settlement schedule\n• Risk thresholds\n• High-risk industries\n• Support operating hours\n• Local tax/VAT settings\n• Regulatory reporting schedule\n5.4 Country KYC Rules\nFor each country, admin should configure:\n• Required customer identity number\n• Accepted government ID documents\n• Liveness required or not\n• Proof of address required or risk-based\n• Minimum age\n• Sanctions/PEP required\n• Local database verification provider\n• Manual review threshold\n11"
+    62→      },
+    63→      {
+    64→        "page": 12,
+    65→        "chars": 923,
+    66→        "text": "• KYC tier levels\n• Documents for citizens\n• Documents for foreign residents\n• Documents for diaspora users\nExample Nigeria:\n{\n\"country\": \"NG\",\n\"requiredIdentityNumbers\": [\"BVN\", \"NIN\"],\n\"acceptedDocuments\": [\n\"national_id\",\n\"passport\",\n\"drivers_license\",\n\"voters_card\",\n\"residence_permit\"\n],\n\"livenessRequired\": true,\n\"proofOfAddress\": \"risk_based\",\n\"sanctionsPepRequired\": true\n}\nExample Ghana:\n{\n\"country\": \"GH\",\n\"requiredIdentityNumbers\": [\"ghana_card_pin\"],\n\"acceptedDocuments\": [\n\"ghana_card\",\n\"passport\",\n\"drivers_license\",\n\"residence_permit\"\n],\n\"livenessRequired\": true,\n\"proofOfAddress\": \"risk_based\",\n\"sanctionsPepRequired\": true\n}\n5.5 Country KYB Rules\nFor each country, admin should configure:\n• Business types allowed\n• Required business registration documents\n• Required tax documents\n• Required owner/director documents\n• Beneficial owner requirements\n• Business address proof\n• Local licence requirements\n12"
+    67→      },
+    68→      {
+    69→        "page": 13,
+    70→        "chars": 983,
+    71→        "text": "• High-risk merchant categories\n• Merchant transaction limits\n• Settlement bank validation rules\n• Phone POS eligibility\n• Physical terminal eligibility\n5.6 Country Device Rules\nFor each country:\n• Physical terminal enabled: yes/no\n• Phone POS enabled: yes/no\n• Faya closed-loop NFC enabled: yes/no\n• Allowed terminal models\n• Allowed phone POS providers\n• Minimum Android version\n• NFC required\n• Device integrity required\n• Location requirement\n• Staff PIN required\n• Max transaction amount by device type\n• Max daily device volume\n• Terminal replacement policy\n• Device inactivity policy\n5.7 Country Settlement Rules\nFor each country:\n• Settlement cycle\n• Settlement bank country\n• Supported settlement currency\n• Settlement cutoff time\n• Minimum settlement amount\n• Rolling reserve rules\n• Risk hold rules\n• Manual review threshold\n• Failed settlement retry rules\n• Bank account name-match rules\nSettlement cycle examples:\n• T+1\n• T+2\n• Weekly\n• Manual settlement during pilot\n13"
+    72→      },
+    73→      {
+    74→        "page": 14,
+    75→        "chars": 557,
+    76→        "text": "6. Staff Admin Page\n6.1 Staff List\nThe Staff Admin page shows:\n• Staff name\n• Email\n• Phone\n• Department\n• Role\n• Countries assigned\n• Status\n• MFA status\n• Last login\n• Created by\n• Created date\nFilters:\n• Department\n• Role\n• Country\n• Status\n• MFA enabled\n• Last login date\n• Created date\nStaff statuses:\n• Invited\n• Active\n• Suspended\n• Locked\n• Removed\n6.2 Create Staff\nFields:\n• First name\n• Last name\n• Work email\n• Phone number\n• Department\n• Role\n• Countries assigned\n• Permission group\n• Manager\n• Require MFA\n• Temporary password or invite link\n14"
+    77→      },
+    78→      {
+    79→        "page": 15,
+    80→        "chars": 768,
+    81→        "text": "• Start date\n• Notes\nRules:\n• Staff email must be unique.\n• MFA required for all admin users.\n• Super Admin approval required for high-risk roles.\n• Staff must have at least one country unless global role.\n• Staff must have department and role.\n• Staff cannot assign permissions higher than their own.\n6.3 Staff Profile\nShows:\n• Staff ID\n• Name\n• Email\n• Phone\n• Department\n• Role\n• Country access\n• Permission list\n• MFA status\n• Status\n• Last login\n• Failed login count\n• Active sessions\n• Audit history\n• Manager\n• Notes\nActions:\n• Edit role\n• Edit country access\n• Reset password\n• Reset MFA\n• Suspend staff\n• Unlock staff\n• Remove staff\n• Force logout\n• View audit logs\n7. Staff Login System\n7.1 Login Methods\nAdmin staff login must support:\n• Email + password\n15"
+    82→      },
+    83→      {
+    84→        "page": 16,
+    85→        "chars": 855,
+    86→        "text": "• MFA code\n• Backup recovery code\n• SSO later, optional\n• Device/session trust, optional\nLogin flow:\n1. Staff enters email and password.\n2. Backend checks staff status.\n3. Backend checks department/role.\n4. Backend requires MFA.\n5. Backend creates session.\n6. Backend loads country access.\n7. Backend loads permissions.\n8. Admin lands on allowed dashboard.\n7.2 MFA Rules\nMFA is mandatory for:\n• Super Admin\n• Country Admin\n• Compliance\n• Finance\n• Risk/Fraud\n• Device Operations\n• Legal\n• Engineering with production access\nMFA methods:\n• Authenticator app\n• SMS fallback, optional\n• Email fallback, optional\n• Recovery codes\n7.3 Login Restrictions\nBlock login when:\n• Staff is suspended\n• Staff is removed\n• Staff account is locked\n• MFA not completed\n• Password expired\n• Role removed\n• No country access assigned\n• IP/device policy fails, if enabled\n16"
+    87→      },
+    88→      {
+    89→        "page": 17,
+    90→        "chars": 891,
+    91→        "text": "7.4 Session Rules\nSessions must:\n• Expire after inactivity\n• Require re-auth for sensitive actions\n• Support forced logout\n• Support single-session policy for high-risk roles, optional\n• Record IP address\n• Record device/browser fingerprint\n• Record login country/location where available\nSensitive actions requiring re-auth:\n• Approve KYB\n• Reject KYB\n• Release settlement hold\n• Block account\n• Create staff\n• Change staff role\n• Reset MFA\n• Export sensitive data\n• Change country rules\n• Approve terminal activation\n• Change risk limits\n8. Permission Model\n8.1 Permission Format\nPermissions should use this format:\nresource.action.scope\nExamples:\nkyc.view.country\nkyc.approve.country\nkyb.review.country\nmerchant.view.country\nmerchant.restrict.country\nsettlement.view.country\nsettlement.hold.country\nstaff.create.country\nstaff.manage.global\ncountry.configure.global\ndevice.block.country\n17"
+    92→      },
+    93→      {
+    94→        "page": 18,
+    95→        "chars": 652,
+    96→        "text": "terminal.assign.country\nsupport.respond.country\n8.2 Permission Scopes\nScopes:\n• Own\n• Branch\n• Country\n• Region\n• Global\nExamples:\nA support agent may have:\nsupport.view.country\nsupport.respond.country\ncustomer.view_limited.country\nmerchant.view_limited.country\nA compliance manager may have:\nkyc.view.country\nkyc.approve.country\nkyc.reject.country\nkyb.view.country\nkyb.approve.country\nkyb.reject.country\nsanctions.review.country\naccount.restrict.country\nA finance analyst may have:\nsettlement.view.country\nsettlement.export.country\nreconciliation.view.country\nfees.view.country\n9. Role-Based Access Matrix\n9.1 Super Admin\nCountries:\n• All countries\n18"
+    97→      },
+    98→      {
+    99→        "page": 19,
+   100→        "chars": 798,
+   101→        "text": "Permissions:\n• Full global access\n• Staff management\n• Country management\n• Emergency controls\n• Audit logs\n• System configuration\nRestrictions:\n• Dual approval required for destructive financial actions.\n9.2 Country Admin\nCountries:\n• Assigned countries only\nPermissions:\n• View country dashboard\n• Manage country staff, if allowed\n• View country merchants\n• View country customers\n• View country operations\n• View reports\n• Escalate issues\nRestrictions:\n• Cannot create Super Admin\n• Cannot access unassigned countries\n• Cannot modify global settings\n9.3 KYC Reviewer\nCountries:\n• Assigned countries only\nPermissions:\n• View customer KYC\n• Review documents\n• Request resubmission\n• Approve low-risk KYC\n• Reject invalid KYC\n• Add review notes\nRestrictions:\n• Cannot approve high-risk KYC alone\n19"
+   102→      },
+   103→      {
+   104→        "page": 20,
+   105→        "chars": 870,
+   106→        "text": "• Cannot change country rules\n• Cannot view merchant settlement details unless assigned\n9.4 KYB Reviewer\nCountries:\n• Assigned countries only\nPermissions:\n• View merchant KYB\n• Review business documents\n• Review owner/director documents\n• Request additional documents\n• Approve low-risk KYB\n• Reject invalid KYB\n• Add review notes\nRestrictions:\n• High-risk merchant approval requires senior compliance.\n• Cannot release settlement holds.\n9.5 AML Investigator\nCountries:\n• Assigned countries only or regional\nPermissions:\n• View suspicious activity\n• View transaction monitoring alerts\n• View customer/merchant risk profile\n• Freeze account for AML reason\n• Escalate SAR/STR case\n• Add investigation notes\n• Export investigation report\nRestrictions:\n• Cannot delete records\n• Cannot manually edit transaction data\n9.6 Fraud Analyst\nCountries:\n• Assigned countries only\n20"
+   107→      },
+   108→      {
+   109→        "page": 21,
+   110→        "chars": 842,
+   111→        "text": "Permissions:\n• View fraud alerts\n• View device risk\n• View transaction risk\n• Restrict device\n• Restrict account\n• Hold suspicious transaction\n• Escalate to compliance\nRestrictions:\n• Cannot approve KYC/KYB unless granted\n• Cannot change settlement account\n9.7 Settlement Analyst\nCountries:\n• Assigned countries only\nPermissions:\n• View settlements\n• View settlement failures\n• Retry payout, if allowed\n• Export settlement report\n• Add settlement note\n• Escalate failed payout\nRestrictions:\n• Settlement hold/release requires approval.\n• Cannot edit transaction amount.\n• Cannot approve KYB.\n9.8 Device Operations Agent\nCountries:\n• Assigned countries only\nPermissions:\n• View physical terminals\n• View phone POS devices\n• Update terminal request status\n• Assign terminal\n• Block lost device\n• View device health\n• View activation requests\n21"
+   112→      },
+   113→      {
+   114→        "page": 22,
+   115→        "chars": 778,
+   116→        "text": "Restrictions:\n• Cannot approve merchant KYB\n• Cannot view full settlement account\n• Cannot change merchant limits\n9.9 Support Agent\nCountries:\n• Assigned countries only\nPermissions:\n• View support tickets\n• Respond to tickets\n• View limited customer profile\n• View limited merchant profile\n• View transaction status\n• Resend receipt\n• Escalate case\nRestrictions:\n• Cannot approve KYC/KYB\n• Cannot view full documents by default\n• Cannot block account without escalation\n9.10 Dispute Analyst\nCountries:\n• Assigned countries only\nPermissions:\n• View disputes\n• Request merchant evidence\n• Upload dispute evidence\n• Update dispute status\n• View receipt\n• View transaction metadata\nRestrictions:\n• Cannot change transaction amount\n• Cannot release settlement\n• Cannot approve KYB\n22"
+   117→      },
+   118→      {
+   119→        "page": 23,
+   120→        "chars": 833,
+   121→        "text": "9.11 Engineering Read-Only\nCountries:\n• Depends on assignment\nPermissions:\n• View system health\n• View masked logs\n• View non-sensitive errors\n• View integration status\n• Trigger safe sync jobs\nRestrictions:\n• No PII documents by default\n• No financial action\n• No compliance approval\n• No staff creation\n10. Country-Based Data Access\nEvery sensitive record must include country code.\nExamples:\n• Customer countryOfResidence\n• Merchant countryOfOperation\n• Transaction country\n• Settlement country\n• Device country\n• Support ticket country\n• KYC country\n• KYB country\nWhen staff opens a page, backend must check:\nDoes staff have this country?\nDoes staff have this department permission?\nDoes staff role allow this action?\nDoes the action require approval?\nA frontend-only check is not enough. Backend must enforce all permissions.\n23"
+   122→      },
+   123→      {
+   124→        "page": 24,
+   125→        "chars": 619,
+   126→        "text": "11. Admin Pages by Department\n11.1 Compliance Admin Pages\nPages:\n• KYC Queue\n• KYB Queue\n• Sanctions/PEP Queue\n• Manual Review\n• Rejected Cases\n• Approved Cases\n• Document Requests\n• Regulatory Reports\n• AML Cases\nKYC Queue fields:\n• Customer name\n• Country\n• Nationality\n• Risk score\n• Submitted date\n• Required documents\n• Status\n• Assigned reviewer\n• SLA timer\nKYB Queue fields:\n• Merchant name\n• Country\n• Business type\n• Risk category\n• Submitted date\n• Missing documents\n• Status\n• Assigned reviewer\n• SLA timer\nActions:\n• Open case\n• Approve\n• Reject\n• Request document\n• Escalate\n• Assign reviewer\n• Add note\n24"
+   127→      },
+   128→      {
+   129→        "page": 25,
+   130→        "chars": 684,
+   131→        "text": "11.2 Risk/Fraud Admin Pages\nPages:\n• Fraud Alerts\n• Device Risk\n• Transaction Monitoring\n• Suspicious Merchants\n• Suspicious Customers\n• Velocity Rules\n• Watchlists\n• Risk Cases\nFraud alert fields:\n• Alert ID\n• Country\n• Entity type\n• Entity name\n• Trigger\n• Severity\n• Transaction amount\n• Device\n• Created date\n• Status\nActions:\n• Restrict account\n• Block device\n• Hold settlement\n• Escalate to compliance\n• Close false positive\n• Add watchlist entry\n11.3 Merchant Operations Pages\nPages:\n• Merchant List\n• Merchant Onboarding\n• Terminal Requests\n• Phone POS Requests\n• Branches\n• Merchant Staff\n• Merchant Support\n• Merchant Activity\nActions:\n• View merchant\n• Request documents\n25"
+   132→      },
+   133→      {
+   134→        "page": 26,
+   135→        "chars": 715,
+   136→        "text": "• Update terminal request\n• Assign device\n• Escalate KYB\n• Contact merchant\n• Create support case\n11.4 Device Operations Pages\nPages:\n• Terminal Inventory\n• Terminal Requests\n• Terminal Activation\n• Phone POS Devices\n• Device Health\n• Lost/Damaged Devices\n• Device Events\nActions:\n• Assign terminal\n• Mark shipped\n• Mark delivered\n• Activate terminal\n• Block terminal\n• Replace terminal\n• Approve phone POS device\n• Reject phone POS device\n11.5 Finance Pages\nPages:\n• Settlement Batches\n• Failed Settlements\n• Reconciliation\n• Merchant Fees\n• Reserves\n• Payout Accounts\n• Finance Reports\nActions:\n• View settlement\n• Export report\n• Retry failed settlement\n• Recommend hold\n• Recommend release\n• Add finance note\n26"
+   137→      },
+   138→      {
+   139→        "page": 27,
+   140→        "chars": 619,
+   141→        "text": "11.6 Support Pages\nPages:\n• Customer Tickets\n• Merchant Tickets\n• Terminal Tickets\n• Payment Tickets\n• Escalations\n• SLA Dashboard\nActions:\n• Reply\n• Assign\n• Escalate\n• Close ticket\n• Add internal note\n• Link transaction\n• Link merchant\n• Link device\n11.7 Dispute Pages\nPages:\n• New Disputes\n• Awaiting Merchant Evidence\n• Evidence Submitted\n• Under Review\n• Won/Lost\n• Expired\nActions:\n• Request evidence\n• Upload evidence\n• Update status\n• Add note\n• Escalate fraud\n12. Approval Workflows\nSome actions must require one or two approvals.\n12.1 Single Approval\nExamples:\n• Approve low-risk KYC\n• Approve low-risk KYB\n27"
+   142→      },
+   143→      {
+   144→        "page": 28,
+   145→        "chars": 770,
+   146→        "text": "• Approve phone POS device\n• Block lost terminal\n• Update terminal delivery status\n12.2 Dual Approval\nExamples:\n• Release settlement hold\n• Approve high-risk merchant\n• Approve PEP customer\n• Create country admin\n• Change country KYC rules\n• Change country transaction limits\n• Manually adjust merchant fees\n• Unblock fraud-restricted account\n• Export large sensitive dataset\n12.3 Approval Record\nEach approval must store:\n• Request ID\n• Requested by\n• Approved by\n• Approval level\n• Reason\n• Timestamp\n• Country\n• Entity affected\n• Before value\n• After value\n• IP address\n• Device/browser\n13. Admin Audit Logs\nEvery admin action must be logged.\nAudit log fields:\n• id\n• staffId\n• staffName\n• department\n• role\n• country\n• action\n• entityType\n• entityId\n• beforeValue\n28"
+   147→      },
+   148→      {
+   149→        "page": 29,
+   150→        "chars": 848,
+   151→        "text": "• afterValue\n• reason\n• ipAddress\n• deviceFingerprint\n• createdAt\nAudit log must be immutable.\nLogged actions:\n• Login\n• Failed login\n• MFA success/failure\n• View sensitive document\n• Approve KYC\n• Reject KYC\n• Approve KYB\n• Reject KYB\n• Block account\n• Unblock account\n• Hold settlement\n• Release settlement\n• Create staff\n• Change staff role\n• Change country rule\n• Export report\n• View full document\n• Download document\n• Reset MFA\n• Force logout\n14. Admin Security Requirements\nAdmin Portal must enforce:\n• MFA for all staff\n• Strong passwords\n• Role-based access control\n• Country-based access control\n• Department-based access control\n• Session timeout\n• Sensitive action re-auth\n• IP/device logging\n• Export limits\n• Immutable audit logs\n• Staff status checks\n• Backend permission enforcement\n• Least privilege access\n• No shared accounts\n29"
+   152→      },
+   153→      {
+   154→        "page": 30,
+   155→        "chars": 613,
+   156→        "text": "Admin Portal must block:\n• Suspended staff\n• Removed staff\n• Staff with no country access\n• Staff with no department\n• Staff with expired password\n• Staff without MFA\n• Login from blocked IP/device where enabled\n15. Admin Database Tables\nadmin_staff\n• id\n• firstName\n• lastName\n• email\n• phone\n• departmentId\n• roleId\n• managerId\n• status\n• mfaEnabled\n• passwordHash\n• lastLoginAt\n• failedLoginCount\n• createdBy\n• createdAt\n• updatedAt\nadmin_departments\n• id\n• name\n• description\n• status\n• createdAt\n• updatedAt\nadmin_roles\n• id\n• departmentId\n• name\n• description\n• riskLevel\n• status\n• createdAt\n• updatedAt\n30"
+   157→      },
+   158→      {
+   159→        "page": 31,
+   160→        "chars": 503,
+   161→        "text": "admin_permissions\n• id\n• key\n• resource\n• action\n• scope\n• description\n• status\nadmin_role_permissions\n• id\n• roleId\n• permissionId\nadmin_staff_countries\n• id\n• staffId\n• countryCode\n• accessLevel\n• createdBy\n• createdAt\nadmin_staff_permissions\n• id\n• staffId\n• permissionId\n• reason\n• expiresAt\n• createdBy\n• createdAt\nadmin_sessions\n• id\n• staffId\n• tokenHash\n• ipAddress\n• deviceFingerprint\n• userAgent\n• status\n• createdAt\n• expiresAt\n• lastActivityAt\nadmin_audit_logs\n• id\n• staffId\n• department\n31"
+   162→      },
+   163→      {
+   164→        "page": 32,
+   165→        "chars": 567,
+   166→        "text": "• role\n• countryCode\n• action\n• entityType\n• entityId\n• beforeValue\n• afterValue\n• reason\n• ipAddress\n• deviceFingerprint\n• createdAt\ncountry_configs\n• id\n• countryCode\n• countryName\n• currency\n• status\n• kycRules\n• kybRules\n• deviceRules\n• settlementRules\n• riskRules\n• createdAt\n• updatedAt\nadmin_approval_requests\n• id\n• requestedBy\n• countryCode\n• action\n• entityType\n• entityId\n• payload\n• status\n• requiredApprovals\n• currentApprovals\n• reason\n• createdAt\n• updatedAt\nadmin_approval_actions\n• id\n• approvalRequestId\n• approvedBy\n• decision\n• note\n• createdAt\n32"
+   167→      },
+   168→      {
+   169→        "page": 33,
+   170→        "chars": 1340,
+   171→        "text": "16. Admin API Endpoints\nAuth\n• POST /admin/auth/login\n• POST /admin/auth/mfa/verify\n• POST /admin/auth/logout\n• POST /admin/auth/refresh\n• POST /admin/auth/password/reset\n• POST /admin/auth/re-authenticate\nStaff\n• GET /admin/staff\n• POST /admin/staff\n• GET /admin/staff/{staffId}\n• PATCH /admin/staff/{staffId}\n• POST /admin/staff/{staffId}/suspend\n• POST /admin/staff/{staffId}/unlock\n• POST /admin/staff/{staffId}/reset-mfa\n• POST /admin/staff/{staffId}/force-logout\n• PATCH /admin/staff/{staffId}/countries\n• PATCH /admin/staff/{staffId}/permissions\nDepartments and roles\n• GET /admin/departments\n• POST /admin/departments\n• GET /admin/roles\n• POST /admin/roles\n• PATCH /admin/roles/{roleId}\n• GET /admin/permissions\n• PATCH /admin/roles/{roleId}/permissions\nCountries\n• GET /admin/countries\n• POST /admin/countries\n• GET /admin/countries/{countryCode}\n• PATCH /admin/countries/{countryCode}\n• GET /admin/countries/{countryCode}/dashboard\n• PATCH /admin/countries/{countryCode}/kyc-rules\n• PATCH /admin/countries/{countryCode}/kyb-rules\n• PATCH /admin/countries/{countryCode}/device-rules\n• PATCH /admin/countries/{countryCode}/settlement-rules\n• PATCH /admin/countries/{countryCode}/risk-rules\nCompliance\n• GET /admin/compliance/kyc-cases\n• GET /admin/compliance/kyc-cases/{caseId}\n• POST /admin/compliance/kyc-cases/{caseId}/approve\n33"
+   172→      },
+   173→      {
+   174→        "page": 34,
+   175→        "chars": 1455,
+   176→        "text": "• POST /admin/compliance/kyc-cases/{caseId}/reject\n• POST /admin/compliance/kyc-cases/{caseId}/request-documents\n• POST /admin/compliance/kyc-cases/{caseId}/escalate\n• GET /admin/compliance/kyb-cases\n• GET /admin/compliance/kyb-cases/{caseId}\n• POST /admin/compliance/kyb-cases/{caseId}/approve\n• POST /admin/compliance/kyb-cases/{caseId}/reject\n• POST /admin/compliance/kyb-cases/{caseId}/request-documents\n• POST /admin/compliance/kyb-cases/{caseId}/escalate\nRisk\n• GET /admin/risk/alerts\n• GET /admin/risk/cases\n• POST /admin/risk/cases/{caseId}/restrict\n• POST /admin/risk/cases/{caseId}/close\n• POST /admin/risk/entities/{entityId}/watchlist\nDevices\n• GET /admin/devices/terminals\n• GET /admin/devices/phone-pos\n• POST /admin/devices/{deviceId}/block\n• POST /admin/devices/{deviceId}/unblock\n• POST /admin/devices/{deviceId}/approve\n• POST /admin/devices/{deviceId}/reject\nFinance\n• GET /admin/finance/settlements\n• GET /admin/finance/settlements/{settlementId}\n• POST /admin/finance/settlements/{settlementId}/hold\n• POST /admin/finance/settlements/{settlementId}/release-request\n• GET /admin/finance/reconciliation\nSupport\n• GET /admin/support/tickets\n• GET /admin/support/tickets/{ticketId}\n• POST /admin/support/tickets/{ticketId}/reply\n• POST /admin/support/tickets/{ticketId}/assign\n• POST /admin/support/tickets/{ticketId}/escalate\n• POST /admin/support/tickets/{ticketId}/close\nAudit\n• GET /admin/audit-logs\n• GET /admin/audit-logs/{logId}\n34"
+   177→      },
+   178→      {
+   179→        "page": 35,
+   180→        "chars": 745,
+   181→        "text": "Approvals\n• GET /admin/approval-requests\n• POST /admin/approval-requests\n• POST /admin/approval-requests/{requestId}/approve\n• POST /admin/approval-requests/{requestId}/reject\n17. Admin MVP Build Order\nPhase 1: Core Staff and Country Access\nBuild:\n• Admin login\n• MFA\n• Staff list\n• Create staff\n• Departments\n• Roles\n• Permissions\n• Country access\n• Audit logs\nPhase 2: Country Admin\nBuild:\n• Country list\n• Country dashboard\n• Country KYC rules\n• Country KYB rules\n• Country device rules\n• Country settlement rules\n• Country risk rules\nPhase 3: Operations\nBuild:\n• KYC queue\n• KYB queue\n• Merchant list\n• Customer list\n• Terminal requests\n• Phone POS requests\n• Support tickets\nPhase 4: Finance, Risk, Disputes\nBuild:\n• Settlement dashboard\n35"
+   182→      },
+   183→      {
+   184→        "page": 36,
+   185→        "chars": 237,
+   186→        "text": "• Reconciliation\n• Risk alerts\n• Fraud cases\n• Disputes\n• Approval workflows\nPhase 5: Advanced Controls\nBuild:\n• Dual approvals\n• Export controls\n• Regulatory reports\n• Advanced audit search\n• SLA dashboards\n• Regional admin hierarchy\n36"
+   187→      }
+   188→    ]
+   189→  }
+   190→}
