@@ -367,3 +367,110 @@ Stage Summary:
   * AlertDialog confirm button uses red for destructive (restrict / suspend / block_device) and emerald for positive / neutral (reactivate / hold_settlement / close_false_positive).
 - Both views preserve all existing functionality (tabs, filters, SLA badges, reviewer cells, audit logging, sonner toasts, Sanctions/PEP workflow, manual-review/approved/rejected buckets, future-feature roadmap tabs). No indigo/blue primary colors — emerald accent style throughout. Consumer/Merchant apps are NOT mentioned as nav items or standalone list pages; the admin manages their data through Compliance (KYC/KYB) and Risk (restrict/suspend/reactivate) views only, and the apps read from the same Firestore collections via `adminData.updateConsumer` / `updateMerchant` patches.
 - Lint clean (0 errors / 0 warnings). TS clean for both target files. Dev server returns 200 OK after edits.
+
+---
+Task ID: V1
+Agent: subagent-users-merchants-pos
+Task: Build Users + Merchants views with tabbed profiles + POS device approval workflow
+
+Work Log:
+- Read worklog.md, types.ts (Consumer / Merchant / Card / Wallet / Transaction / UserDocument / PosStaff / Terminal / Settlement / Dispute / PosDeviceRequest / CountryConfig), admin-data.ts (subscribeCards / subscribeWallets / subscribeTransactions / subscribeDocuments / subscribePosStaff / subscribeTerminals / subscribeSettlements / subscribeDisputes / subscribePosDeviceRequests / updateCard / updateWallet / updateDocument / updatePosStaff / updateTerminal / updatePosDeviceRequest / updateConsumer / updateMerchant / logAudit), access-scope.ts (getVisibleConsumers / getVisibleMerchants / getScopeLabel), formatters.ts (formatCurrency / formatNumber / formatDateTime / timeAgo / statusBadge), view-helpers.tsx (ViewHeader / StatCard / EmptyState / ViewContainer), use-auth.ts, portal-app.tsx, and existing tabbed-sheet patterns in compliance-view.tsx / disputes-view.tsx to align with project conventions
+- Created `src/components/portal/views/users-view.tsx` (~1500 lines):
+  * ViewHeader with Users icon, title "Users (Consumers)", scope badge from `getScopeLabel(staff)`
+  * 4 stat cards: Total Consumers (default), Active (success), Pending KYC (warning), Restricted/Suspended (danger) — all driven from `getVisibleConsumers(staff, countries, consumers)`
+  * Filters: search (name/email/phone/consumerCode), country, KYC status, account status — all in a Card with grid layout and a "Clear filters" button
+  * Consumers table (ScrollTable max-h-60, sticky header): Consumer Code, Name (+tier+risk badges), Email, Phone, Country, KYC status, Account status, Wallet Balance, Last Login, Actions (dropdown: View profile, Restrict, Suspend, Reactivate — contextually hidden when not applicable)
+  * Row actions open AlertDialog confirmation (orange for restrict, red for suspend, emerald for reactivate) → `adminData.updateConsumer` with new status + `logAudit("consumer.{action}")` + sonner toast
+  * ConsumerDetailSheet (sm:max-w-3xl) with 5 TABS inside the Sheet:
+    - Profile: personal details, KYC, contact & country, platforms, wallet summary mini-stats, transaction stats mini-stats, notes, emerald "Live sync" banner
+    - Cards: subscribes to `adminData.subscribeCards`, filters `card.userId === consumer.id`. Table with Card ID, Type, Scheme, Last 4, Status, Currency, Frozen, Actions (Freeze/Unfreeze via `updateCard` + logAudit `card.freeze`/`card.unfreeze`). Emerald "Admin never sees full PAN, CVV, or PIN" security note
+    - Wallets: subscribes to `adminData.subscribeWallets`, filters `wallet.userId === consumer.id`. Table with Wallet ID, Currency, Balance, Available, Held, Status, Actions (Freeze/Unfreeze via `updateWallet` + logAudit `wallet.freeze`/`wallet.unfreeze`). Amber "Manual balance adjustment requires dual approval" note
+    - Transactions: subscribes to `adminData.subscribeTransactions`, filters `transaction.userId === consumer.id`. Table with Reference, Amount, Type, Status, Method, Card Last4, Risk, Created, Actions (View receipt toast + Open dispute toast + logAudit `dispute.open`)
+    - Documents: subscribes to `adminData.subscribeDocuments`, filters `document.entityId === consumer.id`. Table with Type, File Name, Status, Uploaded, Reviewer, Actions (Approve/Reject via `updateDocument` + logAudit `document.approve`/`document.reject`)
+  * Each tab trigger shows a count badge (CountBadge component: emerald if n>0, muted if 0)
+  * All subscriptions are wired in `useEffect` keyed by `consumer.id` — they auto-cleanup on sheet close
+- Created `src/components/portal/views/merchants-view.tsx` (~1700 lines):
+  * ViewHeader with Building2 icon, title "Merchants", scope badge
+  * 4 stat cards: Total Merchants, Active, Onboarding, Restricted/Suspended
+  * Filters: search, country, KYB status, account status, risk category (5-column grid)
+  * Merchants table: Merchant Code, Trading Name (+legal name), Country, Business Type, KYB, Risk, Status, Terminal Count, Monthly Volume, Actions (dropdown: View profile, Approve KYB, Reject KYB, Restrict, Suspend, Reactivate — contextually hidden)
+  * Row actions → AlertDialog → `adminData.updateMerchant` + `logAudit("merchant.{action}")` + toast. approve_kyb sets kybStatus="approved" + status="active"; reject_kyb sets kybStatus="rejected" + status="restricted"
+  * MerchantDetailSheet (sm:max-w-3xl) with 6 TABS inside the Sheet:
+    - Profile: business profile, owner details, KYB, platforms, terminal stats, transaction stats, settlement info, notes, "Live sync" banner
+    - POS Staff: subscribes to `adminData.subscribePosStaff`, filters `posStaff.merchantId === merchant.id`. Table with Code, Name, Role, Branch, Device, Status, Actions (Suspend/Reactivate via `updatePosStaff`, Reset PIN toast + logAudit `pos_staff.reset_pin`, Force logout toast + logAudit `pos_staff.force_logout`)
+    - Terminals: subscribes to `adminData.subscribeTerminals`, filters `terminal.merchantName === merchant.tradingName || merchant.legalName`. Table with Serial, Type, Model, Status, Activated, Last seen, Actions (Activate/Block via `updateTerminal` + logAudit `terminal.activate`/`terminal.block`)
+    - Settlements: subscribes to `adminData.subscribeSettlements`, filters `settlement.merchantName === merchant.legalName || merchant.tradingName`. Table with Batch ID, Amount, Currency, Scheduled, Status (with failure reason), Actions (Retry if failed → logAudit `settlement.retry`, View details toast)
+    - Disputes: subscribes to `adminData.subscribeDisputes`, filters `dispute.merchantName === merchant.legalName || merchant.tradingName`. Table with Dispute ID, Customer, Amount, Reason, Status, Actions (Request evidence → logAudit `dispute.request_evidence`, Mark under review/won/lost → logAudit `dispute.update_status`)
+    - POS Requests: subscribes to `adminData.subscribePosDeviceRequests`, filters `posDeviceRequest.merchantId === merchant.id`. KEY FEATURE — see below.
+  * POS Device Request card (PosRequestCard component):
+    - Header: request code, type (physical_terminal/phone_pos), status badge, device model + OS + app version + battery
+    - DEVICE CAPABILITY CHECK: 3 CapabilityBadge components (NFC, Card Reader, Swipe) — emerald background + check icon if supported, red background + X icon if not
+    - canBeApproved indicator: emerald "Can approve — payment method available" OR red "Cannot approve — no payment method"
+    - APPROVAL RULE: Approve button DISABLED when `canBeApproved === false`. Tooltip on hover: "Cannot approve — device doesn't support any payment method (NFC, card reader, or swipe)"
+    - AUTO-DECLINE: When `canBeApproved === false` and status is "pending", an "Auto-decline" button (red outline) sets status to "auto_declined" with `declineReason: "Device does not support NFC, card reader, or swipe."` + logAudit `pos_device.auto_decline`
+    - APPROVE: sets status to "approved", reviewedBy, reviewedAt + logAudit `pos_device.approve`
+    - DECLINE: opens a Dialog with optional reason textarea → sets status to "declined" + declineReason + logAudit `pos_device.decline`
+    - Device integrity warning: amber banner if `deviceIntegrityPassed === false` ("WARNING: Device integrity check failed — device may be rooted")
+    - Screen lock warning: amber banner if `screenLockEnabled === false`
+    - Reviewed-by footer for closed requests (mono reviewer id + formatted timestamp)
+  * All subscriptions wired in `useEffect` keyed by `merchant.id` + `tradingName` + `legalName`
+- Resolved a TS2300 naming collision: the shadcn/ui `Card` component and the `Card` type from `types.ts` (likewise `Wallet`) share identifiers. Aliased the type imports as `CardRecord` / `WalletRecord` in users-view.tsx — the UI primitive keeps the short `Card` / `Wallet` name where it's used as a JSX element
+- Styling: emerald accent throughout, NO indigo/blue primary. Tables wrapped in ScrollTable with `max-h-60 overflow-y-auto` and custom webkit-scrollbar styling. Sheets are `sm:max-w-3xl` to comfortably fit the tab list + tables side-by-side
+- Lint: `cd /home/z/my-project && bun run lint 2>&1 | tail -30` → 0 errors, 0 warnings (eslint clean)
+- TypeScript: `npx tsc --noEmit 2>&1 | grep -E "(users-view|merchants-view)"` → NO ERRORS in target files (remaining tsc errors are in unrelated examples/, skills/, countries-view.tsx, staff-view.tsx, seed-data.ts — pre-existing)
+- Dev server: `tail -20 dev.log` shows GET / 200 in 26-52ms with no compile errors after the new files were added
+
+Stage Summary:
+- Users view (`users-view.tsx`) — main list with 4 stat cards + 4 filters + consumers table (10 columns) + row actions (View / Restrict / Suspend / Reactivate). Detail Sheet (sm:max-w-3xl) opens with 5 TABS: Profile, Cards, Wallets, Transactions, Documents — each tab subscribes to its own adminData collection, filters by the consumer's id, renders a ScrollTable with row-level actions (Freeze/Unfreeze cards, Freeze/Unfreeze wallets, View receipt / Open dispute, Approve/Reject documents), and shows a count badge in the trigger. Security note surfaced on Cards tab; dual-approval note on Wallets tab. All mutations call `adminData.updateCard` / `updateWallet` / `updateConsumer` / `updateDocument` + `logAudit` + sonner toast.
+- Merchants view (`merchants-view.tsx`) — main list with 4 stat cards + 5 filters + merchants table (10 columns) + row actions (View / Approve KYB / Reject KYB / Restrict / Suspend / Reactivate). Detail Sheet (sm:max-w-3xl) opens with 6 TABS: Profile, POS Staff, Terminals, Settlements, Disputes, POS Requests — each subscribes to its own adminData collection, filters by merchant id (POS Staff / POS Requests) or merchant trading/legal name (Terminals / Settlements / Disputes), renders a ScrollTable with row-level actions, and shows a count badge in the trigger.
+- POS Device Request workflow (`PosRequestCard`) implements the spec's approval rule end-to-end:
+  * Capability badges for NFC / Card Reader / Swipe — green if supported, red if not
+  * canBeApproved indicator (green check / red X)
+  * Approve button DISABLED when canBeApproved === false (with explanatory tooltip)
+  * Auto-decline button (sets status="auto_declined" with reason "Device does not support NFC, card reader, or swipe.")
+  * Approve button (sets status="approved", reviewedBy, reviewedAt + logAudit "pos_device.approve")
+  * Decline button opens dialog with optional reason textarea (sets status="declined" + declineReason + logAudit "pos_device.decline")
+  * Amber warning banner when deviceIntegrityPassed === false (rooted/jailbroken device)
+  * Amber warning banner when screenLockEnabled === false
+- Cards / Wallets / Transactions / Documents / POS Staff / Terminals / Settlements / Disputes / POS Requests are NOT separate nav items — they are TABS inside the respective consumer/merchant profile Sheet, per the architecture spec.
+- No indigo/blue primary colors — emerald accent throughout. Lint clean (0 errors / 0 warnings). TypeScript clean for both target files. Dev server returns 200 OK after edits.
+
+---
+Task ID: USER-PROFILE-POS
+Agent: main
+Task: Restore user profile + build POS device approval workflow
+
+Work Log:
+- Recreated src/lib/access-scope.ts (was deleted) with getVisibleCountries, getVisibleMerchants, getVisibleConsumers, getVisibleStaff, getScopeLabel
+- Added PosDeviceRequest type to types.ts with deviceInfo (nfcSupported, cardReaderSupported, swipeSupported, deviceIntegrityPassed, screenLockEnabled, batteryLevel)
+- Added 6 POS device request seed records (2 approved, 1 auto-declined, 3 pending)
+- Added pos_device_requests collection to admin-data.ts + local-store.ts
+- Added all missing back-office typed accessors to admin-data.ts (subscribePosStaff, subscribeCards, subscribeWallets, subscribeTransactions, subscribeDocuments, subscribePolicies, subscribeAppContent, subscribeNotifications, subscribeFees, subscribeLimits, subscribeProviderLogs, subscribeWebhookLogs, subscribePosDeviceRequests + mutations)
+- Subagent V1: Built users-view.tsx with 5-tab profile (Profile, Cards, Wallets, Transactions, Documents) + merchants-view.tsx with 6-tab profile (Profile, POS Staff, Terminals, Settlements, Disputes, POS Requests)
+- Added row click handlers to open detail sheets
+- Added Users + Merchants nav items to sidebar
+- Wired views into PortalApp
+- Bumped localStorage version to v4 to force re-seed with new collections
+- Browser verification:
+  * Users view: clicking Adebayo Ogun opens sheet with "Profile | Cards (2) | Wallets (1) | Transactions (3) | Documents (1)"
+  * Cards tab shows card table with freeze/unfreeze actions
+  * Merchants view: clicking Lagos Foods opens sheet with "Profile | POS Staff (2) | Terminals (0) | Settlements (0) | Disputes (0) | POS Requests (1)"
+  * POS Requests tab shows device capability check with NFC/Card Reader/Swipe badges
+  * Lagos Foods (Ingenico Move 2500): "Can approve — payment method available" (NFC+Card+Swipe all supported)
+  * QuickMart Nairobi (Tecno Spark 10): "Cannot approve — no payment method" → Auto-Declined with reason "Device does not support NFC, card reader, or swipe"
+  * Approve button disabled when canBeApproved=false
+  * Auto-decline button for devices with no payment methods
+  * Device integrity warning for rooted devices
+- Lint: 0 errors. Dev server: 200 OK.
+
+Stage Summary:
+- User profile restored with tabbed interface (Cards/Wallets/Transactions/Documents under User profile)
+- Merchant profile restored with tabbed interface (POS Staff/Terminals/Settlements/Disputes/POS Requests under Merchant profile)
+- POS device approval workflow implemented:
+  • When merchant orders terminal/phone POS, Faya POS app sends device capabilities
+  • Admin sees NFC, Card Reader, Swipe status as badges
+  • Approve button DISABLED if device has no NFC, no card reader, and no swipe
+  • Auto-decline for devices with no payment method support
+  • Device integrity check warning (rooted devices)
+  • Screen lock warning
+  • All approvals/declines audit-logged

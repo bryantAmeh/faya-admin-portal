@@ -7,6 +7,8 @@ import { create } from "zustand";
 
 export type PortalView =
   | "dashboard"
+  | "users"
+  | "merchants"
   | "staff"
   | "departments"
   | "countries"

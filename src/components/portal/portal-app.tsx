@@ -26,6 +26,8 @@ import type {
 import { LoginScreen } from "@/components/portal/login-screen";
 import { PortalShell } from "@/components/portal/portal-shell";
 import { DashboardView } from "@/components/portal/views/dashboard-view";
+import { UsersView } from "@/components/portal/views/users-view";
+import { MerchantsView } from "@/components/portal/views/merchants-view";
 import { StaffView } from "@/components/portal/views/staff-view";
 import { DepartmentsView } from "@/components/portal/views/departments-view";
 import { CountriesView } from "@/components/portal/views/countries-view";
@@ -200,6 +202,10 @@ function PortalContent(props: {
           consumers={props.consumers}
         />
       );
+    case "users":
+      return <UsersView consumers={props.consumers} countries={props.countries} />;
+    case "merchants":
+      return <MerchantsView merchants={props.merchants} countries={props.countries} />;
     case "staff":
       return (
         <StaffView

@@ -642,3 +642,54 @@ export interface SystemSettings {
   updatedAt: number;
   updatedBy: string;
 }
+
+/* ============================================================ */
+/* POS Device Request — terminal/phone POS approval workflow    */
+/* ============================================================ */
+
+/**
+ * A POS device request submitted when a merchant orders a terminal or
+ * activates phone POS. The Faya POS app sends device capability info
+ * to the admin portal for approval.
+ *
+ * Approval rule: the device MUST support at least one of:
+ *   - NFC (nfcSupported)
+ *   - Card reader / chip (cardReaderSupported)
+ *   - Swipe / magnetic stripe (swipeSupported)
+ *
+ * If NONE of these are available, the request is AUTOMATICALLY DECLINED.
+ */
+export interface PosDeviceRequest {
+  id: string;
+  requestCode: string; // e.g. POS-REQ-NG-00001
+  merchantId: string;
+  merchantName: string;
+  countryCode: string;
+  type: "physical_terminal" | "phone_pos";
+  requestedAt: number;
+
+  // Device capabilities reported by the Faya POS app
+  deviceInfo: {
+    deviceModel: string; // e.g. "Ingenico Move 2500" or "Samsung Galaxy A14"
+    osVersion: string; // e.g. "Android 13"
+    appVersion: string; // Faya POS app version
+    // Capability checks — the POS app runs these on first login
+    nfcSupported: boolean;
+    cardReaderSupported: boolean; // chip/EMR reader
+    swipeSupported: boolean; // magnetic stripe
+    deviceIntegrityPassed: boolean; // rooted/jailbroken check
+    screenLockEnabled: boolean;
+    batteryLevel: number; // percentage
+  };
+
+  // Derived: at least one payment method must be available
+  canBeApproved: boolean;
+
+  status: "pending" | "approved" | "declined" | "auto_declined";
+  reviewedBy: string | null;
+  reviewedAt: number | null;
+  declineReason: string | null;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+}

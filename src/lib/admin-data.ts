@@ -46,6 +46,19 @@ import type {
   ApprovalRequest,
   Merchant,
   Consumer,
+  PosStaff,
+  Card,
+  Wallet,
+  Transaction,
+  UserDocument,
+  LegalPolicy,
+  AppContent,
+  NotificationCampaign,
+  Fee,
+  Limit,
+  ProviderLog,
+  WebhookLog,
+  PosDeviceRequest,
 } from "./types";
 import {
   SEED_DEPARTMENTS,
@@ -64,6 +77,19 @@ import {
   SEED_APPROVALS,
   SEED_MERCHANTS,
   SEED_CONSUMERS,
+  SEED_POS_STAFF,
+  SEED_CARDS,
+  SEED_WALLETS,
+  SEED_TRANSACTIONS,
+  SEED_DOCUMENTS,
+  SEED_POLICIES,
+  SEED_APP_CONTENT,
+  SEED_NOTIFICATIONS,
+  SEED_FEES,
+  SEED_LIMITS,
+  SEED_PROVIDER_LOGS,
+  SEED_WEBHOOK_LOGS,
+  SEED_POS_DEVICE_REQUESTS,
 } from "./seed-data";
 
 const PREFIX = "faya_admin_";
@@ -85,6 +111,19 @@ export const COLLECTIONS = {
   approvals: `${PREFIX}approvals`,
   merchants: `${PREFIX}merchants`,
   consumers: `${PREFIX}consumers`,
+  posStaff: `${PREFIX}pos_staff`,
+  cards: `${PREFIX}cards`,
+  wallets: `${PREFIX}wallets`,
+  transactions: `${PREFIX}transactions`,
+  documents: `${PREFIX}documents`,
+  policies: `${PREFIX}policies`,
+  appContent: `${PREFIX}app_content`,
+  notifications: `${PREFIX}notifications`,
+  fees: `${PREFIX}fees`,
+  limits: `${PREFIX}limits`,
+  providerLogs: `${PREFIX}provider_logs`,
+  webhookLogs: `${PREFIX}webhook_logs`,
+  posDeviceRequests: `${PREFIX}pos_device_requests`,
   meta: `${PREFIX}meta`,
 } as const;
 
@@ -189,6 +228,19 @@ export async function ensureSeedData(): Promise<void> {
       await seedBatch(COLLECTIONS.approvals, SEED_APPROVALS);
       await seedBatch(COLLECTIONS.merchants, SEED_MERCHANTS);
       await seedBatch(COLLECTIONS.consumers, SEED_CONSUMERS);
+      await seedBatch(COLLECTIONS.posStaff, SEED_POS_STAFF);
+      await seedBatch(COLLECTIONS.cards, SEED_CARDS);
+      await seedBatch(COLLECTIONS.wallets, SEED_WALLETS);
+      await seedBatch(COLLECTIONS.transactions, SEED_TRANSACTIONS);
+      await seedBatch(COLLECTIONS.documents, SEED_DOCUMENTS);
+      await seedBatch(COLLECTIONS.policies, SEED_POLICIES);
+      await seedBatch(COLLECTIONS.appContent, SEED_APP_CONTENT);
+      await seedBatch(COLLECTIONS.notifications, SEED_NOTIFICATIONS);
+      await seedBatch(COLLECTIONS.fees, SEED_FEES);
+      await seedBatch(COLLECTIONS.limits, SEED_LIMITS);
+      await seedBatch(COLLECTIONS.providerLogs, SEED_PROVIDER_LOGS);
+      await seedBatch(COLLECTIONS.webhookLogs, SEED_WEBHOOK_LOGS);
+      await seedBatch(COLLECTIONS.posDeviceRequests, SEED_POS_DEVICE_REQUESTS);
 
       await setDoc(doc(d, COLLECTIONS.meta, "seed_status"), {
         seeded: true,
@@ -540,6 +592,78 @@ export const adminData = {
   updateApproval: (id: string, patchData: Partial<ApprovalRequest>) => patch<ApprovalRequest>(COLLECTIONS.approvals, id, patchData),
 
   appendAuditLog: (log: AuditLog) => upsert(COLLECTIONS.auditLogs, log),
+
+  // POS Staff
+  subscribePosStaff: (cb: (items: PosStaff[]) => void) =>
+    subscribe<PosStaff>(COLLECTIONS.posStaff, cb, orderBy("createdAt", "desc")),
+  createPosStaff: (item: PosStaff) => upsert(COLLECTIONS.posStaff, item),
+  updatePosStaff: (id: string, patchData: Partial<PosStaff>) => patch<PosStaff>(COLLECTIONS.posStaff, id, patchData),
+
+  // Cards
+  subscribeCards: (cb: (items: Card[]) => void) =>
+    subscribe<Card>(COLLECTIONS.cards, cb, orderBy("createdAt", "desc")),
+  updateCard: (id: string, patchData: Partial<Card>) => patch<Card>(COLLECTIONS.cards, id, patchData),
+
+  // Wallets
+  subscribeWallets: (cb: (items: Wallet[]) => void) =>
+    subscribe<Wallet>(COLLECTIONS.wallets, cb, orderBy("createdAt", "desc")),
+  updateWallet: (id: string, patchData: Partial<Wallet>) => patch<Wallet>(COLLECTIONS.wallets, id, patchData),
+
+  // Transactions
+  subscribeTransactions: (cb: (items: Transaction[]) => void) =>
+    subscribe<Transaction>(COLLECTIONS.transactions, cb, orderBy("createdAt", "desc")),
+  updateTransaction: (id: string, patchData: Partial<Transaction>) => patch<Transaction>(COLLECTIONS.transactions, id, patchData),
+
+  // Documents
+  subscribeDocuments: (cb: (items: UserDocument[]) => void) =>
+    subscribe<UserDocument>(COLLECTIONS.documents, cb, orderBy("uploadedAt", "desc")),
+  updateDocument: (id: string, patchData: Partial<UserDocument>) => patch<UserDocument>(COLLECTIONS.documents, id, patchData),
+
+  // Legal Policies
+  subscribePolicies: (cb: (items: LegalPolicy[]) => void) =>
+    subscribe<LegalPolicy>(COLLECTIONS.policies, cb, orderBy("updatedAt", "desc")),
+  createPolicy: (item: LegalPolicy) => upsert(COLLECTIONS.policies, item),
+  updatePolicy: (id: string, patchData: Partial<LegalPolicy>) => patch<LegalPolicy>(COLLECTIONS.policies, id, patchData),
+
+  // App Content
+  subscribeAppContent: (cb: (items: AppContent[]) => void) =>
+    subscribe<AppContent>(COLLECTIONS.appContent, cb, orderBy("updatedAt", "desc")),
+  createAppContent: (item: AppContent) => upsert(COLLECTIONS.appContent, item),
+  updateAppContent: (id: string, patchData: Partial<AppContent>) => patch<AppContent>(COLLECTIONS.appContent, id, patchData),
+
+  // Notifications
+  subscribeNotifications: (cb: (items: NotificationCampaign[]) => void) =>
+    subscribe<NotificationCampaign>(COLLECTIONS.notifications, cb, orderBy("createdAt", "desc")),
+  createNotification: (item: NotificationCampaign) => upsert(COLLECTIONS.notifications, item),
+  updateNotification: (id: string, patchData: Partial<NotificationCampaign>) => patch<NotificationCampaign>(COLLECTIONS.notifications, id, patchData),
+
+  // Fees
+  subscribeFees: (cb: (items: Fee[]) => void) =>
+    subscribe<Fee>(COLLECTIONS.fees, cb, orderBy("updatedAt", "desc")),
+  createFee: (item: Fee) => upsert(COLLECTIONS.fees, item),
+  updateFee: (id: string, patchData: Partial<Fee>) => patch<Fee>(COLLECTIONS.fees, id, patchData),
+
+  // Limits
+  subscribeLimits: (cb: (items: Limit[]) => void) =>
+    subscribe<Limit>(COLLECTIONS.limits, cb, orderBy("updatedAt", "desc")),
+  createLimit: (item: Limit) => upsert(COLLECTIONS.limits, item),
+  updateLimit: (id: string, patchData: Partial<Limit>) => patch<Limit>(COLLECTIONS.limits, id, patchData),
+
+  // Provider Logs
+  subscribeProviderLogs: (cb: (items: ProviderLog[]) => void) =>
+    subscribe<ProviderLog>(COLLECTIONS.providerLogs, cb, orderBy("updatedAt", "desc")),
+  updateProviderLog: (id: string, patchData: Partial<ProviderLog>) => patch<ProviderLog>(COLLECTIONS.providerLogs, id, patchData),
+
+  // Webhook Logs
+  subscribeWebhookLogs: (cb: (items: WebhookLog[]) => void) =>
+    subscribe<WebhookLog>(COLLECTIONS.webhookLogs, cb, orderBy("receivedAt", "desc")),
+  updateWebhookLog: (id: string, patchData: Partial<WebhookLog>) => patch<WebhookLog>(COLLECTIONS.webhookLogs, id, patchData),
+
+  // POS Device Requests — terminal/phone POS approval workflow
+  subscribePosDeviceRequests: (cb: (items: PosDeviceRequest[]) => void) =>
+    subscribe<PosDeviceRequest>(COLLECTIONS.posDeviceRequests, cb, orderBy("createdAt", "desc")),
+  createPosDeviceRequest: (item: PosDeviceRequest) => upsert(COLLECTIONS.posDeviceRequests, item),
+  updatePosDeviceRequest: (id: string, patchData: Partial<PosDeviceRequest>) => patch<PosDeviceRequest>(COLLECTIONS.posDeviceRequests, id, patchData),
 
   // Local store management
   resetLocalStore: () => localStore.reset(),
