@@ -84,6 +84,7 @@ export interface AdminStaff {
   status: StaffStatus;
   mfaEnabled: boolean;
   countries: StaffCountryAccess[];
+  regionAccess: string[];
   permissions: string[]; // permission keys
   lastLoginAt: number | null;
   failedLoginCount: number;
@@ -93,6 +94,14 @@ export interface AdminStaff {
   notes?: string;
 }
 
+export const AFRICAN_REGIONS = [
+  "West Africa",
+  "East Africa",
+  "North Africa",
+  "Southern Africa",
+  "Central Africa",
+] as const;
+
 export interface CountryConfig {
   id: string;
   countryCode: string;
@@ -100,6 +109,7 @@ export interface CountryConfig {
   currency: string;
   timezone: string;
   regulator: string;
+  region: string;
   status: CountryStatus;
   launchStatus: string;
   kycRules: Record<string, unknown>;
@@ -361,4 +371,274 @@ export interface ApprovalRequest {
     note: string;
     createdAt: number;
   }[];
+}
+
+/* ============================================================ */
+/* Full back-office types (per Faya Admin Portal Requirements)  */
+/* ============================================================ */
+
+/** POS Staff — merchant cashiers operating terminals/SoftPOS (Faya POS app users) */
+export interface PosStaff {
+  id: string;
+  staffCode: string;
+  merchantId: string;
+  merchantName: string;
+  branchName: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  pinHash: string;
+  role: "cashier" | "supervisor" | "branch_manager";
+  deviceAssigned: string | null;
+  countryCode: string;
+  status: "active" | "suspended" | "removed";
+  lastLoginAt: number | null;
+  transactionsToday: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type CardType = "virtual" | "physical";
+export type CardStatus = "pending" | "active" | "frozen" | "blocked" | "expired" | "terminated" | "replaced";
+export type CardScheme = "visa" | "mastercard" | "verve";
+
+export interface Card {
+  id: string;
+  cardId: string;
+  userId: string;
+  userName: string;
+  countryCode: string;
+  type: CardType;
+  scheme: CardScheme;
+  last4: string;
+  status: CardStatus;
+  currency: string;
+  provider: string;
+  providerCardId: string;
+  spendLimitDaily: number;
+  spendLimitMonthly: number;
+  frozen: boolean;
+  tokenized: boolean;
+  walletProvisioned: boolean;
+  expiryMonth: string;
+  expiryYear: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type WalletStatus = "active" | "frozen" | "closed";
+
+export interface Wallet {
+  id: string;
+  walletId: string;
+  userId: string;
+  userName: string;
+  countryCode: string;
+  currency: string;
+  balance: number;
+  availableBalance: number;
+  heldBalance: number;
+  status: WalletStatus;
+  linkedCardIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type TransactionType =
+  | "card_payment" | "nfc_payment" | "wallet_debit" | "wallet_credit"
+  | "refund" | "reversal" | "merchant_payment" | "settlement"
+  | "fee" | "chargeback" | "adjustment" | "topup";
+
+export type TransactionStatus =
+  | "pending" | "authorized" | "successful" | "failed"
+  | "reversed" | "refunded" | "held";
+
+export interface Transaction {
+  id: string;
+  reference: string;
+  userId: string | null;
+  userName: string;
+  merchantId: string | null;
+  merchantName: string | null;
+  countryCode: string;
+  amount: number;
+  currency: string;
+  type: TransactionType;
+  status: TransactionStatus;
+  paymentMethod: string;
+  cardLast4: string | null;
+  deviceSerial: string | null;
+  riskScore: number;
+  authorizationCode: string | null;
+  responseCode: string | null;
+  providerReference: string | null;
+  settlementStatus: "pending" | "settled" | "held" | "failed" | null;
+  disputeStatus: "none" | "open" | "won" | "lost" | null;
+  createdAt: number;
+}
+
+export type DocumentType =
+  | "user_id" | "selfie_liveness" | "proof_of_address" | "bvn_nin_verification"
+  | "business_registration" | "tax_certificate" | "merchant_licence"
+  | "beneficial_owner" | "settlement_bank_proof" | "dispute_evidence";
+
+export interface UserDocument {
+  id: string;
+  documentType: DocumentType;
+  entityType: "consumer" | "merchant";
+  entityId: string;
+  entityName: string;
+  countryCode: string;
+  fileName: string;
+  mimeType: string;
+  uploadedAt: number;
+  status: "pending" | "approved" | "rejected" | "expired" | "replacement_requested";
+  reviewedBy: string | null;
+  reviewedAt: number | null;
+  notes: string;
+}
+
+export type PolicyType =
+  | "consumer_terms" | "merchant_terms" | "pos_terms" | "privacy_policy"
+  | "cardholder_agreement" | "virtual_card_terms" | "physical_card_terms"
+  | "nfc_payment_terms" | "merchant_acquiring_agreement" | "settlement_terms"
+  | "refund_policy" | "chargeback_policy" | "cookie_policy"
+  | "data_processing_agreement" | "country_legal_notice";
+
+export type PolicyStatus = "draft" | "pending_approval" | "published" | "scheduled" | "archived";
+
+export interface LegalPolicy {
+  id: string;
+  title: string;
+  policyType: PolicyType;
+  countryCode: string | null;
+  appAffected: "faya_pay" | "faya_business" | "faya_pos" | "all";
+  version: string;
+  status: PolicyStatus;
+  effectiveDate: number;
+  expiryDate: number | null;
+  contentBody: string;
+  summaryOfChanges: string;
+  createdBy: string;
+  approvedBy: string | null;
+  publishedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AppContent {
+  id: string;
+  contentKey: string;
+  title: string;
+  body: string;
+  app: "faya_pay" | "faya_business" | "faya_pos" | "admin";
+  countryCode: string | null;
+  language: string;
+  version: string;
+  status: "draft" | "pending_approval" | "published" | "archived";
+  createdBy: string;
+  publishedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type NotificationChannel = "push" | "email" | "sms" | "in_app" | "security_alert";
+export type NotificationAudience =
+  | "all_consumers" | "consumers_by_country" | "merchants_by_country"
+  | "pos_staff" | "admin_staff" | "kyc_pending" | "card_users"
+  | "suspended_accounts" | "high_risk_accounts";
+
+export interface NotificationCampaign {
+  id: string;
+  title: string;
+  body: string;
+  channel: NotificationChannel;
+  audience: NotificationAudience;
+  countryCode: string | null;
+  scheduledAt: number | null;
+  status: "draft" | "scheduled" | "sending" | "sent" | "cancelled";
+  sentCount: number;
+  failedCount: number;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Fee {
+  id: string;
+  countryCode: string;
+  product: string;
+  feeType: string;
+  percentage: number | null;
+  fixedAmount: number | null;
+  currency: string;
+  effectiveDate: number;
+  status: "active" | "inactive";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Limit {
+  id: string;
+  countryCode: string;
+  product: string;
+  limitType: string;
+  kycTier: KycTier | "all";
+  riskLevel: RiskLevel | "all";
+  maxAmount: number;
+  currency: string;
+  status: "active" | "inactive";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProviderLog {
+  id: string;
+  provider: string;
+  status: "operational" | "degraded" | "outage";
+  uptime: number;
+  errorRate: number;
+  lastSuccessAt: number;
+  lastErrorAt: number | null;
+  apiLatencyMs: number;
+  webhookFailures: number;
+  retryQueue: number;
+  notes: string;
+  updatedAt: number;
+}
+
+export interface WebhookLog {
+  id: string;
+  provider: string;
+  eventType: string;
+  entityId: string;
+  payloadStatus: "received" | "processed" | "failed" | "replayed";
+  receivedAt: number;
+  processedAt: number | null;
+  retryCount: number;
+  errorMessage: string | null;
+}
+
+export interface SystemSettings {
+  id: string;
+  platformName: string;
+  supportedCountries: string[];
+  supportedCurrencies: string[];
+  enabledProducts: string[];
+  maintenanceMode: boolean;
+  minAppVersionFayaPay: string;
+  minAppVersionFayaBusiness: string;
+  minAppVersionFayaPos: string;
+  contactEmail: string;
+  supportSlaHours: number;
+  termsVersion: string;
+  privacyVersion: string;
+  riskThresholdHigh: number;
+  riskThresholdCritical: number;
+  cardProvider: string;
+  kycProvider: string;
+  settlementProvider: string;
+  updatedAt: number;
+  updatedBy: string;
 }
