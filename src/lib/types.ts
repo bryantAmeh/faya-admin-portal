@@ -710,14 +710,41 @@ export interface StockItem {
   id: string;
   serialNumber: string;
   type: StockItemType;
-  model: string; // e.g. "Ingenico Move 2500", "Visa Virtual Card"
-  countryCode: string; // which country warehouse
+  model: string;
+  description: string;
+  price: number;
+  currency: string;
+  imageUrl: string | null;
+  countryCode: string;
   status: StockItemStatus;
-  allocatedToId: string | null; // merchant ID if allocated
+  allocatedToId: string | null;
   allocatedToName: string | null;
   allocatedAt: number | null;
   shippedAt: number | null;
   deliveredAt: number | null;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type StockOrderStatus = "pending" | "fulfilled" | "shipped" | "delivered" | "cancelled";
+
+export interface StockOrder {
+  id: string;
+  orderCode: string;
+  userType: "consumer" | "merchant";
+  userId: string;
+  userName: string;
+  countryCode: string;
+  itemType: StockItemType;
+  model: string;
+  unitPrice: number;
+  deliveryFee: number;
+  totalAmount: number;
+  currency: string;
+  status: StockOrderStatus;
+  deliveryAddress: string;
+  stockItemId: string | null;
   notes: string;
   createdAt: number;
   updatedAt: number;

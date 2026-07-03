@@ -767,3 +767,102 @@ Stage Summary:
 - Physical terminals are free provision (no rental), physical cards have issuance fee
 - Compliance view shows documents inline (no download), clicking a case navigates to the user's full profile page
 - Everything linked to a user/merchant is on their profile page
+
+---
+Task ID: STK1
+Agent: subagent-stock-prices-images
+Task: Rebuild stock view with prices, images, availability-based ordering, delivery fee
+
+Work Log:
+- Read context: worklog.md, src/lib/types.ts (StockItem now has price/currency/imageUrl/description; StockOrder has unitPrice/deliveryFee/totalAmount), src/lib/admin-data.ts (subscribeStock, subscribeStockOrders, createStockItem, createStockOrder, updateStockItem, updateStockOrder, logAudit), src/lib/access-scope.ts (getVisibleCountryCodes, isGlobalScope), src/lib/formatters.ts (formatCurrency, formatDateTime, timeAgo), src/components/portal/view-helpers.tsx (ViewHeader, StatCard, EmptyState, ViewContainer), src/hooks/use-auth.ts (useAuth), src/lib/seed-data.ts (SEED_STOCK_ITEMS already includes prices/images/descriptions; SEED_STOCK_ORDERS already includes deliveryFee), the existing stock-view.tsx (style reference).
+- Completely rewrote /home/z/my-project/src/components/portal/views/stock-view.tsx with a two-tab architecture:
+  • Top-level Tabs: Inventory | Orders
+  • Header has "New Order" button (emerald outline) + "Add to Stock" button (Super Admin only, emerald solid)
+- INVENTORY TAB:
+  * 5 StatCards: Total Items, In Stock, Allocated, Damaged, Total Stock Value (grouped by currency to avoid mixing NGN/GHS/KES/ZAR)
+  * Availability banner showing live counts: "Terminals in stock: N", "Cards in stock: N" (red when 0)
+  * Filter bar: search (serial/model/merchant), country, type (terminal/card), status (incl. Damaged/Lost composite); Clear-filters button
+  * Product-card grid (1/2/3/4 cols responsive, NOT a table) — each card:
+      - 120px-tall product image area (object-cover) with onError fallback to ImageOff placeholder
+      - Type badge (top-left, emerald for terminal / amber for card)
+      - Status badge (top-right, emerald/amber/sky/red per status)
+      - Model name (bold) + serial number (mono)
+      - Description (2-line truncated)
+      - Price prominently displayed in an emerald-tinted box with currency
+      - "Allocated to: {merchant name}" when status is allocated (amber)
+      - Country flag/code + notes
+      - Actions: "Details" button + dropdown (View details, Mark damaged, Mark in stock)
+- ORDERS TAB:
+  * 5 StatCards: Total Orders, Pending, Shipped, Delivered, Total Revenue (delivered only, grouped by currency)
+  * Filter bar: search (order code/user/model), country, status; Clear-filters button
+  * Table with columns: Order Code (mono), User (name + consumer/merchant badge), Item (model + type + country), Unit Price, Delivery Fee (separate column, muted), Total (emerald, bold), Status badge, Delivery Address (hidden on small), Created (timeAgo, hidden on small), Actions dropdown
+  * Row actions: View details, Mark shipped (if pending), Mark delivered (if shipped), Cancel (if pending — releases allocated item back to in_stock)
+- STOCK DETAIL DIALOG: Large product image (180px), type+status badges, model+description, prominent unit-price box, full detail rows (serial, country, allocated-to, allocated/shipped/delivered timestamps, created/updated), notes. Keyed by item.id from parent so internal imgError state resets per item.
+- ORDER DETAIL DIALOG: Status+type+user-type badges, cost-summary card (Unit Price + Delivery Fee = Total Amount with icons), detail rows (customer, customer ID, item model, country, delivery address, stock item, created/updated), notes.
+- ADD TO STOCK DIALOG (Super Admin only): type radio (terminal/card), serial number (with duplicate-check error), model, description, price (with currency suffix), country (auto-derives currency), image URL with live preview (green "Live preview" badge when OK, red error card when load fails), notes. Validates price > 0.
+- CREATE ORDER DIALOG (admin creates on behalf of user):
+  * User type radio (Merchant / Consumer)
+  * User name + ID (text inputs)
+  * Country select
+  * Item type radio — DISABLED when no items of that type are in stock (with "None in stock — disabled" hint and live in-stock count)
+  * Item dropdown — shows serial + model + price for each in-stock item of selected type; disabled with empty-state if no items
+  * Delivery address (textarea)
+  * Delivery fee (number, pre-filled with DEFAULT_DELIVERY_FEE per country: NG=2000, GH=20, KE=300, ZA=100)
+  * Cost Summary card: Unit Price → + Delivery Fee → Total Amount (emerald box)
+  * Notes
+  * On submit: creates StockOrder with status="pending", allocates the StockItem (status="allocated", allocatedToId/Name, allocatedAt), logs audit `stock_order.create` with full cost breakdown in afterValue, toast success
+- Audit action keys: stock.create, stock.mark_damaged, stock.mark_in_stock, stock_order.create, stock_order.ship, stock_order.deliver, stock_order.cancel
+- Country scoping via getVisibleCountryCodes (Super Admin sees all)
+- Design: emerald accent throughout, NO indigo/blue. Product cards look like an e-commerce catalog. Images use object-cover at 120px height (180px in detail dialog). Live image-preview in Add-to-Stock dialog.
+- Lint fixes:
+  * Removed three `react-hooks/set-state-in-effect` errors:
+    - StockDetailDialog: removed useEffect that reset imgError on item change; instead parent passes `key={detailItem.id}` so the dialog remounts per item.
+    - CreateOrderDialog: moved "clear stockItemId on type change" + "set default deliveryFee on country change" logic inline into the RadioGroup/Select onValueChange handlers, and used a lazy useState initializer for deliveryFee based on the initial countryCode.
+  * Removed 3 unused `@next/next/no-img-element` eslint-disable directives (rule isn't enabled in this project).
+  * Fixed 2 TS errors: StockOrder type has no `shippedAt`/`deliveredAt` fields — removed them from the updateStockOrder patches (kept them on updateStockItem since StockItem does have those fields).
+- Verified: `bun run lint` → 0 errors, 0 warnings. `npx tsc --noEmit` → 0 errors in stock-view.tsx. Dev server compiles cleanly (dev.log shows "Compiled in Nms" with no errors).
+- Appended agent-ctx record at /home/z/my-project/agent-ctx/STK1-subagent-stock-prices-images.md.
+
+Stage Summary:
+- Produced a complete rebuild of /home/z/my-project/src/components/portal/views/stock-view.tsx (~2300 lines, single self-contained client component with 5 sub-components: ProductCard, StockDetailDialog, OrderDetailDialog, AddToStockDialog, CreateOrderDialog).
+- All four user-feedback items addressed:
+  1. PRICES: every inventory card has a prominent emerald price box (formatCurrency with per-item currency); every order row shows Unit Price + Delivery Fee + Total as separate columns; detail dialogs show a full cost summary.
+  2. IMAGES: every inventory card has a 120px product image (object-cover) with graceful ImageOff fallback on load failure; Add-to-Stock dialog has a live image-preview pane; detail dialog shows a larger 180px image.
+  3. AVAILABILITY-BASED ORDERING: the Create Order dialog disables the Terminal type radio when 0 terminals are in stock (and same for Card); the item dropdown is empty with a warning when no items of the chosen type are in stock; an "empty state" blocking message is shown if NOTHING is in stock at all; an availability banner on the inventory tab shows live in-stock counts per type.
+  4. DELIVERY FEE: orders have a dedicated Delivery Fee column (separate from Unit Price), a delivery-fee input in the Create Order dialog (pre-filled with country default), and a Cost Summary card showing Unit Price + Delivery Fee = Total Amount — same breakdown shown in the Order Detail dialog.
+- The view is wired into the portal shell as `case "stock": return <StockView />;` (already present from prior agent work). No changes needed to portal-app.tsx or portal-shell.tsx.
+
+---
+Task ID: STOCK-PRICES-IMAGES
+Agent: main
+Task: Add prices, product images, availability-based ordering, and delivery fee to stock page
+
+Work Log:
+- Updated StockItem type: added price, currency, imageUrl, description fields
+- Added StockOrder type: orderCode, userType, userId, itemType, model, unitPrice, deliveryFee, totalAmount, currency, status, deliveryAddress
+- Updated 16 stock seed items with prices (terminals: NGN 45K-55K, GHS 300-350, KES 8500-9500, ZAR 1800; cards: NGN 2500, GHS 15, KES 500, ZAR 120), descriptions, and Unsplash image URLs
+- Added 5 stock order seed records with delivery fees (unit price + delivery fee = total)
+- Added stock_orders collection to admin-data.ts + local-store.ts
+- Bumped localStorage to v7 to force re-seed
+- Subagent STK1: Rebuilt stock-view.tsx with:
+  • Inventory tab: product card grid showing image, model, description, price (prominent), status badge, serial number, country
+  • Orders tab: table with Unit Price, Delivery Fee, Total as separate columns
+  • "Add to Stock" dialog with image URL + live preview
+  • "New Order" dialog with availability-based item selection (only in-stock items shown, type disabled if 0 in stock)
+  • Delivery fee pre-filled by country default (NG=2000, GH=20, KE=300, ZA=100)
+  • Cost summary: Unit Price + Delivery Fee = Total Amount
+  • On order: creates StockOrder + allocates StockItem + logAudit
+- Browser verification:
+  * Stock page: 16 items, 9 product images visible, prices showing (₦/NGN)
+  * Inventory tab: product cards with images, prices, status badges
+  * Orders tab: 5 orders with Unit Price, Delivery Fee, Total columns
+  * "New Order" button visible
+  * Delivery fee visible in both inventory and orders
+- Lint: 0 errors. Dev server: 200 OK.
+
+Stage Summary:
+- Stock page now shows prices on every item
+- Product images displayed (with fallback for broken URLs)
+- Users can only order what's in stock — if no terminals in stock, terminal ordering is disabled
+- Delivery fee is included in every order (separate column in orders table, shown in order dialog summary)
+- Add to Stock dialog has image URL field with live preview

@@ -60,6 +60,7 @@ import type {
   WebhookLog,
   PosDeviceRequest,
   StockItem,
+  StockOrder,
 } from "./types";
 import {
   SEED_DEPARTMENTS,
@@ -92,6 +93,7 @@ import {
   SEED_WEBHOOK_LOGS,
   SEED_POS_DEVICE_REQUESTS,
   SEED_STOCK_ITEMS,
+  SEED_STOCK_ORDERS,
 } from "./seed-data";
 
 const PREFIX = "faya_admin_";
@@ -127,6 +129,7 @@ export const COLLECTIONS = {
   webhookLogs: `${PREFIX}webhook_logs`,
   posDeviceRequests: `${PREFIX}pos_device_requests`,
   stock: `${PREFIX}stock`,
+  stockOrders: `${PREFIX}stock_orders`,
   meta: `${PREFIX}meta`,
 } as const;
 
@@ -245,6 +248,7 @@ export async function ensureSeedData(): Promise<void> {
       await seedBatch(COLLECTIONS.webhookLogs, SEED_WEBHOOK_LOGS);
       await seedBatch(COLLECTIONS.posDeviceRequests, SEED_POS_DEVICE_REQUESTS);
       await seedBatch(COLLECTIONS.stock, SEED_STOCK_ITEMS);
+      await seedBatch(COLLECTIONS.stockOrders, SEED_STOCK_ORDERS);
 
       await setDoc(doc(d, COLLECTIONS.meta, "seed_status"), {
         seeded: true,
@@ -674,6 +678,12 @@ export const adminData = {
     subscribe<StockItem>(COLLECTIONS.stock, cb, orderBy("createdAt", "desc")),
   createStockItem: (item: StockItem) => upsert(COLLECTIONS.stock, item),
   updateStockItem: (id: string, patchData: Partial<StockItem>) => patch<StockItem>(COLLECTIONS.stock, id, patchData),
+
+  // Stock Orders — orders placed by consumers/merchants for physical items
+  subscribeStockOrders: (cb: (items: StockOrder[]) => void) =>
+    subscribe<StockOrder>(COLLECTIONS.stockOrders, cb, orderBy("createdAt", "desc")),
+  createStockOrder: (item: StockOrder) => upsert(COLLECTIONS.stockOrders, item),
+  updateStockOrder: (id: string, patchData: Partial<StockOrder>) => patch<StockOrder>(COLLECTIONS.stockOrders, id, patchData),
 
   // Local store management
   resetLocalStore: () => localStore.reset(),

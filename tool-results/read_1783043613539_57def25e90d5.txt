@@ -1,0 +1,1101 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Stock / Inventory View
+     5→ *
+     6→ * Lists physical items in Faya's warehouse: physical POS terminals and
+     7→ * physical cards. Merchants request terminals from their Merchant app
+     8→ * (the request appears in the merchant-detail POS Requests tab); admin
+     9→ * allocates from this stock when fulfilling the request.
+    10→ *
+    11→ * Pricing model (per spec):
+    12→ *   - Physical terminals: provided FREE to merchants — no purchase / rental.
+    13→ *     Merchants cannot "order" them themselves; admin allocates from stock.
+    14→ *   - Physical cards: carry an issuance fee.
+    15→ *   - The POS app and Phone POS are FREE downloads — no stock needed.
+    16→ *     Phone POS uses the merchant's existing phone; the POS app is software.
+    17→ *
+    18→ * Country scoping: Super Admin sees all warehouses; other staff see only
+    19→ * the countries listed on their `staff.countries` access record.
+    20→ *
+    21→ * Tabs: All · In Stock · Allocated · Damaged
+    22→ * Table: Serial · Type · Model · Country · Status · Allocated To · Allocated At · Notes · Actions
+    23→ * Actions: View details (Dialog) · Mark damaged · Mark in stock
+    24→ *
+    25→ * Audit action keys: stock.create / stock.mark_damaged / stock.mark_in_stock
+    26→ */
+    27→import { useEffect, useMemo, useState } from "react";
+    28→import {
+    29→  Boxes,
+    30→  Plus,
+    31→  MoreHorizontal,
+    32→  Eye,
+    33→  PackageCheck,
+    34→  AlertTriangle,
+    35→  Search,
+    36→  Filter,
+    37→  Info,
+    38→  CreditCard,
+    39→  Smartphone,
+    40→  XCircle,
+    41→  Building2,
+    42→  PackageX,
+    43→} from "lucide-react";
+    44→import { toast } from "sonner";
+    45→import {
+    46→  ViewHeader,
+    47→  ViewContainer,
+    48→  EmptyState,
+    49→  StatCard,
+    50→} from "@/components/portal/view-helpers";
+    51→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    52→import { Badge } from "@/components/ui/badge";
+    53→import { Button } from "@/components/ui/button";
+    54→import { Input } from "@/components/ui/input";
+    55→import { Label } from "@/components/ui/label";
+    56→import { Textarea } from "@/components/ui/textarea";
+    57→import {
+    58→  Table,
+    59→  TableBody,
+    60→  TableCell,
+    61→  TableHead,
+    62→  TableHeader,
+    63→  TableRow,
+    64→} from "@/components/ui/table";
+    65→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    66→import {
+    67→  DropdownMenu,
+    68→  DropdownMenuContent,
+    69→  DropdownMenuItem,
+    70→  DropdownMenuLabel,
+    71→  DropdownMenuSeparator,
+    72→  DropdownMenuTrigger,
+    73→} from "@/components/ui/dropdown-menu";
+    74→import {
+    75→  Dialog,
+    76→  DialogContent,
+    77→  DialogDescription,
+    78→  DialogFooter,
+    79→  DialogHeader,
+    80→  DialogTitle,
+    81→} from "@/components/ui/dialog";
+    82→import {
+    83→  Select,
+    84→  SelectContent,
+    85→  SelectItem,
+    86→  SelectTrigger,
+    87→  SelectValue,
+    88→} from "@/components/ui/select";
+    89→import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+    90→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+    91→import { useAuth } from "@/hooks/use-auth";
+    92→import { adminData, logAudit } from "@/lib/admin-data";
+    93→import { getVisibleCountryCodes, isGlobalScope } from "@/lib/access-scope";
+    94→import { formatDateTime, timeAgo } from "@/lib/formatters";
+    95→import type {
+    96→  CountryConfig,
+    97→  StockItem,
+    98→  StockItemStatus,
+    99→  StockItemType,
+   100→} from "@/lib/types";
+   101→import { cn } from "@/lib/utils";
+   102→
+   103→const SUPER_ADMIN_DEPT = "dept_super_admin";
+   104→
+   105→const STOCK_STATUS_STYLES: Record<
+   106→  StockItemStatus,
+   107→  { label: string; className: string }
+   108→> = {
+   109→  in_stock: {
+   110→    label: "In Stock",
+   111→    className:
+   112→      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   113→  },
+   114→  allocated: {
+   115→    label: "Allocated",
+   116→    className:
+   117→      "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+   118→  },
+   119→  shipped: {
+   120→    label: "Shipped",
+   121→    className:
+   122→      "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+   123→  },
+   124→  delivered: {
+   125→    label: "Delivered",
+   126→    className:
+   127→      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   128→  },
+   129→  damaged: {
+   130→    label: "Damaged",
+   131→    className:
+   132→      "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+   133→  },
+   134→  lost: {
+   135→    label: "Lost",
+   136→    className:
+   137→      "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
+   138→  },
+   139→};
+   140→
+   141→const TYPE_LABELS: Record<StockItemType, { label: string; icon: typeof Smartphone }> = {
+   142→  physical_terminal: { label: "Terminal", icon: Smartphone },
+   143→  physical_card: { label: "Card", icon: CreditCard },
+   144→};
+   145→
+   146→export function StockView() {
+   147→  const { staff } = useAuth();
+   148→  const [items, setItems] = useState<StockItem[]>([]);
+   149→  const [countries, setCountries] = useState<CountryConfig[]>([]);
+   150→
+   151→  // Filters
+   152→  const [search, setSearch] = useState("");
+   153→  const [countryFilter, setCountryFilter] = useState<string>("all");
+   154→  const [typeFilter, setTypeFilter] = useState<string>("all");
+   155→  const [activeTab, setActiveTab] = useState<string>("all");
+   156→
+   157→  // Dialog state
+   158→  const [detailItem, setDetailItem] = useState<StockItem | null>(null);
+   159→  const [addOpen, setAddOpen] = useState(false);
+   160→  const [addKey, setAddKey] = useState(0);
+   161→
+   162→  // Set of existing serial numbers (lower-cased) to prevent duplicates
+   163→  const existingSerials = useMemo(
+   164→    () => new Set(items.map((i) => i.serialNumber.toLowerCase())),
+   165→    [items],
+   166→  );
+   167→
+   168→  /* ----------------------- Subscriptions ----------------------- */
+   169→  useEffect(() => {
+   170→    const unsubStock = adminData.subscribeStock(setItems);
+   171→    const unsubCountries = adminData.subscribeCountries(setCountries);
+   172→    return () => {
+   173→      unsubStock();
+   174→      unsubCountries();
+   175→    };
+   176→  }, []);
+   177→
+   178→  /* ----------------------- Country scoping --------------------- */
+   179→  const visibleCountryCodes = useMemo(
+   180→    () => getVisibleCountryCodes(staff, countries),
+   181→    [staff, countries],
+   182→  );
+   183→  const isSuperAdmin = isGlobalScope(staff) || staff?.departmentId === SUPER_ADMIN_DEPT;
+   184→
+   185→  const filterableCountries = useMemo(
+   186→    () =>
+   187→      isSuperAdmin
+   188→        ? countries
+   189→        : countries.filter((c) => visibleCountryCodes.has(c.countryCode)),
+   190→    [countries, isSuperAdmin, visibleCountryCodes],
+   191→  );
+   192→
+   193→  /* ----------------------- Filtering --------------------------- */
+   194→  const visibleItems = useMemo(
+   195→    () => items.filter((it) => visibleCountryCodes.has(it.countryCode)),
+   196→    [items, visibleCountryCodes],
+   197→  );
+   198→
+   199→  const filtered = useMemo(() => {
+   200→    let list = visibleItems;
+   201→    if (activeTab === "in_stock") list = list.filter((i) => i.status === "in_stock");
+   202→    else if (activeTab === "allocated")
+   203→      list = list.filter((i) => i.status === "allocated");
+   204→    else if (activeTab === "damaged")
+   205→      list = list.filter((i) => i.status === "damaged" || i.status === "lost");
+   206→
+   207→    if (countryFilter !== "all")
+   208→      list = list.filter((i) => i.countryCode === countryFilter);
+   209→    if (typeFilter !== "all") list = list.filter((i) => i.type === typeFilter);
+   210→    if (search.trim()) {
+   211→      const q = search.trim().toLowerCase();
+   212→      list = list.filter(
+   213→        (i) =>
+   214→          i.serialNumber.toLowerCase().includes(q) ||
+   215→          i.model.toLowerCase().includes(q) ||
+   216→          (i.allocatedToName ?? "").toLowerCase().includes(q),
+   217→      );
+   218→    }
+   219→    return list;
+   220→  }, [visibleItems, activeTab, countryFilter, typeFilter, search]);
+   221→
+   222→  /* ----------------------- Stats ------------------------------- */
+   223→  const stats = useMemo(() => {
+   224→    const total = visibleItems.length;
+   225→    const inStock = visibleItems.filter((i) => i.status === "in_stock").length;
+   226→    const allocated = visibleItems.filter((i) => i.status === "allocated").length;
+   227→    const damaged = visibleItems.filter(
+   228→      (i) => i.status === "damaged" || i.status === "lost",
+   229→    ).length;
+   230→    return { total, inStock, allocated, damaged };
+   231→  }, [visibleItems]);
+   232→
+   233→  /* ----------------------- Helpers ----------------------------- */
+   234→  function countryName(code: string): string {
+   235→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   236→  }
+   237→
+   238→  function actor() {
+   239→    if (!staff) return null;
+   240→    return {
+   241→      staffId: staff.id,
+   242→      staffName: `${staff.firstName} ${staff.lastName}`,
+   243→      department: staff.departmentId,
+   244→      role: staff.roleId,
+   245→    };
+   246→  }
+   247→
+   248→  function markDamaged(item: StockItem) {
+   249→    const a = actor();
+   250→    if (!a) return;
+   251→    adminData.updateStockItem(item.id, {
+   252→      status: "damaged",
+   253→      updatedAt: Date.now(),
+   254→    });
+   255→    logAudit(a, "stock.mark_damaged", "stock_item", item.id, {
+   256→      countryCode: item.countryCode,
+   257→      beforeValue: item.status,
+   258→      afterValue: "damaged",
+   259→    });
+   260→    toast.success(`Marked damaged: ${item.serialNumber}`, {
+   261→      description: `${item.model} · pulled from fulfilment queue`,
+   262→    });
+   263→  }
+   264→
+   265→  function markInStock(item: StockItem) {
+   266→    const a = actor();
+   267→    if (!a) return;
+   268→    adminData.updateStockItem(item.id, {
+   269→      status: "in_stock",
+   270→      allocatedToId: null,
+   271→      allocatedToName: null,
+   272→      allocatedAt: null,
+   273→      shippedAt: null,
+   274→      deliveredAt: null,
+   275→      updatedAt: Date.now(),
+   276→    });
+   277→    logAudit(a, "stock.mark_in_stock", "stock_item", item.id, {
+   278→      countryCode: item.countryCode,
+   279→      beforeValue: item.status,
+   280→      afterValue: "in_stock",
+   281→    });
+   282→    toast.success(`Marked in stock: ${item.serialNumber}`, {
+   283→      description: `${item.model} · available for allocation`,
+   284→    });
+   285→  }
+   286→
+   287→  return (
+   288→    <>
+   289→      <ViewHeader
+   290→        title="Stock & Inventory"
+   291→        description="Physical terminals and physical cards in Faya's warehouse. Allocate to merchants when they request terminals from the Merchant app."
+   292→        icon={Boxes}
+   293→        actions={
+   294→          isSuperAdmin ? (
+   295→            <Button
+   296→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   297→              onClick={() => {
+   298→                setAddKey((k) => k + 1);
+   299→                setAddOpen(true);
+   300→              }}
+   301→            >
+   302→              <Plus className="size-4" /> Add to Stock
+   303→            </Button>
+   304→          ) : undefined
+   305→        }
+   306→      />
+   307→      <ViewContainer>
+   308→        {/* Pricing model info banner */}
+   309→        <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+   310→          <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+   311→          <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed space-y-0.5">
+   312→            <div>
+   313→              <span className="font-medium">Physical terminals</span> are
+   314→              provided <span className="font-medium">FREE</span> to merchants —
+   315→              no purchase or rental fees. Merchants request them from the
+   316→              Merchant app; admin allocates from this stock.
+   317→            </div>
+   318→            <div>
+   319→              <span className="font-medium">Physical cards</span> carry an
+   320→              issuance fee.
+   321→            </div>
+   322→            <div>
+   323→              The <span className="font-medium">POS app</span> and{" "}
+   324→              <span className="font-medium">Phone POS</span> are free downloads
+   325→              — no stock needed. Phone POS uses the merchant's existing phone
+   326→              (NFC capable) and the POS app is software.
+   327→            </div>
+   328→          </div>
+   329→        </div>
+   330→
+   331→        {/* Stat cards */}
+   332→        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+   333→          <StatCard
+   334→            label="Total Items"
+   335→            value={stats.total}
+   336→            hint="Terminals + cards"
+   337→            icon={Boxes}
+   338→          />
+   339→          <StatCard
+   340→            label="In Stock"
+   341→            value={stats.inStock}
+   342→            hint="Available to allocate"
+   343→            icon={PackageCheck}
+   344→            tone="success"
+   345→          />
+   346→          <StatCard
+   347→            label="Allocated"
+   348→            value={stats.allocated}
+   349→            hint="With merchants"
+   350→            icon={Building2}
+   351→            tone="warning"
+   352→          />
+   353→          <StatCard
+   354→            label="Damaged / Lost"
+   355→            value={stats.damaged}
+   356→            hint="Pulled from circulation"
+   357→            icon={AlertTriangle}
+   358→            tone="danger"
+   359→          />
+   360→        </div>
+   361→
+   362→        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+   363→          <TabsList className="h-auto flex-wrap justify-start gap-1">
+   364→            <TabsTrigger value="all" className="text-xs">
+   365→              <Boxes className="size-3.5" /> All
+   366→              <Badge variant="secondary" className="text-[10px] ml-1">
+   367→                {visibleItems.length}
+   368→              </Badge>
+   369→            </TabsTrigger>
+   370→            <TabsTrigger value="in_stock" className="text-xs">
+   371→              <PackageCheck className="size-3.5" /> In Stock
+   372→              <Badge variant="secondary" className="text-[10px] ml-1">
+   373→                {stats.inStock}
+   374→              </Badge>
+   375→            </TabsTrigger>
+   376→            <TabsTrigger value="allocated" className="text-xs">
+   377→              <Building2 className="size-3.5" /> Allocated
+   378→              <Badge variant="secondary" className="text-[10px] ml-1">
+   379→                {stats.allocated}
+   380→              </Badge>
+   381→            </TabsTrigger>
+   382→            <TabsTrigger value="damaged" className="text-xs">
+   383→              <AlertTriangle className="size-3.5" /> Damaged
+   384→              <Badge variant="secondary" className="text-[10px] ml-1">
+   385→                {stats.damaged}
+   386→              </Badge>
+   387→            </TabsTrigger>
+   388→          </TabsList>
+   389→
+   390→          {/* ---------------- ALL / IN STOCK / ALLOCATED / DAMAGED -------------------- */}
+   391→          <TabsContent value="all">
+   392→            <StockTable
+   393→              items={filtered}
+   394→              countries={countries}
+   395→              onDetail={setDetailItem}
+   396→              onMarkDamaged={markDamaged}
+   397→              onMarkInStock={markInStock}
+   398→              search={search}
+   399→              setSearch={setSearch}
+   400→              countryFilter={countryFilter}
+   401→              setCountryFilter={setCountryFilter}
+   402→              typeFilter={typeFilter}
+   403→              setTypeFilter={setTypeFilter}
+   404→              filterableCountries={filterableCountries}
+   405→              isSuperAdmin={isSuperAdmin}
+   406→              emptyTitle="No stock items match"
+   407→              emptyDescription="Adjust filters or add new items to Faya's warehouse inventory."
+   408→            />
+   409→          </TabsContent>
+   410→          <TabsContent value="in_stock">
+   411→            <StockTable
+   412→              items={filtered}
+   413→              countries={countries}
+   414→              onDetail={setDetailItem}
+   415→              onMarkDamaged={markDamaged}
+   416→              onMarkInStock={markInStock}
+   417→              search={search}
+   418→              setSearch={setSearch}
+   419→              countryFilter={countryFilter}
+   420→              setCountryFilter={setCountryFilter}
+   421→              typeFilter={typeFilter}
+   422→              setTypeFilter={setTypeFilter}
+   423→              filterableCountries={filterableCountries}
+   424→              isSuperAdmin={isSuperAdmin}
+   425→              emptyTitle="No items in stock"
+   426→              emptyDescription="Items currently in the warehouse ready for allocation will appear here."
+   427→            />
+   428→          </TabsContent>
+   429→          <TabsContent value="allocated">
+   430→            <StockTable
+   431→              items={filtered}
+   432→              countries={countries}
+   433→              onDetail={setDetailItem}
+   434→              onMarkDamaged={markDamaged}
+   435→              onMarkInStock={markInStock}
+   436→              search={search}
+   437→              setSearch={setSearch}
+   438→              countryFilter={countryFilter}
+   439→              setCountryFilter={setCountryFilter}
+   440→              typeFilter={typeFilter}
+   441→              setTypeFilter={setTypeFilter}
+   442→              filterableCountries={filterableCountries}
+   443→              isSuperAdmin={isSuperAdmin}
+   444→              emptyTitle="No allocated items"
+   445→              emptyDescription="Items currently allocated to merchants will appear here."
+   446→            />
+   447→          </TabsContent>
+   448→          <TabsContent value="damaged">
+   449→            <StockTable
+   450→              items={filtered}
+   451→              countries={countries}
+   452→              onDetail={setDetailItem}
+   453→              onMarkDamaged={markDamaged}
+   454→              onMarkInStock={markInStock}
+   455→              search={search}
+   456→              setSearch={setSearch}
+   457→              countryFilter={countryFilter}
+   458→              setCountryFilter={setCountryFilter}
+   459→              typeFilter={typeFilter}
+   460→              setTypeFilter={setTypeFilter}
+   461→              filterableCountries={filterableCountries}
+   462→              isSuperAdmin={isSuperAdmin}
+   463→              emptyTitle="No damaged items"
+   464→              emptyDescription="Items marked damaged or lost will appear here."
+   465→            />
+   466→          </TabsContent>
+   467→        </Tabs>
+   468→      </ViewContainer>
+   469→
+   470→      {/* Detail Dialog */}
+   471→      <StockDetailDialog
+   472→        item={detailItem}
+   473→        countryName={countryName}
+   474→        onOpenChange={(o) => !o && setDetailItem(null)}
+   475→      />
+   476→
+   477→      {/* Add to Stock Dialog */}
+   478→      <AddToStockDialog
+   479→        key={addKey}
+   480→        open={addOpen}
+   481→        onOpenChange={setAddOpen}
+   482→        countries={filterableCountries}
+   483→        existingSerials={existingSerials}
+   484→        onCreate={(newItem) => {
+   485→          const a = actor();
+   486→          if (!a) return;
+   487→          adminData.createStockItem(newItem);
+   488→          logAudit(a, "stock.create", "stock_item", newItem.id, {
+   489→            countryCode: newItem.countryCode,
+   490→            afterValue: `${newItem.type} · ${newItem.model} · ${newItem.serialNumber}`,
+   491→          });
+   492→          toast.success(`Added to stock: ${newItem.serialNumber}`, {
+   493→            description: `${newItem.type === "physical_terminal" ? "Terminal" : "Card"} · ${newItem.model} · ${countryName(newItem.countryCode)}`,
+   494→          });
+   495→          setAddOpen(false);
+   496→        }}
+   497→      />
+   498→
+   499→      <SonnerToaster richColors closeButton position="bottom-right" />
+   500→    </>
+   501→  );
+   502→}
+   503→
+   504→/* ============================== Stock Table ============================== */
+   505→
+   506→interface StockTableProps {
+   507→  items: StockItem[];
+   508→  countries: CountryConfig[];
+   509→  onDetail: (item: StockItem) => void;
+   510→  onMarkDamaged: (item: StockItem) => void;
+   511→  onMarkInStock: (item: StockItem) => void;
+   512→  search: string;
+   513→  setSearch: (s: string) => void;
+   514→  countryFilter: string;
+   515→  setCountryFilter: (s: string) => void;
+   516→  typeFilter: string;
+   517→  setTypeFilter: (s: string) => void;
+   518→  filterableCountries: CountryConfig[];
+   519→  isSuperAdmin: boolean;
+   520→  emptyTitle: string;
+   521→  emptyDescription: string;
+   522→}
+   523→
+   524→function StockTable({
+   525→  items,
+   526→  countries,
+   527→  onDetail,
+   528→  onMarkDamaged,
+   529→  onMarkInStock,
+   530→  search,
+   531→  setSearch,
+   532→  countryFilter,
+   533→  setCountryFilter,
+   534→  typeFilter,
+   535→  setTypeFilter,
+   536→  filterableCountries,
+   537→  isSuperAdmin,
+   538→  emptyTitle,
+   539→  emptyDescription,
+   540→}: StockTableProps) {
+   541→  function countryName(code: string): string {
+   542→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   543→  }
+   544→
+   545→  return (
+   546→    <Card>
+   547→      <CardHeader className="pb-3">
+   548→        <CardTitle className="text-sm flex items-center gap-2">
+   549→          <Boxes className="size-4 text-emerald-600" />
+   550→          Stock Items
+   551→          <Badge variant="secondary" className="text-[10px]">
+   552→            {items.length}
+   553→          </Badge>
+   554→        </CardTitle>
+   555→        <div className="flex flex-wrap items-center gap-2 pt-1">
+   556→          <div className="relative">
+   557→            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   558→            <Input
+   559→              placeholder="Search serial, model, merchant..."
+   560→              value={search}
+   561→              onChange={(e) => setSearch(e.target.value)}
+   562→              className="pl-7 h-8 w-56 text-xs"
+   563→            />
+   564→          </div>
+   565→          <Select value={countryFilter} onValueChange={setCountryFilter}>
+   566→            <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   567→              <Filter className="size-3 mr-1 text-muted-foreground" />
+   568→              <SelectValue placeholder="Country" />
+   569→            </SelectTrigger>
+   570→            <SelectContent>
+   571→              <SelectItem value="all">All countries</SelectItem>
+   572→              {filterableCountries.map((c) => (
+   573→                <SelectItem key={c.countryCode} value={c.countryCode}>
+   574→                  {c.countryCode} · {c.countryName}
+   575→                </SelectItem>
+   576→              ))}
+   577→            </SelectContent>
+   578→          </Select>
+   579→          <Select value={typeFilter} onValueChange={setTypeFilter}>
+   580→            <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   581→              <SelectValue placeholder="Type" />
+   582→            </SelectTrigger>
+   583→            <SelectContent>
+   584→              <SelectItem value="all">All types</SelectItem>
+   585→              <SelectItem value="physical_terminal">Terminal</SelectItem>
+   586→              <SelectItem value="physical_card">Card</SelectItem>
+   587→            </SelectContent>
+   588→          </Select>
+   589→        </div>
+   590→      </CardHeader>
+   591→      <CardContent className="p-0">
+   592→        {items.length === 0 ? (
+   593→          <EmptyState icon={Boxes} title={emptyTitle} description={emptyDescription} />
+   594→        ) : (
+   595→          <div
+   596→            className={
+   597→              "max-h-[60vh] overflow-auto " +
+   598→              "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+   599→              "[&::-webkit-scrollbar-thumb]:rounded-full " +
+   600→              "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+   601→              "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+   602→            }
+   603→          >
+   604→            <Table>
+   605→              <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   606→                <TableRow>
+   607→                  <TableHead className="pl-4">Serial Number</TableHead>
+   608→                  <TableHead>Type</TableHead>
+   609→                  <TableHead>Model</TableHead>
+   610→                  <TableHead>Country</TableHead>
+   611→                  <TableHead>Status</TableHead>
+   612→                  <TableHead>Allocated To</TableHead>
+   613→                  <TableHead className="hidden md:table-cell">Allocated At</TableHead>
+   614→                  <TableHead className="hidden lg:table-cell">Notes</TableHead>
+   615→                  <TableHead className="text-right pr-3">Actions</TableHead>
+   616→                </TableRow>
+   617→              </TableHeader>
+   618→              <TableBody>
+   619→                {items.map((item) => {
+   620→                  const statusStyle = STOCK_STATUS_STYLES[item.status];
+   621→                  const typeMeta = TYPE_LABELS[item.type];
+   622→                  const TypeIcon = typeMeta.icon;
+   623→                  return (
+   624→                    <TableRow key={item.id}>
+   625→                      <TableCell className="pl-4 font-mono text-xs">
+   626→                        {item.serialNumber}
+   627→                      </TableCell>
+   628→                      <TableCell>
+   629→                        <Badge
+   630→                          variant="outline"
+   631→                          className={cn(
+   632→                            "text-[10px] capitalize",
+   633→                            item.type === "physical_terminal"
+   634→                              ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+   635→                              : "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800",
+   636→                          )}
+   637→                        >
+   638→                          <TypeIcon className="size-2.5 mr-0.5" />
+   639→                          {typeMeta.label}
+   640→                        </Badge>
+   641→                      </TableCell>
+   642→                      <TableCell className="text-xs">{item.model}</TableCell>
+   643→                      <TableCell className="text-xs">
+   644→                        <span className="font-mono">{item.countryCode}</span>
+   645→                        <span className="text-muted-foreground ml-1 hidden xl:inline">
+   646→                          {countryName(item.countryCode)}
+   647→                        </span>
+   648→                      </TableCell>
+   649→                      <TableCell>
+   650→                        <Badge
+   651→                          variant="secondary"
+   652→                          className={cn("text-[10px]", statusStyle.className)}
+   653→                        >
+   654→                          {statusStyle.label}
+   655→                        </Badge>
+   656→                      </TableCell>
+   657→                      <TableCell className="text-xs">
+   658→                        {item.allocatedToName ? (
+   659→                          <span className="inline-flex items-center gap-1">
+   660→                            <Building2 className="size-3 text-emerald-600" />
+   661→                            {item.allocatedToName}
+   662→                          </span>
+   663→                        ) : (
+   664→                          <span className="text-muted-foreground">—</span>
+   665→                        )}
+   666→                      </TableCell>
+   667→                      <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+   668→                        {item.allocatedAt ? timeAgo(item.allocatedAt) : "—"}
+   669→                      </TableCell>
+   670→                      <TableCell className="hidden lg:table-cell max-w-[200px] text-xs text-muted-foreground line-clamp-2">
+   671→                        {item.notes || "—"}
+   672→                      </TableCell>
+   673→                      <TableCell className="text-right pr-3">
+   674→                        <DropdownMenu>
+   675→                          <DropdownMenuTrigger asChild>
+   676→                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+   677→                              <MoreHorizontal className="size-3.5" />
+   678→                            </Button>
+   679→                          </DropdownMenuTrigger>
+   680→                          <DropdownMenuContent align="end" className="w-44">
+   681→                            <DropdownMenuLabel className="text-xs font-mono">
+   682→                              {item.serialNumber}
+   683→                            </DropdownMenuLabel>
+   684→                            <DropdownMenuSeparator />
+   685→                            <DropdownMenuItem onClick={() => onDetail(item)}>
+   686→                              <Eye className="size-3.5 mr-2" /> View details
+   687→                            </DropdownMenuItem>
+   688→                            {item.status !== "damaged" &&
+   689→                              item.status !== "lost" && (
+   690→                                <DropdownMenuItem
+   691→                                  onClick={() => onMarkDamaged(item)}
+   692→                                  className="text-red-700 dark:text-red-300 focus:text-red-700"
+   693→                                >
+   694→                                  <PackageX className="size-3.5 mr-2" /> Mark damaged
+   695→                                </DropdownMenuItem>
+   696→                              )}
+   697→                            {item.status !== "in_stock" && (
+   698→                              <DropdownMenuItem
+   699→                                onClick={() => onMarkInStock(item)}
+   700→                                className="text-emerald-700 dark:text-emerald-300 focus:text-emerald-700"
+   701→                              >
+   702→                                <PackageCheck className="size-3.5 mr-2" /> Mark in stock
+   703→                              </DropdownMenuItem>
+   704→                            )}
+   705→                          </DropdownMenuContent>
+   706→                        </DropdownMenu>
+   707→                      </TableCell>
+   708→                    </TableRow>
+   709→                  );
+   710→                })}
+   711→              </TableBody>
+   712→            </Table>
+   713→          </div>
+   714→        )}
+   715→      </CardContent>
+   716→    </Card>
+   717→  );
+   718→}
+   719→
+   720→/* ============================ Detail Dialog ============================ */
+   721→
+   722→function StockDetailDialog({
+   723→  item,
+   724→  countryName,
+   725→  onOpenChange,
+   726→}: {
+   727→  item: StockItem | null;
+   728→  countryName: (code: string) => string;
+   729→  onOpenChange: (open: boolean) => void;
+   730→}) {
+   731→  if (!item) return null;
+   732→  const statusStyle = STOCK_STATUS_STYLES[item.status];
+   733→  const typeMeta = TYPE_LABELS[item.type];
+   734→  const TypeIcon = typeMeta.icon;
+   735→
+   736→  return (
+   737→    <Dialog open={!!item} onOpenChange={onOpenChange}>
+   738→      <DialogContent className="sm:max-w-lg">
+   739→        <DialogHeader>
+   740→          <DialogTitle className="flex items-center gap-2 text-base">
+   741→            <Boxes className="size-5 text-emerald-600" />
+   742→            Stock Item Detail
+   743→          </DialogTitle>
+   744→          <DialogDescription className="font-mono text-[11px]">
+   745→            {item.id}
+   746→          </DialogDescription>
+   747→        </DialogHeader>
+   748→
+   749→        <div className="space-y-3 py-2">
+   750→          {/* Header chip */}
+   751→          <div className="flex flex-wrap items-center gap-2">
+   752→            <Badge
+   753→              variant="outline"
+   754→              className={cn(
+   755→                "text-[10px] capitalize",
+   756→                item.type === "physical_terminal"
+   757→                  ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+   758→                  : "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800",
+   759→              )}
+   760→            >
+   761→              <TypeIcon className="size-2.5 mr-0.5" />
+   762→              {typeMeta.label}
+   763→            </Badge>
+   764→            <Badge
+   765→              variant="secondary"
+   766→              className={cn("text-[10px]", statusStyle.className)}
+   767→            >
+   768→              {statusStyle.label}
+   769→            </Badge>
+   770→          </div>
+   771→
+   772→          {/* Detail rows */}
+   773→          <div className="rounded-md border divide-y">
+   774→            <DetailRow label="Serial Number" value={<span className="font-mono text-xs">{item.serialNumber}</span>} />
+   775→            <DetailRow label="Model" value={<span className="text-sm">{item.model}</span>} />
+   776→            <DetailRow
+   777→              label="Country"
+   778→              value={
+   779→                <span className="text-sm">
+   780→                  <span className="font-mono">{item.countryCode}</span>
+   781→                  <span className="text-muted-foreground ml-1">
+   782→                    · {countryName(item.countryCode)}
+   783→                  </span>
+   784→                </span>
+   785→              }
+   786→            />
+   787→            <DetailRow
+   788→              label="Allocated To"
+   789→              value={
+   790→                item.allocatedToName ? (
+   791→                  <span className="text-sm inline-flex items-center gap-1">
+   792→                    <Building2 className="size-3 text-emerald-600" />
+   793→                    {item.allocatedToName}
+   794→                  </span>
+   795→                ) : (
+   796→                  <span className="text-xs text-muted-foreground">— not allocated —</span>
+   797→                )
+   798→              }
+   799→            />
+   800→            {item.allocatedAt && (
+   801→              <DetailRow
+   802→                label="Allocated At"
+   803→                value={<span className="text-xs">{formatDateTime(item.allocatedAt)}</span>}
+   804→              />
+   805→            )}
+   806→            {item.shippedAt && (
+   807→              <DetailRow
+   808→                label="Shipped At"
+   809→                value={<span className="text-xs">{formatDateTime(item.shippedAt)}</span>}
+   810→              />
+   811→            )}
+   812→            {item.deliveredAt && (
+   813→              <DetailRow
+   814→                label="Delivered At"
+   815→                value={<span className="text-xs">{formatDateTime(item.deliveredAt)}</span>}
+   816→              />
+   817→            )}
+   818→            <DetailRow
+   819→              label="Created At"
+   820→              value={<span className="text-xs">{formatDateTime(item.createdAt)}</span>}
+   821→            />
+   822→            <DetailRow
+   823→              label="Last Updated"
+   824→              value={<span className="text-xs">{formatDateTime(item.updatedAt)}</span>}
+   825→            />
+   826→          </div>
+   827→
+   828→          {/* Notes */}
+   829→          {item.notes && (
+   830→            <div>
+   831→              <div className="text-xs font-medium text-muted-foreground uppercase mb-1">
+   832→                Notes
+   833→              </div>
+   834→              <p className="text-sm bg-muted/40 border rounded-md p-3">
+   835→                {item.notes}
+   836→              </p>
+   837→            </div>
+   838→          )}
+   839→
+   840→          {/* Pricing reminder */}
+   841→          <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-2.5 text-[11px] text-emerald-900 dark:text-emerald-200">
+   842→            {item.type === "physical_terminal" ? (
+   843→              <span>
+   844→                <strong>Free provision:</strong> physical terminals are provided
+   845→                to merchants at no cost. No purchase or rental fee applies.
+   846→              </span>
+   847→            ) : (
+   848→              <span>
+   849→                <strong>Issuance fee applies:</strong> physical cards carry an
+   850→                issuance fee charged to the consumer.
+   851→              </span>
+   852→            )}
+   853→          </div>
+   854→        </div>
+   855→
+   856→        <DialogFooter>
+   857→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+   858→            Close
+   859→          </Button>
+   860→        </DialogFooter>
+   861→      </DialogContent>
+   862→    </Dialog>
+   863→  );
+   864→}
+   865→
+   866→function DetailRow({
+   867→  label,
+   868→  value,
+   869→}: {
+   870→  label: string;
+   871→  value: React.ReactNode;
+   872→}) {
+   873→  return (
+   874→    <div className="flex items-start justify-between gap-3 py-1.5 px-3">
+   875→      <span className="text-xs text-muted-foreground uppercase tracking-wide">
+   876→        {label}
+   877→      </span>
+   878→      <span className="text-sm text-right min-w-0">{value}</span>
+   879→    </div>
+   880→  );
+   881→}
+   882→
+   883→/* ============================ Add to Stock Dialog ============================ */
+   884→
+   885→function AddToStockDialog({
+   886→  open,
+   887→  onOpenChange,
+   888→  countries,
+   889→  existingSerials,
+   890→  onCreate,
+   891→}: {
+   892→  open: boolean;
+   893→  onOpenChange: (open: boolean) => void;
+   894→  countries: CountryConfig[];
+   895→  existingSerials: Set<string>;
+   896→  onCreate: (item: StockItem) => void;
+   897→}) {
+   898→  const [serialNumber, setSerialNumber] = useState("");
+   899→  const [type, setType] = useState<StockItemType>("physical_terminal");
+   900→  const [model, setModel] = useState("");
+   901→  const [countryCode, setCountryCode] = useState<string>(
+   902→    () => countries[0]?.countryCode ?? "",
+   903→  );
+   904→  const [notes, setNotes] = useState("");
+   905→
+   906→  const serialError = useMemo(() => {
+   907→    if (!serialNumber.trim()) return null;
+   908→    if (existingSerials.has(serialNumber.trim().toLowerCase())) {
+   909→      return "Serial number already exists in stock.";
+   910→    }
+   911→    return null;
+   912→  }, [serialNumber, existingSerials]);
+   913→
+   914→  const canSubmit =
+   915→    serialNumber.trim() &&
+   916→    model.trim() &&
+   917→    countryCode &&
+   918→    !serialError;
+   919→
+   920→  function handleSubmit() {
+   921→    if (!canSubmit) return;
+   922→    const now = Date.now();
+   923→    const newItem: StockItem = {
+   924→      id: `stk_${now}_${Math.random().toString(36).slice(2, 8)}`,
+   925→      serialNumber: serialNumber.trim(),
+   926→      type,
+   927→      model: model.trim(),
+   928→      countryCode,
+   929→      status: "in_stock",
+   930→      allocatedToId: null,
+   931→      allocatedToName: null,
+   932→      allocatedAt: null,
+   933→      shippedAt: null,
+   934→      deliveredAt: null,
+   935→      notes: notes.trim(),
+   936→      createdAt: now,
+   937→      updatedAt: now,
+   938→    };
+   939→    onCreate(newItem);
+   940→  }
+   941→
+   942→  return (
+   943→    <Dialog open={open} onOpenChange={onOpenChange}>
+   944→      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+   945→        <DialogHeader>
+   946→          <DialogTitle className="flex items-center gap-2">
+   947→            <Plus className="size-5 text-emerald-600" />
+   948→            Add to Stock
+   949→          </DialogTitle>
+   950→          <DialogDescription>
+   951→            Register a new physical item in Faya&apos;s warehouse. Items enter
+   952→            as <span className="font-medium text-emerald-700 dark:text-emerald-400">In Stock</span>{" "}
+   953→            and are allocated when a merchant&apos;s terminal request is fulfilled.
+   954→          </DialogDescription>
+   955→        </DialogHeader>
+   956→
+   957→        <div className="space-y-4 py-2">
+   958→          {/* Type selector */}
+   959→          <div className="space-y-2">
+   960→            <Label className="text-xs font-medium">Item type</Label>
+   961→            <RadioGroup
+   962→              value={type}
+   963→              onValueChange={(v) => setType(v as StockItemType)}
+   964→              className="grid grid-cols-1 sm:grid-cols-2 gap-2"
+   965→            >
+   966→              <label
+   967→                htmlFor="opt_terminal"
+   968→                className={cn(
+   969→                  "flex items-start gap-2 rounded-md border p-3 cursor-pointer transition-colors",
+   970→                  type === "physical_terminal"
+   971→                    ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+   972→                    : "border-input hover:bg-muted/40",
+   973→                )}
+   974→              >
+   975→                <RadioGroupItem
+   976→                  value="physical_terminal"
+   977→                  id="opt_terminal"
+   978→                  className="mt-0.5"
+   979→                />
+   980→                <div className="space-y-0.5">
+   981→                  <div className="text-sm font-medium flex items-center gap-1.5">
+   982→                    <Smartphone className="size-3.5 text-emerald-600" />
+   983→                    Physical Terminal
+   984→                  </div>
+   985→                  <div className="text-[11px] text-muted-foreground">
+   986→                    Card POS device (e.g. Ingenico Move 2500). Provided free —
+   987→                    no purchase or rental fees.
+   988→                  </div>
+   989→                </div>
+   990→              </label>
+   991→              <label
+   992→                htmlFor="opt_card"
+   993→                className={cn(
+   994→                  "flex items-start gap-2 rounded-md border p-3 cursor-pointer transition-colors",
+   995→                  type === "physical_card"
+   996→                    ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+   997→                    : "border-input hover:bg-muted/40",
+   998→                )}
+   999→              >
+  1000→                <RadioGroupItem
+  1001→                  value="physical_card"
+  1002→                  id="opt_card"
+  1003→                  className="mt-0.5"
+  1004→                />
+  1005→                <div className="space-y-0.5">
+  1006→                  <div className="text-sm font-medium flex items-center gap-1.5">
+  1007→                    <CreditCard className="size-3.5 text-emerald-600" />
+  1008→                    Physical Card
+  1009→                  </div>
+  1010→                  <div className="text-[11px] text-muted-foreground">
+  1011→                    Embossed/plastic card. Issuance fee applies — charged to the
+  1012→                    consumer at order time.
+  1013→                  </div>
+  1014→                </div>
+  1015→              </label>
+  1016→            </RadioGroup>
+  1017→          </div>
+  1018→
+  1019→          {/* Serial number */}
+  1020→          <div className="space-y-1.5">
+  1021→            <Label className="text-xs font-medium">
+  1022→              Serial number <span className="text-red-500">*</span>
+  1023→            </Label>
+  1024→            <Input
+  1025→              value={serialNumber}
+  1026→              onChange={(e) => setSerialNumber(e.target.value)}
+  1027→              placeholder="e.g. ING-2500-A4F92K"
+  1028→              className="h-9 text-sm font-mono"
+  1029→            />
+  1030→            {serialError && (
+  1031→              <p className="text-[11px] text-red-600 dark:text-red-400 flex items-center gap-1">
+  1032→                <XCircle className="size-3" /> {serialError}
+  1033→              </p>
+  1034→            )}
+  1035→          </div>
+  1036→
+  1037→          {/* Model */}
+  1038→          <div className="space-y-1.5">
+  1039→            <Label className="text-xs font-medium">
+  1040→              Model <span className="text-red-500">*</span>
+  1041→            </Label>
+  1042→            <Input
+  1043→              value={model}
+  1044→              onChange={(e) => setModel(e.target.value)}
+  1045→              placeholder={
+  1046→                type === "physical_terminal"
+  1047→                  ? "e.g. Ingenico Move 2500"
+  1048→                  : "e.g. Visa Physical Card v2"
+  1049→              }
+  1050→              className="h-9 text-sm"
+  1051→            />
+  1052→          </div>
+  1053→
+  1054→          {/* Country */}
+  1055→          <div className="space-y-1.5">
+  1056→            <Label className="text-xs font-medium">
+  1057→              Warehouse country <span className="text-red-500">*</span>
+  1058→            </Label>
+  1059→            <Select value={countryCode} onValueChange={setCountryCode}>
+  1060→              <SelectTrigger size="sm" className="w-full text-sm h-9">
+  1061→                <SelectValue placeholder="Select country" />
+  1062→              </SelectTrigger>
+  1063→              <SelectContent>
+  1064→                {countries.map((c) => (
+  1065→                  <SelectItem key={c.countryCode} value={c.countryCode}>
+  1066→                    {c.countryCode} · {c.countryName}
+  1067→                  </SelectItem>
+  1068→                ))}
+  1069→              </SelectContent>
+  1070→            </Select>
+  1071→          </div>
+  1072→
+  1073→          {/* Notes */}
+  1074→          <div className="space-y-1.5">
+  1075→            <Label className="text-xs font-medium">Notes (optional)</Label>
+  1076→            <Textarea
+  1077→              value={notes}
+  1078→              onChange={(e) => setNotes(e.target.value)}
+  1079→              placeholder="e.g. New shipment arrived 2025-03 batch. QA-tested."
+  1080→              className="text-sm min-h-[70px]"
+  1081→            />
+  1082→          </div>
+  1083→        </div>
+  1084→
+  1085→        <DialogFooter className="gap-2">
+  1086→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+  1087→            Cancel
+  1088→          </Button>
+  1089→          <Button
+  1090→            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1091→            disabled={!canSubmit}
+  1092→            onClick={handleSubmit}
+  1093→          >
+  1094→            <Plus className="size-4 mr-1" /> Add to stock
+  1095→          </Button>
+  1096→        </DialogFooter>
+  1097→      </DialogContent>
+  1098→    </Dialog>
+  1099→  );
+  1100→}
+  1101→
