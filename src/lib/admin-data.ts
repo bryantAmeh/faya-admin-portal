@@ -187,80 +187,13 @@ async function checkFirestoreAccess(): Promise<boolean> {
 let seedPromise: Promise<void> | null = null;
 
 /**
- * Seed all reference collections if they are empty.
- * In local mode, this is a no-op (the local store seeds itself).
+ * This function is a no-op. Data comes from the real apps (Faya Pay, Faya
+ * Merchant, Faya POS) — the admin portal does NOT seed mock data.
  */
 export async function ensureSeedData(): Promise<void> {
-  // Always run the access check first
-  const ok = await checkFirestoreAccess();
-  if (!ok) {
-    // Local mode — store self-seeds from SEED_* on first read
-    return;
-  }
-  if (seedPromise) return seedPromise;
-  seedPromise = (async () => {
-    try {
-      const d = db();
-      if (!d) return;
-      const metaSnap = await getDocs(collection(d, COLLECTIONS.meta));
-      const existing = metaSnap.docs.find((doc) => doc.id === "seed_status");
-      if (existing?.data()?.seeded) return;
-
-      const seedBatch = async <T extends { id: string }>(
-        colName: string,
-        items: T[],
-      ) => {
-        const batch = writeBatch(d);
-        for (const item of items) {
-          const ref = doc(d, colName, item.id);
-          batch.set(ref, { ...item, _serverTime: serverTimestamp() }, { merge: false });
-        }
-        await batch.commit();
-      };
-
-      await seedBatch(COLLECTIONS.departments, SEED_DEPARTMENTS);
-      await seedBatch(COLLECTIONS.roles, SEED_ROLES);
-      await seedBatch(COLLECTIONS.permissions, SEED_PERMISSIONS);
-      await seedBatch(COLLECTIONS.countries, SEED_COUNTRIES);
-      await seedBatch(COLLECTIONS.staff, SEED_STAFF);
-      await seedBatch(COLLECTIONS.kycCases, SEED_KYC_CASES);
-      await seedBatch(COLLECTIONS.kybCases, SEED_KYB_CASES);
-      await seedBatch(COLLECTIONS.fraudAlerts, SEED_FRAUD_ALERTS);
-      await seedBatch(COLLECTIONS.settlements, SEED_SETTLEMENTS);
-      await seedBatch(COLLECTIONS.tickets, SEED_TICKETS);
-      await seedBatch(COLLECTIONS.disputes, SEED_DISPUTES);
-      await seedBatch(COLLECTIONS.terminals, SEED_TERMINALS);
-      await seedBatch(COLLECTIONS.auditLogs, SEED_AUDIT_LOGS);
-      await seedBatch(COLLECTIONS.approvals, SEED_APPROVALS);
-      await seedBatch(COLLECTIONS.merchants, SEED_MERCHANTS);
-      await seedBatch(COLLECTIONS.consumers, SEED_CONSUMERS);
-      await seedBatch(COLLECTIONS.posStaff, SEED_POS_STAFF);
-      await seedBatch(COLLECTIONS.cards, SEED_CARDS);
-      await seedBatch(COLLECTIONS.wallets, SEED_WALLETS);
-      await seedBatch(COLLECTIONS.transactions, SEED_TRANSACTIONS);
-      await seedBatch(COLLECTIONS.documents, SEED_DOCUMENTS);
-      await seedBatch(COLLECTIONS.policies, SEED_POLICIES);
-      await seedBatch(COLLECTIONS.appContent, SEED_APP_CONTENT);
-      await seedBatch(COLLECTIONS.notifications, SEED_NOTIFICATIONS);
-      await seedBatch(COLLECTIONS.fees, SEED_FEES);
-      await seedBatch(COLLECTIONS.limits, SEED_LIMITS);
-      await seedBatch(COLLECTIONS.providerLogs, SEED_PROVIDER_LOGS);
-      await seedBatch(COLLECTIONS.webhookLogs, SEED_WEBHOOK_LOGS);
-      await seedBatch(COLLECTIONS.posDeviceRequests, SEED_POS_DEVICE_REQUESTS);
-      await seedBatch(COLLECTIONS.stock, SEED_STOCK_ITEMS);
-      await seedBatch(COLLECTIONS.stockOrders, SEED_STOCK_ORDERS);
-
-      await setDoc(doc(d, COLLECTIONS.meta, "seed_status"), {
-        seeded: true,
-        seededAt: serverTimestamp(),
-      });
-    } catch (e) {
-      seedPromise = null;
-      console.error("[ensureSeedData] failed:", e);
-      throw e;
-    }
-  })();
-  return seedPromise;
+  // Intentionally empty — data is created by the apps, not the admin portal.
+  // Just check Firestore access so the auth hook can proceed.
+  await checkFirestoreAccess();
 }
 
 /* ----------------------------- Generic helpers ---------------------------- */
