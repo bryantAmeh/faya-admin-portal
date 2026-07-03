@@ -91,6 +91,7 @@ import {
   Phone,
   MapPin,
   User,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/portal/view-helpers";
@@ -1530,11 +1531,16 @@ function TerminalsTab({ items }: { items: Terminal[] }) {
 
 /* ============================ TAB: POS Requests ============================ */
 
-function PosRequestsTab({ items }: { items: PosDeviceRequest[] }) {
+function PosRequestsTab({
+  items,
+}: {
+  items: PosDeviceRequest[];
+}) {
   const { staff } = useAuth();
   const [declineTarget, setDeclineTarget] = useState<PosDeviceRequest | null>(null);
   const [declineReason, setDeclineReason] = useState("");
 
+  /* --------------------------- Audit actor --------------------- */
   function actor() {
     if (!staff) return null;
     return {
@@ -1615,10 +1621,21 @@ function PosRequestsTab({ items }: { items: PosDeviceRequest[] }) {
     setDeclineReason("");
   }
 
-  if (items.length === 0) return <TabEmptyState icon={Smartphone} label="POS device requests" />;
+  if (items.length === 0) {
+    return (
+      <>
+        <PosRequestsInfoBanner />
+        <TabEmptyState icon={Smartphone} label="POS device requests" />
+      </>
+    );
+  }
 
   return (
     <>
+      <PosRequestsInfoBanner />
+      <div className="text-xs text-muted-foreground pb-1">
+        {items.length} POS device request{items.length === 1 ? "" : "s"} on file
+      </div>
       <div className="space-y-2">
         {items.map((req) => {
           const d = req.deviceInfo;
@@ -1830,6 +1847,39 @@ function PosRequestsTab({ items }: { items: PosDeviceRequest[] }) {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * Info banner explaining the POS device binding flow.
+ * Device binding requests are created automatically when a merchant logs into
+ * the Faya POS app on a new device. Admin only approves / declines — never orders.
+ */
+function PosRequestsInfoBanner() {
+  return (
+    <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs mb-2">
+      <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+      <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed space-y-0.5">
+        <div>
+          <span className="font-medium">Device binding requests</span> are
+          created automatically when a merchant logs into the Faya POS app on a
+          new device. The POS app sends device capabilities (NFC, card reader,
+          swipe) — admin can only <span className="font-medium">approve</span> or{" "}
+          <span className="font-medium">decline</span>.
+        </div>
+        <div>
+          Devices with no payment method support (no NFC, no card reader, no
+          swipe) are <span className="font-medium">auto-declined</span>.
+        </div>
+        <div>
+          The <span className="font-medium">POS app is free</span> — merchants
+          download it at no cost. <span className="font-medium">Physical
+          terminals</span> are provided free (no rental).{" "}
+          <span className="font-medium">Physical cards</span> have an issuance
+          fee.
+        </div>
+      </div>
+    </div>
   );
 }
 

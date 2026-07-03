@@ -693,3 +693,32 @@ export interface PosDeviceRequest {
   createdAt: number;
   updatedAt: number;
 }
+
+/* ============================================================ */
+/* Stock / Inventory — physical items Faya provides to users    */
+/* ============================================================ */
+
+/**
+ * Physical items in Faya's inventory. Merchants request terminals
+ * (free provision — no purchase/rental). Physical cards cost money.
+ * The POS app and phone POS are free downloads — no stock needed.
+ */
+export type StockItemType = "physical_terminal" | "physical_card";
+export type StockItemStatus = "in_stock" | "allocated" | "shipped" | "delivered" | "damaged" | "lost";
+
+export interface StockItem {
+  id: string;
+  serialNumber: string;
+  type: StockItemType;
+  model: string; // e.g. "Ingenico Move 2500", "Visa Virtual Card"
+  countryCode: string; // which country warehouse
+  status: StockItemStatus;
+  allocatedToId: string | null; // merchant ID if allocated
+  allocatedToName: string | null;
+  allocatedAt: number | null;
+  shippedAt: number | null;
+  deliveredAt: number | null;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+}

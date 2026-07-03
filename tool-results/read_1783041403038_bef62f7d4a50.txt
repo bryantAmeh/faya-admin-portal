@@ -1,0 +1,741 @@
+     1→# Faya POS — Secure Payment Collection
+     2→
+     3→> A mobile-first Point of Sale application for collecting NFC, chip, and swipe card payments. Built for merchants who need a secure, compliant, and simple way to accept card payments on phones and physical terminals.
+     4→
+     5→---
+     6→
+     7→## Table of Contents
+     8→
+     9→- [Overview](#overview)
+    10→- [How It Works](#how-it-works)
+    11→- [Device Types & Capabilities](#device-types--capabilities)
+    12→- [App Flow](#app-flow)
+    13→- [Architecture](#architecture)
+    14→- [Tech Stack](#tech-stack)
+    15→- [Getting Started](#getting-started)
+    16→- [Project Structure](#project-structure)
+    17→- [Database Schema](#database-schema)
+    18→- [API Reference](#api-reference)
+    19→- [State Management](#state-management)
+    20→- [Screens](#screens)
+    21→- [Demo Credentials](#demo-credentials)
+    22→- [Business Rules](#business-rules)
+    23→- [Security Model](#security-model)
+    24→
+    25→---
+    26→
+    27→## Overview
+    28→
+    29→Faya POS is the payment-taking app for the Faya ecosystem. It is **strictly a mobile application** — designed for phones and physical POS terminals. Merchants bind the app to their business account, admins approve devices, and staff use unique PIN codes to process payments.
+    30→
+    31→Key principles:
+    32→
+    33→- **No lock screen** — The POS is always visible. Staff enter their PIN only when they need to do something (collect payment, refund, switch staff).
+    34→- **Auto-detect payment method** — No manual method selection. The system detects NFC, chip, or swipe automatically based on device capabilities.
+    35→- **Every transaction is tied to staff** — All payments and refunds are logged with the staff member who processed them, and sent to the merchant.
+    36→- **Device binding requires admin approval** — A merchant can bind a device, but it only becomes active after an admin approves it from the Merchant App.
+    37→- **Device check is mandatory** — If the device fails capability checks (no NFC, no network), the merchant cannot log in at all.
+    38→
+    39→---
+    40→
+    41→## How It Works
+    42→
+    43→```
+    44→┌─────────────────────────────────────────────────────────┐
+    45→│                     FAYA POS APP                        │
+    46→│                                                         │
+    47→│  1. Install & Open                                      │
+    48→│     └─► Device Check (NFC, network, integrity)          │
+    49→│         ├─ FAIL → Blocked (cannot login)                │
+    50→│         └─ PASS → Merchant Login                        │
+    51→│                                                         │
+    52→│  2. Merchant Login                                      │
+    53→│     └─► Email/Phone + Password                         │
+    54→│         └─► Device Binding Confirmation                  │
+    55→│             └─► Awaiting Admin Approval                  │
+    56→│                 ├─ PENDING → Wait (auto-polls 10s)       │
+    57→│                 ├─ APPROVED → POS Home                   │
+    58→│                 └─ REJECTED → Cannot proceed             │
+    59→│                                                         │
+    60→│  3. POS Home (always visible)                           │
+    61→│     └─► Enter amount on numpad                          │
+    62→│         └─► Tap "Pay"                                   │
+    63→│             ├─ Staff logged in? → Create txn → Card tap │
+    64→│             └─ No staff? → PIN modal → Verify → Card tap│
+    65→│                                                         │
+    66→│  4. Card Tap / NFC                                      │
+    67→│     └─► Auto-detects method (contactless/chip/swipe)    │
+    68→│         └─► Approved / Declined / Failed                │
+    69→│             └─► Receipt                                 │
+    70→│                                                         │
+    71→│  5. Staff Switching                                     │
+    72→│     └─► Tap staff name in header → Enter new PIN        │
+    73→│         └─► Overrides current staff (no disruption)     │
+    74→│     └─► Tap logout icon → Clears current staff          │
+    75→│                                                         │
+    76→└─────────────────────────────────────────────────────────┘
+    77→```
+    78→
+    79→---
+    80→
+    81→## Device Types & Capabilities
+    82→
+    83→The app performs **real system checks** to determine what the device can do:
+    84→
+    85→| Device Type | NFC | Chip Reader | Swipe Reader | How Determined |
+    86→|---|---|---|---|---|
+    87→| **Phone POS** | ✅ | ❌ | ❌ | Mobile device with NFC (phone's built-in NFC) |
+    88→| **Physical Terminal** | ✅ | ✅ | ✅ | Has 2+ of (NFC, chip, swipe) — typically via UA detection or capability count |
+    89→| **Faya NFC** | ✅ | ❌ | ❌ | Dedicated Faya NFC device |
+    90→
+    91→### Detection Logic
+    92→
+    93→1. Check for physical terminal User-Agent patterns (Ingenico, Verifone, PAX, etc.)
+    94→2. Check Web NFC API (`NDEFReader` in window)
+    95→3. Count available payment methods:
+    96→   - Only NFC + mobile → **Phone POS**
+    97→   - 2+ methods → **Physical Terminal**
+    98→   - Desktop browser demo → Simulates **Phone POS** with NFC
+    99→4. If no payment method available → **Device check fails** → Login blocked
+   100→
+   101→---
+   102→
+   103→## App Flow
+   104→
+   105→### Screen Navigation Map
+   106→
+   107→```
+   108→Splash
+   109→  │
+   110→  ▼
+   111→Device Check ─── FAIL ──► Device Check Failed (blocked)
+   112→  │
+   113→  PASS
+   114→  │
+   115→  ├── Device already bound & approved ──► Home (POS)
+   116→  ├── Device bound but not approved ──► Awaiting Approval
+   117→  └── New device ──► Merchant Login
+   118→                        │
+   119→                        ▼
+   120→                   Device Binding
+   121→                        │
+   122→                        ├── Already approved ──► Home (POS)
+   123→                        └── Needs approval ──► Awaiting Approval
+   124→                                                 │
+   125→                                                 ├── Approved ──► Home (POS)
+   126→                                                 └── Rejected ──► Cannot proceed
+   127→
+   128→Home (POS Terminal)
+   129→  ├── Pay (with staff) ──► Awaiting Card ──► Approved/Declined/Failed
+   130→  ├── Pay (no staff) ──► PIN Modal ──► Awaiting Card ──► ...
+   131→  ├── Tap staff name ──► PIN Modal (switch)
+   132→  ├── History ──► Transaction History ──► Transaction Detail ──► Refund
+   133→  ├── Device ──► Device Settings
+   134→  └── Help ──► Support
+   135→
+   136→Approved/Declined/Failed ──► Receipt ──► Home
+   137→```
+   138→
+   139→---
+   140→
+   141→## Architecture
+   142→
+   143→```
+   144→┌──────────────────────────────────────────────────┐
+   145→│                  Frontend (Next.js)               │
+   146→│                                                   │
+   147→│  ┌─────────────┐  ┌──────────┐  ┌─────────────┐ │
+   148→│  │   Screens    │  │  Zustand  │  │   Framer    │ │
+   149→│  │  (14 views)  │◄─┤  Store   │─►│   Motion    │ │
+   150→│  └──────┬──────┘  └────┬─────┘  └─────────────┘ │
+   151→│         │              │                          │
+   152→│         │    ┌─────────┴──────────┐              │
+   153→│         │    │  Device Detection  │              │
+   154→│         │    │  (NFC/Chip/Swipe)  │              │
+   155→│         │    └────────────────────┘              │
+   156→│         │                                        │
+   157→└─────────┼────────────────────────────────────────┘
+   158→          │
+   159→          ▼  REST API Calls
+   160→┌──────────────────────────────────────────────────┐
+   161→│                  API Routes                       │
+   162→│                                                   │
+   163→│  /api/pos/merchant/login    (POST)                │
+   164→│  /api/pos/auth/login        (POST)                │
+   165→│  /api/pos/auth/logout       (POST)                │
+   166→│  /api/pos/device/bind       (POST)                │
+   167→│  /api/pos/device/approve    (POST)                │
+   168→│  /api/pos/device/approval-status (GET)            │
+   169→│  /api/pos/transactions      (GET, POST)           │
+   170→│  /api/pos/transactions/:id  (GET)                 │
+   171→│  /api/pos/transactions/:id/finalize  (POST)       │
+   172→│  /api/pos/transactions/:id/cancel     (POST)      │
+   173→│  /api/pos/transactions/:id/refund-request (POST)  │
+   174→│  /api/pos/transactions/:id/receipt    (GET)       │
+   175→│  /api/pos/dashboard          (GET)                │
+   176→│  /api/pos/devices/:id/heartbeat   (POST)          │
+   177→│  /api/pos/devices/:id/status      (GET)           │
+   178→│  /api/pos/devices/:id/config      (GET)           │
+   179→│  /api/pos/shifts/*               (GET, POST)      │
+   180→│                                                   │
+   181→└────────────────┬─────────────────────────────────┘
+   182→                 │
+   183→                 ▼  Prisma Client
+   184→┌──────────────────────────────────────────────────┐
+   185→│               SQLite Database                     │
+   186→│                                                   │
+   187→│  Merchant ─┬─ Branch ─┬─ Staff                   │
+   188→│            │          ├─ PosDevice                │
+   189→│            │          ├─ Shift                    │
+   190→│            │          └─ Transaction ── Receipt   │
+   191→│            └─ PosDeviceEvent                      │
+   192→│                                                   │
+   193→└──────────────────────────────────────────────────┘
+   194→```
+   195→
+   196→---
+   197→
+   198→## Tech Stack
+   199→
+   200→| Layer | Technology | Purpose |
+   201→|---|---|---|
+   202→| **Framework** | Next.js 16 (App Router) | Full-stack React framework with API routes |
+   203→| **Language** | TypeScript 5 | Strict typing throughout |
+   204→| **Styling** | Tailwind CSS 4 | Utility-first CSS with mobile-first approach |
+   205→| **UI Components** | shadcn/ui (New York) | Pre-built accessible components |
+   206→| **Icons** | Lucide React | Consistent icon library |
+   207→| **Animations** | Framer Motion | Smooth screen transitions and micro-interactions |
+   208→| **State** | Zustand | Lightweight client-side state management |
+   209→| **Database** | Prisma ORM + SQLite | Type-safe database access |
+   210→| **Fonts** | Geist Sans / Geist Mono | Clean, modern typography |
+   211→
+   212→---
+   213→
+   214→## Getting Started
+   215→
+   216→### Prerequisites
+   217→
+   218→- Node.js 20.9+ or Bun runtime
+   219→- npm or bun package manager
+   220→
+   221→### Installation
+   222→
+   223→```bash
+   224→# Install dependencies
+   225→bun install
+   226→
+   227→# Set up the database
+   228→bun run db:push
+   229→
+   230→# Seed with demo data
+   231→bunx prisma db seed
+   232→
+   233→# Start the development server
+   234→bun run dev
+   235→```
+   236→
+   237→The app runs on **http://localhost:3000**.
+   238→
+   239→### Environment Variables
+   240→
+   241→Create a `.env` file in the project root:
+   242→
+   243→```env
+   244→DATABASE_URL=file:./db/custom.db
+   245→```
+   246→
+   247→### Useful Commands
+   248→
+   249→| Command | Description |
+   250→|---|---|
+   251→| `bun run dev` | Start development server on port 3000 |
+   252→| `bun run lint` | Run ESLint to check code quality |
+   253→| `bun run db:push` | Push Prisma schema to database |
+   254→| `bun run db:generate` | Generate Prisma client |
+   255→| `bun run db:migrate` | Run database migrations |
+   256→| `bun run db:reset` | Reset database and re-seed |
+   257→
+   258→---
+   259→
+   260→## Project Structure
+   261→
+   262→```
+   263→src/
+   264→├── app/
+   265→│   ├── layout.tsx              # Root layout (mobile shell, fonts, toaster)
+   266→│   ├── page.tsx                # Main entry — screen router
+   267→│   ├── globals.css             # Global styles, mobile CSS, safe areas
+   268→│   └── api/
+   269→│       └── pos/
+   270→│           ├── merchant/login/     # Merchant auth + device binding
+   271→│           ├── auth/login/         # Staff PIN verification
+   272→│           ├── auth/logout/        # Staff session end
+   273→│           ├── device/
+   274→│           │   ├── bind/           # Confirm device binding
+   275→│           │   ├── approve/        # Admin approves device
+   276→│           │   └── approval-status/# Check approval status (polling)
+   277→│           ├── transactions/
+   278→│           │   ├── route.ts        # List / Create transactions
+   279→│           │   └── [transactionId]/
+   280→│           │       ├── route.ts            # Get transaction detail
+   281→│           │       ├── finalize/           # Mark txn approved/declined/failed
+   282→│           │       ├── cancel/             # Cancel pending transaction
+   283→│           │       ├── refund-request/     # Submit refund request
+   284→│           │       └── receipt/            # Get receipt data
+   285→│           ├── dashboard/          # Today's stats
+   286→│           ├── devices/[deviceId]/
+   287→│           │   ├── heartbeat/      # Device heartbeat ping
+   288→│           │   ├── status/         # Device status check
+   289→│           │   └── config/         # Device configuration
+   290→│           └── shifts/             # Shift management
+   291→├── components/
+   292→│   ├── pos/                        # All POS screen components
+   293→│   │   ├── splash-screen.tsx
+   294→│   │   ├── device-check-screen.tsx
+   295→│   │   ├── merchant-login-screen.tsx
+   296→│   │   ├── device-binding-screen.tsx
+   297→│   │   ├── awaiting-approval-screen.tsx
+   298→│   │   ├── home-screen.tsx         # Main POS terminal
+   299→│   │   ├── awaiting-card-screen.tsx
+   300→│   │   ├── result-screens.tsx      # Approved/Declined/Failed/Pending
+   301→│   │   ├── receipt-screen.tsx
+   302→│   │   ├── transaction-history-screen.tsx
+   303→│   │   ├── transaction-detail-screen.tsx
+   304→│   │   ├── refund-request-screen.tsx
+   305→│   │   ├── device-settings-screen.tsx
+   306→│   │   └── support-screen.tsx
+   307→│   └── ui/                         # shadcn/ui components
+   308→├── hooks/
+   309→│   ├── use-mobile.ts               # Mobile breakpoint hook
+   310→│   └── use-toast.ts                # Toast notification hook
+   311→├── lib/
+   312→│   ├── pos-store.ts                # Zustand store + utility functions
+   313→│   ├── device-detection.ts         # NFC/chip/swipe capability detection
+   314→│   ├── db.ts                       # Prisma client singleton
+   315→│   └── utils.ts                    # General utilities (cn helper)
+   316→prisma/
+   317→├── schema.prisma                   # Database schema (8 models)
+   318→└── seed.ts                         # Demo data seeder
+   319→```
+   320→
+   321→---
+   322→
+   323→## Database Schema
+   324→
+   325→### Entity Relationship Diagram
+   326→
+   327→```
+   328→Merchant (1) ──── (N) Branch
+   329→    │                   │
+   330→    │                   ├── (N) Staff
+   331→    │                   ├── (N) PosDevice
+   332→    │                   ├── (N) Shift
+   333→    │                   └── (N) Transaction
+   334→    │
+   335→    ├── (N) PosDevice
+   336→    │       └── (N) PosDeviceEvent
+   337→    │
+   338→    └── (N) PosSession
+   339→
+   340→Staff (1) ──── (N) Transaction
+   341→       ──── (N) Shift
+   342→       ──── (N) PosSession
+   343→       ──── (N) PosDeviceEvent
+   344→
+   345→Transaction (1) ──── (0..1) Receipt
+   346→```
+   347→
+   348→### Models
+   349→
+   350→| Model | Key Fields | Description |
+   351→|---|---|---|
+   352→| **Merchant** | `tradingName`, `merchantCode`, `email`, `phone`, `status` | Business account that owns POS devices |
+   353→| **Branch** | `name`, `address`, `merchantId` | Physical location of the POS |
+   354→| **Staff** | `name`, `phone`, `pin`, `role` (cashier/manager/admin), `posPermission` | Employee who operates the POS |
+   355→| **PosDevice** | `deviceType`, `nfcAvailable`, `chipAvailable`, `swipeAvailable`, `approvalStatus`, `status`, `integrityStatus` | Bound device with capabilities |
+   356→| **PosSession** | `staffId`, `deviceId`, `token`, `startedAt`, `endedAt` | Active staff session on a device |
+   357→| **Transaction** | `amount` (kobo), `currency`, `paymentMethod`, `status`, `reference`, `authCode`, `cardScheme`, `maskedPan` | Payment record with full card details |
+   358→| **Receipt** | `receiptNumber`, `deliveryMethod`, `receiptUrl` | Printable receipt linked to transaction |
+   359→| **Shift** | `startedAt`, `endedAt`, `totalApprovedAmount`, `approvedCount` | Staff shift with daily totals |
+   360→| **PosDeviceEvent** | `eventType`, `metadata` (JSON) | Audit trail for all device actions |
+   361→
+   362→### Transaction Status Lifecycle
+   363→
+   364→```
+   365→created ──► awaiting_card ──► card_detected ──► reading_card ──► authenticating
+   366→                                                                     │
+   367→                                              ┌────────────────────┼────────────────────┐
+   368→                                              ▼                    ▼                    ▼
+   369→                                          approved             declined              failed
+   370→                                              │                                         │
+   371→                                              ▼                                         ▼
+   372→                                           settled                              cancelled/timeout
+   373→                                              │
+   374→                                              ▼
+   375→                                          refunded ──► disputed ──► chargeback
+   376→```
+   377→
+   378→### Payment Methods
+   379→
+   380→| Method Code | Label | Device Type |
+   381→|---|---|---|
+   382→| `phone_pos_contactless` | Contactless (Phone NFC) | Phone POS |
+   383→| `terminal_contactless` | Contactless Card | Physical Terminal |
+   384→| `terminal_chip` | Chip & PIN | Physical Terminal |
+   385→| `terminal_swipe` | Magnetic Stripe | Physical Terminal |
+   386→| `faya_nfc` | Faya Wallet | Faya NFC Device |
+   387→
+   388→---
+   389→
+   390→## API Reference
+   391→
+   392→### Merchant Login
+   393→```
+   394→POST /api/pos/merchant/login
+   395→Body: { email, password, deviceCapabilities, systemInfo }
+   396→Response: { merchant, branch, device }
+   397→```
+   398→Authenticates the merchant, creates/updates the device record with detected capabilities, and returns the device's current approval status. Device starts as `pending` unless already approved.
+   399→
+   400→### Staff PIN Login
+   401→```
+   402→POST /api/pos/auth/login
+   403→Body: { pin }
+   404→Response: { staff, merchant, branch, device, session }
+   405→```
+   406→Verifies staff by their unique PIN. Creates a new `PosSession`, ends any previous active session on the device (allows seamless staff switching). Returns staff details with role permissions.
+   407→
+   408→### Device Binding
+   409→```
+   410→POST /api/pos/device/bind
+   411→Body: { deviceId, merchantId, branchId }
+   412→Response: { approvalStatus, message }
+   413→```
+   414→Confirms the device binding after merchant login. Records the binding event with all device capabilities. Device remains pending until admin approves.
+   415→
+   416→### Device Approval
+   417→```
+   418→POST /api/pos/device/approve
+   419→Body: { deviceId }
+   420→Response: { approvalStatus, status, message }
+   421→```
+   422→Approves a pending device. Updates `approvalStatus` to `approved` and `status` to `active`. Creates an audit event. In production, this requires admin authentication.
+   423→
+   424→### Check Approval Status
+   425→```
+   426→GET /api/pos/device/approval-status?deviceId=xxx
+   427→Response: { approvalStatus, status }
+   428→```
+   429→Polled by the Awaiting Approval screen every 10 seconds.
+   430→
+   431→### Create Transaction
+   432→```
+   433→POST /api/pos/transactions
+   434→Body: { merchantId, branchId, staffId, deviceId, amount, currency, description, paymentMethod }
+   435→Response: Transaction object with reference
+   436→```
+   437→Creates a new transaction with `created` status. Generates a unique reference (`FAYA-2026-XXXXXX`) and idempotency key. Validates staff and device are active.
+   438→
+   439→### Finalize Transaction
+   440→```
+   441→POST /api/pos/transactions/:id/finalize
+   442→Body: { status, authCode, responseCode, cardScheme, maskedPan, ... }
+   443→Response: Updated transaction
+   444→```
+   445→Updates the transaction with the final payment result (approved/declined/failed) and card details.
+   446→
+   447→### Cancel Transaction
+   448→```
+   449→POST /api/pos/transactions/:id/cancel
+   450→Body: { reason }
+   451→```
+   452→Cancels a pending transaction.
+   453→
+   454→### Request Refund
+   455→```
+   456→POST /api/pos/transactions/:id/refund-request
+   457→Body: { amount?, reason, staffId }
+   458→```
+   459→Submits a refund request. Can be full or partial. Requires a reason. Sent to the merchant for review.
+   460→
+   461→### Dashboard Stats
+   462→```
+   463→GET /api/pos/dashboard?staffId=xxx&branchId=xxx
+   464→Response: { totalApprovedAmount, approvedCount, declinedCount, paymentMethodBreakdown }
+   465→```
+   466→
+   467→---
+   468→
+   469→## State Management
+   470→
+   471→The app uses a single Zustand store (`pos-store.ts`) that manages:
+   472→
+   473→| State | Type | Description |
+   474→|---|---|---|
+   475→| `currentScreen` | `Screen` (18 screen types) | Active screen for the router |
+   476→| `previousScreen` | `Screen \| null` | For back navigation |
+   477→| `merchant` | `MerchantInfo \| null` | Bound merchant account |
+   478→| `branch` | `BranchInfo \| null` | Merchant's branch |
+   479→| `device` | `DeviceInfo \| null` | This POS device with capabilities |
+   480→| `staff` | `StaffInfo \| null` | Currently authenticated staff (null = no staff) |
+   481→| `pinPurpose` | `'collect-payment' \| 'refund' \| 'override'` | Why the PIN is being entered |
+   482→| `paymentFlow` | `PaymentFlowState` | Amount, currency, method, current transaction |
+   483→| `deviceBound` | `boolean` | Whether merchant has bound this device |
+   484→| `deviceApproved` | `boolean` | Whether admin has approved this device |
+   485→| `dashboardStats` | `DashboardStats \| null` | Today's payment stats |
+   486→| `selectedTransaction` | `TransactionInfo \| null` | For detail/refund views |
+   487→
+   488→### Key Actions
+   489→
+   490→- **`navigate(screen)`** — Change the active screen with history
+   491→- **`goBack()`** — Navigate to previous screen
+   492→- **`setStaff(staff)`** — Set or clear the current staff member
+   493→- **`merchantLogout()`** — Full reset: unbinds device, clears all state, goes to merchant login
+   494→- **`resetPaymentFlow()`** — Clears amount, transaction, and payment state
+   495→
+   496→### Utility Functions
+   497→
+   498→- **`formatAmount(kobo, currency)`** — Converts kobo to formatted currency string (e.g., `₦1,500.00`)
+   499→- **`formatDate(iso)`** — Human-readable date/time
+   500→- **`getPaymentMethodLabel(code)`** — Maps method codes to readable labels
+   501→- **`getStatusColor(status)`** — Returns Tailwind classes for transaction status badges
+   502→- **`getRoleLabel(role)`** / **`getRoleColor(role)`** — Staff role display helpers
+   503→
+   504→---
+   505→
+   506→## Screens
+   507→
+   508→### 1. Splash Screen
+   509→Branded loading screen with Faya POS logo. Auto-navigates to Device Check after 2.5 seconds.
+   510→
+   511→### 2. Device Check Screen
+   512→Runs real system checks in sequence:
+   513→- App version compatibility
+   514→- Network connectivity (online/offline)
+   515→- NFC hardware availability
+   516→- NFC enabled state
+   517→- Chip reader (physical terminals only)
+   518→- Swipe reader (physical terminals only)
+   519→- Device integrity
+   520→- Payment capability summary
+   521→
+   522→**On failure**: Shows a blocked state with "Retry Device Check" button. Merchant **cannot** login.
+   523→
+   524→### 3. Merchant Login Screen
+   525→Email/phone + password form. Detects device capabilities and sends them with the login request. Displays the detected device type and supported payment methods.
+   526→
+   527→### 4. Device Binding Screen
+   528→Shows a summary of:
+   529→- Merchant account (name, MID)
+   530→- Device info (name, type, approval status)
+   531→- Device capabilities (NFC, chip, swipe, network, integrity)
+   532→- Supported payment methods as badges
+   533→
+   534→Two paths:
+   535→- **Already approved** → "Bind Device & Start POS" → goes to Home
+   536→- **Needs approval** → "Bind Device & Request Approval" → goes to Awaiting Approval
+   537→
+   538→### 5. Awaiting Approval Screen
+   539→Shows a waiting state with:
+   540→- Approval status badge
+   541→- Auto-polling indicator (checks every 10 seconds)
+   542→- All device capabilities that were sent to admin
+   543→- Manual "Check Now" button
+   544→- Demo "Approve This Device" button (simulates admin action)
+   545→- "Unbind & Logout" option
+   546→
+   547→Three states:
+   548→- **Pending** — Waiting, auto-checking
+   549→- **Approved** — Celebration animation, auto-redirect to Home
+   550→- **Rejected** — Error state, can only go back to login
+   551→
+   552→### 6. Home Screen (POS Terminal)
+   553→The main POS interface:
+   554→- **Top bar**: Merchant name, branch, staff indicator (tappable), WiFi/NFC status
+   555→- **Stats strip**: Today's approved amount, count, declined count
+   556→- **Amount display**: Large ₦ amount with optional description
+   557→- **Numpad**: 3-column grid with 0-9, decimal, delete
+   558→- **Pay button**: Creates transaction, goes to Awaiting Card
+   559→- **Bottom nav**: History, Device, Help
+   560→
+   561→### 7. Staff PIN Modal
+   562→Slides up from bottom when:
+   563→- Staff taps "Pay" without being logged in (purpose: `collect-payment`)
+   564→- Staff taps the staff name in the header (purpose: `switch`)
+   565→- Refund requires manager permission (purpose: `refund`)
+   566→
+   567→Features:
+   568→- 6-dot PIN indicator
+   569→- Mini numpad (0-9 + Del)
+   570→- Contextual title and subtitle based on purpose
+   571→- Override mode: entering a new PIN replaces the current staff
+   572→
+   573→### 8. Awaiting Card Screen
+   574→Dark themed full-screen with NFC animation rings:
+   575→- **Waiting**: Pulsing NFC rings, "Tap Card or Phone"
+   576→- **Detected**: Card detected animation
+   577→- **Reading**: Processing spinner
+   578→- 60-second countdown timer
+   579→- Cancel button
+   580→
+   581→Auto-simulates card detection after 3 seconds (demo mode).
+   582→
+   583→### 9. Result Screens
+   584→- **Approved**: Green success screen with transaction details, "View Receipt" and "New Payment" buttons
+   585→- **Declined**: Red screen with decline reason, "Try Again" button
+   586→- **Failed**: Amber screen with error details, "Retry" and "Contact Support" buttons
+   587→- **Pending**: Clock spinner with "Refresh Status" and "Cancel" buttons
+   588→
+   589→### 10. Receipt Screen
+   590→Full receipt card showing:
+   591→- Merchant header (name, branch, MID)
+   592→- Status badge and amount
+   593→- Transaction reference, date, payment method
+   594→- Card details (scheme, masked PAN, auth code)
+   595→- Cashier and terminal info
+   596→- Receipt number
+   597→- Action buttons: Print, Share, Email, Download, Copy Reference
+   598→
+   599→### 11. Transaction History Screen
+   600→Searchable, filterable list of transactions:
+   601→- Search by reference, card number, description
+   602→- Filter tabs: All, Approved, Declined, Failed, Refunded
+   603→- Each row shows: status icon, amount, reference, time, payment method
+   604→- Pull-to-refresh
+   605→
+   606→### 12. Transaction Detail Screen
+   607→Full transaction breakdown in cards:
+   608→- Status with amount
+   609→- Transaction info (ID, reference, dates)
+   610→- Payment info (method, card scheme, PAN, auth codes)
+   611→- Financial info (gross, fee, net)
+   612→- Receipt info
+   613→- Actions: View Receipt, Request Refund
+   614→
+   615→### 13. Refund Request Screen
+   616→Form to submit a refund:
+   617→- Full or partial refund toggle
+   618→- Partial amount input
+   619→- Required reason field
+   620→- Submit with loading state
+   621→- Success confirmation
+   622→
+   623→### 14. Device Settings Screen
+   624→Device management view:
+   625→- Device info (name, type, status, IDs)
+   626→- Approval status badge with explanation
+   627→- System info (manufacturer, model, OS, app version)
+   628→- Device capabilities checklist
+   629→- Actions: Sync Config, Run Device Check, Test NFC, Contact Support, Unbind Merchant
+   630→
+   631→### 15. Support Screen
+   632→Help and support:
+   633→- Contact options (Call, Email, Live Chat)
+   634→- FAQ / Quick Help cards
+   635→- Faya POS Rules summary
+   636→- Device and merchant info footer
+   637→
+   638→---
+   639→
+   640→## Demo Credentials
+   641→
+   642→### Merchant Account
+   643→| Field | Value |
+   644→|---|---|
+   645→| Email | `merchant@faya.pay` |
+   646→| Password | `faya2024` |
+   647→
+   648→### Staff PINs
+   649→| Name | PIN | Role | Branch |
+   650→|---|---|---|---|
+   651→| Adebayo Okonkwo | `1234` | Cashier | Victoria Island |
+   652→| Chioma Nwosu | `5678` | Cashier | Ikeja |
+   653→| Emeka Okafor | `9012` | Manager | Victoria Island |
+   654→| Fatima Bello | `3456` | Admin | Victoria Island |
+   655→| Ngozi Adeyemi | `7890` | Cashier | Wuse (Abuja) |
+   656→
+   657→### Pre-loaded Devices
+   658→| Name | Type | Approval | NFC | Chip | Swipe |
+   659→|---|---|---|---|---|---|
+   660→| Terminal-VI-01 | Physical Terminal | Approved | ✅ | ✅ | ✅ |
+   661→| PhonePOS-IK-01 | Phone POS | Approved | ✅ | ❌ | ❌ |
+   662→| FayaNFC-VI-02 | Faya NFC | Approved | ✅ | ❌ | ❌ |
+   663→| Terminal-Wuse-01 | Physical Terminal | Approved | ✅ | ✅ | ✅ |
+   664→| PhonePOS-Pending | Phone POS | **Pending** | ✅ | ❌ | ❌ |
+   665→
+   666→---
+   667→
+   668→## Business Rules
+   669→
+   670→### Payment Rules
+   671→1. **All card payments require online authorization** — No offline mode
+   672→2. **No QR, bank transfer, or cash payments** — Card/NFC only
+   673→3. **No manual card entry** — Must be tapped, inserted, or swiped
+   674→4. **No screenshot proof** — All transactions verified by processor
+   675→5. **Full PAN, CVV, and PIN are never stored** — PCI-DSS compliance
+   676→
+   677→### Staff Permission Levels
+   678→| Action | Cashier | Manager | Admin |
+   679→|---|---|---|---|
+   680→| Process payments | ✅ | ✅ | ✅ |
+   681→| View transaction history | ✅ | ✅ | ✅ |
+   682→| Request refund | ❌ | ✅ | ✅ |
+   683→| Override current staff | ❌ | ✅ | ✅ |
+   684→| Device settings | ✅ (view) | ✅ | ✅ |
+   685→| Unbind merchant | ❌ | ❌ | ✅ |
+   686→
+   687→### Device Rules
+   688→1. A phone POS only has NFC — no chip or swipe capability
+   689→2. A physical terminal has at least 2 of (NFC, chip, swipe)
+   690→3. Device check must pass before merchant can log in
+   691→4. A device is only fully bound after admin approves it
+   692→5. When binding, all device information and capabilities are sent to the admin
+   693→6. A merchant can have multiple approved devices
+   694→
+   695→### Transaction Rules
+   696→1. Amounts are stored in **kobo** (smallest currency unit) — ₦1 = 100 kobo
+   697→2. Every transaction is tied to a specific staff member
+   698→3. All transactions and refunds are reported to the merchant
+   699→4. Transaction references follow format: `FAYA-2026-XXXXXX`
+   700→5. Refunds can be full or partial, but always require a reason
+   701→
+   702→---
+   703→
+   704→## Security Model
+   705→
+   706→### Authentication Layers
+   707→```
+   708→Layer 1: Device Check
+   709→  └─► Hardware capabilities verified (NFC, network, integrity)
+   710→
+   711→Layer 2: Merchant Login
+   712→  └─► Email/phone + password authentication
+   713→  └─► Device bound to merchant account
+   714→  └─► Admin must approve the device
+   715→
+   716→Layer 3: Staff PIN
+   717→  └─► Unique PIN per staff member
+   718→  └─► PIN only required for actions (payment, refund, switch)
+   719→  └─► POS always visible — no lock screen
+   720→  └─► Staff sessions tracked in PosSession table
+   721→```
+   722→
+   723→### Audit Trail
+   724→Every significant action creates a `PosDeviceEvent`:
+   725→- Device activated, approved, blocked
+   726→- Staff login, logout
+   727→- Transaction created, approved, declined, failed
+   728→- Receipt printed, shared
+   729→- Refund requested
+   730→- Device integrity failed
+   731→- NFC disabled
+   732→- Config sync failed
+   733→- App version blocked
+   734→
+   735→### Data Protection
+   736→- Card numbers are stored as masked PAN only (`**** **** **** 1234`)
+   737→- CVV is never stored
+   738→- PIN is stored in plain text (demo only — production must hash)
+   739→- Staff sessions use UUID tokens
+   740→- Idempotency keys prevent duplicate transactions
+   741→

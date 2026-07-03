@@ -35,6 +35,7 @@ import { DepartmentsView } from "@/components/portal/views/departments-view";
 import { CountriesView } from "@/components/portal/views/countries-view";
 import { CountryDetailView } from "@/components/portal/views/country-detail-view";
 import { ComplianceView } from "@/components/portal/views/compliance-view";
+import { StockView } from "@/components/portal/views/stock-view";
 import { RiskView } from "@/components/portal/views/risk-view";
 import { DevicesView } from "@/components/portal/views/devices-view";
 import { FinanceView } from "@/components/portal/views/finance-view";
@@ -244,6 +245,8 @@ function PortalContent(props: {
           merchants={props.merchants}
         />
       );
+    case "stock":
+      return <StockView />;
     case "risk":
       return <RiskView fraudAlerts={props.fraudAlerts} countries={props.countries} merchants={props.merchants} consumers={props.consumers} />;
     case "devices":

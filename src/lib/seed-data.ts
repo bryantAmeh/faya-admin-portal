@@ -34,6 +34,7 @@ import type {
   WebhookLog,
   SystemSettings,
   PosDeviceRequest,
+  StockItem,
 } from "./types";
 
 const now = () => Date.now();
@@ -525,7 +526,7 @@ export const SEED_TRANSACTIONS: Transaction[] = [
 export const SEED_DOCUMENTS: UserDocument[] = [
   { id: "doc_001", documentType: "user_id", entityType: "consumer", entityId: "csm_NG_001", entityName: "Ngozi Eze", countryCode: "NG", fileName: "national_id_ngozi.pdf", mimeType: "application/pdf", uploadedAt: now() - hours(6), status: "pending", reviewedBy: null, reviewedAt: null, notes: "" },
   { id: "doc_002", documentType: "selfie_liveness", entityType: "consumer", entityId: "csm_NG_001", entityName: "Ngozi Eze", countryCode: "NG", fileName: "selfie_ngozi.jpg", mimeType: "image/jpeg", uploadedAt: now() - hours(6), status: "pending", reviewedBy: null, reviewedAt: null, notes: "" },
-  { id: "doc_003", documentType: "user_id", entityType: "consumer", entityId: "csm_NG_002", entityName: "Ibrahim Sani", countryCode: "NG", fileName: "passport_ibrahim.pdf", mimeType: "application/pdf", uploadedAt: now() - hours(12), status: "in_review", reviewedBy: "staff_004", reviewedAt: null, notes: "PEP check required" },
+  { id: "doc_003", documentType: "user_id", entityType: "consumer", entityId: "csm_NG_002", entityName: "Ibrahim Sani", countryCode: "NG", fileName: "passport_ibrahim.pdf", mimeType: "application/pdf", uploadedAt: now() - hours(12), status: "pending", reviewedBy: "staff_004", reviewedAt: null, notes: "PEP check required" },
   { id: "doc_004", documentType: "proof_of_address", entityType: "consumer", entityId: "csm_NG_002", entityName: "Ibrahim Sani", countryCode: "NG", fileName: "utility_bill_ibrahim.pdf", mimeType: "application/pdf", uploadedAt: now() - hours(12), status: "approved", reviewedBy: "staff_004", reviewedAt: now() - hours(6), notes: "Valid" },
   { id: "doc_005", documentType: "user_id", entityType: "consumer", entityId: "csm_NG_003", entityName: "Adebayo Ogun", countryCode: "NG", fileName: "national_id_adebayo.pdf", mimeType: "application/pdf", uploadedAt: now() - days(120), status: "approved", reviewedBy: "staff_003", reviewedAt: now() - days(119), notes: "Approved — valid" },
   { id: "doc_006", documentType: "business_registration", entityType: "merchant", entityId: "mch_NG_001", entityName: "Lagos Foods Ltd", countryCode: "NG", fileName: "cac_certificate_lagosfoods.pdf", mimeType: "application/pdf", uploadedAt: now() - days(180), status: "approved", reviewedBy: "staff_003", reviewedAt: now() - days(179), notes: "CAC verified" },
@@ -817,4 +818,29 @@ export const SEED_POS_DEVICE_REQUESTS: PosDeviceRequest[] = [
     createdAt: now() - days(3),
     updatedAt: now() - days(2),
   },
+];
+
+/* ------------------------------ Stock / Inventory ------------------------------ */
+/* Physical terminals in Faya's warehouse. Merchants request these (free provision).
+ * Physical cards also have stock. The POS app and phone POS are free downloads. */
+export const SEED_STOCK_ITEMS: StockItem[] = [
+  // Nigeria warehouse — physical terminals
+  { id: "stk_001", serialNumber: "FAY-NG-TERM-0001", type: "physical_terminal", model: "Ingenico Move 2500", countryCode: "NG", status: "allocated", allocatedToId: "mch_NG_001", allocatedToName: "Lagos Foods Ltd", allocatedAt: now() - days(120), shippedAt: now() - days(118), deliveredAt: now() - days(115), notes: "", createdAt: now() - days(180), updatedAt: now() - days(115) },
+  { id: "stk_002", serialNumber: "FAY-NG-TERM-0002", type: "physical_terminal", model: "Ingenico Move 2500", countryCode: "NG", status: "allocated", allocatedToId: "mch_NG_002", allocatedToName: "Abuja Electronics", allocatedAt: now() - days(80), shippedAt: now() - days(78), deliveredAt: now() - days(75), notes: "", createdAt: now() - days(180), updatedAt: now() - days(75) },
+  { id: "stk_003", serialNumber: "FAY-NG-TERM-0003", type: "physical_terminal", model: "Ingenico Move 2500", countryCode: "NG", status: "allocated", allocatedToId: "mch_NG_003", allocatedToName: "Kano Wholesale", allocatedAt: now() - days(60), shippedAt: now() - days(58), deliveredAt: now() - days(55), notes: "", createdAt: now() - days(180), updatedAt: now() - days(55) },
+  { id: "stk_004", serialNumber: "FAY-NG-TERM-0004", type: "physical_terminal", model: "Verifone V200c", countryCode: "NG", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(30), updatedAt: now() - days(30) },
+  { id: "stk_005", serialNumber: "FAY-NG-TERM-0005", type: "physical_terminal", model: "Verifone V200c", countryCode: "NG", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(30), updatedAt: now() - days(30) },
+  { id: "stk_006", serialNumber: "FAY-NG-TERM-0006", type: "physical_terminal", model: "Ingenico Move 2500", countryCode: "NG", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(15), updatedAt: now() - days(15) },
+  { id: "stk_007", serialNumber: "FAY-NG-TERM-0007", type: "physical_terminal", model: "PAX S920", countryCode: "NG", status: "damaged", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "Screen cracked during transit", createdAt: now() - days(60), updatedAt: now() - days(10) },
+
+  // Ghana warehouse
+  { id: "stk_008", serialNumber: "FAY-GH-TERM-0001", type: "physical_terminal", model: "Verifone V200c", countryCode: "GH", status: "allocated", allocatedToId: "mch_GH_001", allocatedToName: "Accra Retail Hub", allocatedAt: now() - days(45), shippedAt: now() - days(43), deliveredAt: null, notes: "In transit", createdAt: now() - days(90), updatedAt: now() - days(43) },
+  { id: "stk_009", serialNumber: "FAY-GH-TERM-0002", type: "physical_terminal", model: "Ingenico Move 2500", countryCode: "GH", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(20), updatedAt: now() - days(20) },
+
+  // Kenya warehouse
+  { id: "stk_010", serialNumber: "FAY-KE-TERM-0001", type: "physical_terminal", model: "Ingenico Move 2500", countryCode: "KE", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(10), updatedAt: now() - days(10) },
+  { id: "stk_011", serialNumber: "FAY-KE-TERM-0002", type: "physical_terminal", model: "PAX S920", countryCode: "KE", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(10), updatedAt: now() - days(10) },
+
+  // South Africa warehouse
+  { id: "stk_012", serialNumber: "FAY-ZA-TERM-0001", type: "physical_terminal", model: "Verifone V200c", countryCode: "ZA", status: "in_stock", allocatedToId: null, allocatedToName: null, allocatedAt: null, shippedAt: null, deliveredAt: null, notes: "", createdAt: now() - days(5), updatedAt: now() - days(5) },
 ];

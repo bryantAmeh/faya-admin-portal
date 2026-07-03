@@ -1,25 +1,32 @@
 "use client";
 
 /**
- * Faya Admin Portal — Compliance (KYC / KYB) View
- * Implements §11.1 Compliance Admin Pages.
+ * Faya Admin Portal — Compliance (KYC / KYB) View (Rebuilt)
  *
- * Tabs:
- *   - KYC Queue       : customer identity submissions + actions
- *   - KYB Queue       : merchant business submissions + actions
- *   - Sanctions/PEP   : escalated KYC cases + workflow overview
- *   - Manual Review   : in_review KYC + KYB cases (combined)
- *   - Approved        : approved KYC + KYB cases (combined)
- *   - Rejected        : rejected KYC + KYB cases (combined)
+ * Replaces the previous sliding-Sheet design with a full-page layout that
+ * shows linked documents INLINE — no downloads, no sheet, no slide.
+ *
+ * Layout per case:
+ *   - Case header (entity name, code, country, risk, status, SLA, reviewer)
+ *   - Linked entity record (consumer/merchant) with current status
+ *   - Inline document grid (click "View" → metadata Dialog, no download)
+ *   - Action bar (Approve / Reject / Escalate / Request docs / Assign / View Profile)
+ *
+ * "View Profile" navigates to the full-page profile:
+ *   - KYC case → selectUser(consumer.id); setView("user_detail")
+ *   - KYB case → selectMerchant(merchant.id); setView("merchant_detail")
+ *
+ * Tabs: KYC Queue · KYB Queue · Sanctions/PEP · Manual Review · Approved · Rejected
  *
  * Country scoping: Super Admin sees all countries; other staff see only
  * the country codes listed on their `staff.countries` access record.
  *
- * Every action is mirrored to the audit log via `logAudit(...)` with the
- * action keys: kyc.approve / kyc.reject / kyc.escalate / kyc.request_documents
- * and the kyb.* equivalents.
+ * Audit action keys (via logAudit):
+ *   kyc.approve / kyc.reject / kyc.escalate / kyc.request_documents / kyc.assign
+ *   kyb.approve / kyb.reject / kyb.escalate / kyb.request_documents / kyb.assign
+ *   document.approve / document.reject (per-document inline actions)
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck,
   Search,
@@ -36,6 +43,9 @@ import {
   User,
   Building2,
   Layers,
+  ExternalLink,
+  ImageIcon,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ViewHeader, ViewContainer, EmptyState, StatCard } from "@/components/portal/view-helpers";
@@ -44,13 +54,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import {
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -59,14 +62,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -77,8 +72,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { useAuth } from "@/hooks/use-auth";
+import { usePortalStore } from "@/hooks/use-portal-store";
 import { adminData, logAudit } from "@/lib/admin-data";
 import { formatDateTime, slaStatus, statusBadge, timeAgo } from "@/lib/formatters";
 import type {
@@ -92,6 +96,10 @@ import type {
   MerchantStatus,
   KycTier,
   PlatformKey,
+  UserDocument,
+  DocumentType,
+  KycStatus,
+  KybStatus,
 } from "@/lib/types";
 import { PLATFORM_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -107,7 +115,8 @@ interface ComplianceViewProps {
 
 const SUPER_ADMIN_DEPT = "dept_super_admin";
 
-/** Badge styling for Consumer.status (not in shared formatters). */
+/* ----------------------------- Status styling ---------------------------- */
+
 const CONSUMER_STATUS_STYLES: Record<ConsumerStatus, { label: string; className: string }> = {
   pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
   active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
@@ -116,7 +125,6 @@ const CONSUMER_STATUS_STYLES: Record<ConsumerStatus, { label: string; className:
   closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
 };
 
-/** Badge styling for Merchant.status (not in shared formatters). */
 const MERCHANT_STATUS_STYLES: Record<MerchantStatus, { label: string; className: string }> = {
   onboarding: { label: "Onboarding", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
   active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
@@ -131,6 +139,30 @@ const KYC_TIER_STYLES: Record<KycTier, { label: string; className: string }> = {
   tier_3: { label: "Tier 3", className: "text-orange-700 border-orange-300 bg-orange-50 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800" },
 };
 
+const DOCUMENT_STATUS_STYLES: Record<
+  UserDocument["status"],
+  { label: string; className: string }
+> = {
+  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  approved: { label: "Approved", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  rejected: { label: "Rejected", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  expired: { label: "Expired", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+  replacement_requested: { label: "Replacement Requested", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+};
+
+const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
+  user_id: "User ID",
+  selfie_liveness: "Selfie / Liveness",
+  proof_of_address: "Proof of Address",
+  bvn_nin_verification: "BVN / NIN Verification",
+  business_registration: "Business Registration",
+  tax_certificate: "Tax Certificate",
+  merchant_licence: "Merchant Licence",
+  beneficial_owner: "Beneficial Owner",
+  settlement_bank_proof: "Settlement Bank Proof",
+  dispute_evidence: "Dispute Evidence",
+};
+
 const STATUS_OPTIONS = [
   { value: "all", label: "All statuses" },
   { value: "pending", label: "Pending" },
@@ -140,14 +172,26 @@ const STATUS_OPTIONS = [
   { value: "rejected", label: "Rejected" },
 ] as const;
 
-export function ComplianceView({ kycCases, kybCases, staff, countries, consumers, merchants }: ComplianceViewProps) {
+export function ComplianceView({
+  kycCases,
+  kybCases,
+  staff,
+  countries,
+  consumers,
+  merchants,
+}: ComplianceViewProps) {
   const { staff: currentStaff } = useAuth();
+  const { selectUser, selectMerchant, setView } = usePortalStore();
   const [activeTab, setActiveTab] = useState<string>("kyc");
 
+  /* ----------------------- Documents subscription ----------------------- */
+  const [documents, setDocuments] = useState<UserDocument[]>([]);
+  useEffect(() => {
+    const unsub = adminData.subscribeDocuments(setDocuments);
+    return () => unsub();
+  }, []);
+
   /* ----------------- Linked entity lookups (KYC → Consumer, KYB → Merchant) ----------------- */
-  // Match by kycCaseId first; when multiple consumers share a case id (e.g. spouses
-  // on a joint application), disambiguate by exact customerName match. Fall back to
-  // name-only match if kycCaseId is null on both sides.
   function findConsumerForKyc(k: KycCase): Consumer | null {
     if (!consumers.length) return null;
     const fullName = `${k.customerName}`.trim().toLowerCase();
@@ -159,7 +203,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
       );
       return byName ?? byCaseId[0];
     }
-    // No case-id link — try exact name match as a fallback (older case with cleared link)
     return (
       consumers.find(
         (c) => `${c.firstName} ${c.lastName}`.trim().toLowerCase() === fullName,
@@ -178,7 +221,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
         byCaseId.find((m) => m.tradingName.trim().toLowerCase() === name);
       return byName ?? byCaseId[0];
     }
-    // No case-id link — try name match against legal / trading name
     return (
       merchants.find((m) => m.legalName.trim().toLowerCase() === name) ??
       merchants.find((m) => m.tradingName.trim().toLowerCase() === name) ??
@@ -245,14 +287,13 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     return list;
   }, [visibleKyb, kybCountry, kybStatus, kybSearch]);
 
-  /* --------------------- Detail sheet + dialog ------------------- */
-  const [selectedKyc, setSelectedKyc] = useState<KycCase | null>(null);
-  const [selectedKyb, setSelectedKyb] = useState<KybCase | null>(null);
+  /* --------------------- Reject + document viewer dialogs ------------------- */
   const [rejectTarget, setRejectTarget] = useState<{
     type: "kyc" | "kyb";
     id: string;
     name: string;
   } | null>(null);
+  const [viewDoc, setViewDoc] = useState<UserDocument | null>(null);
 
   /* --------------------------- Audit actor ----------------------- */
   const actor = useMemo(() => {
@@ -285,7 +326,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
       beforeValue: k.status,
       afterValue: "approved",
     });
-    // Live-sync the linked consumer record so the Consumer App sees the new status
     const consumer = findConsumerForKyc(k);
     if (consumer) {
       adminData.updateConsumer(consumer.id, {
@@ -307,7 +347,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
         description: `Case ${k.id} · ${countryName(k.countryCode)} · no linked consumer record.`,
       });
     }
-    setSelectedKyc(null);
   }
   function rejectKyc(k: KycCase) {
     if (!actor) return;
@@ -318,7 +357,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
       beforeValue: k.status,
       afterValue: "rejected",
     });
-    // Live-sync the linked consumer record — rejected cases restrict the account
     const consumer = findConsumerForKyc(k);
     if (consumer) {
       adminData.updateConsumer(consumer.id, {
@@ -338,7 +376,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     } else {
       toast.error(`KYC rejected: ${k.customerName}`, { description: `Case ${k.id}` });
     }
-    setSelectedKyc(null);
   }
   function escalateKyc(k: KycCase) {
     if (!actor) return;
@@ -351,7 +388,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     toast.warning(`KYC escalated: ${k.customerName}`, {
       description: "Moved to Sanctions/PEP review queue",
     });
-    setSelectedKyc(null);
   }
   function requestDocsKyc(k: KycCase) {
     if (!actor) return;
@@ -366,7 +402,7 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
   }
   function assignReviewerKyc(k: KycCase) {
     if (!actor || !currentStaff) return;
-    const newStatus: KycCase["status"] = k.status === "pending" ? "in_review" : k.status;
+    const newStatus: KycStatus = k.status === "pending" ? "in_review" : k.status;
     adminData.updateKyc(k.id, { assignedReviewer: currentStaff.id, status: newStatus });
     logAudit(actor, "kyc.assign", "kyc_case", k.id, {
       countryCode: k.countryCode,
@@ -375,7 +411,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     toast.success(`Assigned to you: ${k.customerName}`, {
       description: `You are now the reviewer for case ${k.id}`,
     });
-    setSelectedKyc({ ...k, assignedReviewer: currentStaff.id, status: newStatus });
   }
 
   /* ----------------------- KYB mutations ------------------------- */
@@ -388,7 +423,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
       beforeValue: k.status,
       afterValue: "approved",
     });
-    // Live-sync the linked merchant record so the Merchant App sees the new status
     const merchant = findMerchantForKyb(k);
     if (merchant) {
       adminData.updateMerchant(merchant.id, {
@@ -410,7 +444,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
         description: `Case ${k.id} · ${countryName(k.countryCode)} · no linked merchant record.`,
       });
     }
-    setSelectedKyb(null);
   }
   function rejectKyb(k: KybCase) {
     if (!actor) return;
@@ -421,7 +454,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
       beforeValue: k.status,
       afterValue: "rejected",
     });
-    // Live-sync the linked merchant record — rejected cases restrict the account
     const merchant = findMerchantForKyb(k);
     if (merchant) {
       adminData.updateMerchant(merchant.id, {
@@ -441,7 +473,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     } else {
       toast.error(`KYB rejected: ${k.merchantName}`, { description: `Case ${k.id}` });
     }
-    setSelectedKyb(null);
   }
   function escalateKyb(k: KybCase) {
     if (!actor) return;
@@ -454,7 +485,6 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     toast.warning(`KYB escalated: ${k.merchantName}`, {
       description: "Senior compliance review required",
     });
-    setSelectedKyb(null);
   }
   function requestDocsKyb(k: KybCase) {
     if (!actor) return;
@@ -471,7 +501,7 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
   }
   function assignReviewerKyb(k: KybCase) {
     if (!actor || !currentStaff) return;
-    const newStatus: KybCase["status"] = k.status === "pending" ? "in_review" : k.status;
+    const newStatus: KybStatus = k.status === "pending" ? "in_review" : k.status;
     adminData.updateKyb(k.id, { assignedReviewer: currentStaff.id, status: newStatus });
     logAudit(actor, "kyb.assign", "kyb_case", k.id, {
       countryCode: k.countryCode,
@@ -480,7 +510,42 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     toast.success(`Assigned to you: ${k.merchantName}`, {
       description: `You are now the reviewer for case ${k.id}`,
     });
-    setSelectedKyb({ ...k, assignedReviewer: currentStaff.id, status: newStatus });
+  }
+
+  /* ----------------------- Document mutations --------------------- */
+  function approveDocument(doc: UserDocument) {
+    if (!actor) return;
+    adminData.updateDocument(doc.id, {
+      status: "approved",
+      reviewedBy: actor.staffId,
+      reviewedAt: Date.now(),
+    });
+    logAudit(actor, "document.approve", "document", doc.id, {
+      countryCode: doc.countryCode,
+      beforeValue: doc.status,
+      afterValue: "approved",
+      reason: `${doc.documentType.replace(/_/g, " ")} approved for ${doc.entityName}`,
+    });
+    toast.success(`Document approved: ${doc.fileName}`, {
+      description: `${DOCUMENT_TYPE_LABELS[doc.documentType]} · ${doc.entityName}`,
+    });
+  }
+  function rejectDocument(doc: UserDocument) {
+    if (!actor) return;
+    adminData.updateDocument(doc.id, {
+      status: "rejected",
+      reviewedBy: actor.staffId,
+      reviewedAt: Date.now(),
+    });
+    logAudit(actor, "document.reject", "document", doc.id, {
+      countryCode: doc.countryCode,
+      beforeValue: doc.status,
+      afterValue: "rejected",
+      reason: `${doc.documentType.replace(/_/g, " ")} rejected for ${doc.entityName}`,
+    });
+    toast.error(`Document rejected: ${doc.fileName}`, {
+      description: `${DOCUMENT_TYPE_LABELS[doc.documentType]} · ${doc.entityName}`,
+    });
   }
 
   /* ------------------------- Reject confirm ---------------------- */
@@ -537,6 +602,36 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     (k) => k.status === "pending" || k.status === "in_review",
   ).length;
 
+  /* ----------------------- Document lookup ----------------------- */
+  /** Return documents linked to a KYC case (consumer) or KYB case (merchant). */
+  function documentsForKyc(k: KycCase, consumer: Consumer | null): UserDocument[] {
+    if (consumer) {
+      return documents.filter(
+        (d) => d.entityType === "consumer" && d.entityId === consumer.id,
+      );
+    }
+    // Fallback: try to match by entity name + country
+    return documents.filter(
+      (d) =>
+        d.entityType === "consumer" &&
+        d.entityName.trim().toLowerCase() === k.customerName.trim().toLowerCase() &&
+        d.countryCode === k.countryCode,
+    );
+  }
+  function documentsForKyb(k: KybCase, merchant: Merchant | null): UserDocument[] {
+    if (merchant) {
+      return documents.filter(
+        (d) => d.entityType === "merchant" && d.entityId === merchant.id,
+      );
+    }
+    return documents.filter(
+      (d) =>
+        d.entityType === "merchant" &&
+        (d.entityName.trim().toLowerCase() === k.merchantName.trim().toLowerCase()) &&
+        d.countryCode === k.countryCode,
+    );
+  }
+
   /* ------------------------- Badge helpers ----------------------- */
   function riskScoreBadge(score: number): React.ReactNode {
     let cls =
@@ -586,76 +681,12 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     );
   }
 
-  function docChips(docs: string[], emptyLabel = "—"): React.ReactNode {
-    if (!docs || docs.length === 0) {
-      return <span className="text-xs text-muted-foreground">{emptyLabel}</span>;
-    }
-    return (
-      <div className="flex flex-wrap gap-1 max-w-[220px]">
-        {docs.map((d) => (
-          <Badge
-            key={d}
-            variant="outline"
-            className="text-[10px] font-normal px-1.5 py-0 capitalize"
-          >
-            <FileText className="size-2.5 mr-0.5" />
-            {d.replace(/_/g, " ")}
-          </Badge>
-        ))}
-      </div>
-    );
-  }
-
-  function typeBadge(type: "kyc" | "kyb"): React.ReactNode {
-    return type === "kyc" ? (
-      <Badge
-        variant="outline"
-        className="text-[10px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
-      >
-        <ShieldCheck className="size-2.5 mr-0.5" />
-        KYC
-      </Badge>
-    ) : (
-      <Badge
-        variant="outline"
-        className="text-[10px] text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800"
-      >
-        <FileText className="size-2.5 mr-0.5" />
-        KYB
-      </Badge>
-    );
-  }
-
-  function reviewerCell(id: string | null): React.ReactNode {
-    if (!id) {
-      return <span className="text-xs text-muted-foreground italic">Unassigned</span>;
-    }
-    const s = staff.find((x) => x.id === id);
-    return (
-      <span className="text-xs inline-flex items-center gap-1">
-        <UserCheck className="size-3 text-emerald-600" />
-        {s ? `${s.firstName} ${s.lastName}` : id}
-      </span>
-    );
-  }
-
-  /** Small KYC tier chip (tier_1 / tier_2 / tier_3) — used inline in the queue table and detail sheet. */
   function tierChip(tier: KycTier): React.ReactNode {
     const t = KYC_TIER_STYLES[tier];
     return (
       <Badge variant="outline" className={cn("text-[10px] font-medium px-1.5 py-0", t.className)}>
         <Layers className="size-2.5 mr-0.5" />
         {t.label}
-      </Badge>
-    );
-  }
-
-  /** Small inline chip showing the linked merchant's risk category (separate from the case-level risk). */
-  function merchantRiskChip(cat: import("@/lib/types").RiskLevel): React.ReactNode {
-    const b = statusBadge("risk", cat);
-    return (
-      <Badge variant="outline" className={cn("text-[10px] font-medium capitalize px-1.5 py-0", b.className)}>
-        {b.label}
       </Badge>
     );
   }
@@ -693,6 +724,36 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
     );
   }
 
+  /* ----------------------- Navigation handlers ------------------- */
+  function viewKycProfile(k: KycCase) {
+    const consumer = findConsumerForKyc(k);
+    if (consumer) {
+      selectUser(consumer.id);
+      setView("user_detail");
+      toast.info(`Opening consumer profile: ${consumer.firstName} ${consumer.lastName}`, {
+        description: `${consumer.consumerCode} · ${countryName(consumer.countryCode)}`,
+      });
+    } else {
+      toast.error("No linked consumer record", {
+        description: "Cannot navigate — KYC case has no linked consumer to view.",
+      });
+    }
+  }
+  function viewKybProfile(k: KybCase) {
+    const merchant = findMerchantForKyb(k);
+    if (merchant) {
+      selectMerchant(merchant.id);
+      setView("merchant_detail");
+      toast.info(`Opening merchant profile: ${merchant.tradingName}`, {
+        description: `${merchant.merchantCode} · ${countryName(merchant.countryCode)}`,
+      });
+    } else {
+      toast.error("No linked merchant record", {
+        description: "Cannot navigate — KYB case has no linked merchant to view.",
+      });
+    }
+  }
+
   /* ----------------------------- Render -------------------------- */
   return (
     <>
@@ -710,10 +771,12 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
         <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
           <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
           <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
-            <span className="font-medium">Live entity sync:</span> KYC approvals update
-            consumer records in real-time. KYB approvals update merchant records. The
-            Consumer App and Merchant App read from the same database, so approved
-            accounts activate immediately and rejected accounts are restricted.
+            <span className="font-medium">Inline document review:</span> All
+            uploaded documents are shown inline on each case — click{" "}
+            <span className="font-medium">View</span> to see metadata. To act on
+            a case, click <span className="font-medium">View Profile</span> to
+            open the full consumer/merchant profile page. Approvals update the
+            linked entity in real-time.
           </div>
         </div>
 
@@ -781,243 +844,126 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
           </TabsList>
 
           {/* ---------------------- KYC QUEUE ---------------------- */}
-          <TabsContent value="kyc">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <ShieldCheck className="size-4 text-emerald-600" />
-                  KYC Queue
-                  <Badge variant="secondary" className="text-[10px]">
-                    {filteredKyc.length}
-                  </Badge>
-                </CardTitle>
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <div className="relative">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-                    <Input
-                      placeholder="Search customer name..."
-                      value={kycSearch}
-                      onChange={(e) => setKycSearch(e.target.value)}
-                      className="pl-7 h-8 w-56 text-xs"
-                    />
-                  </div>
-                  <Select value={kycCountry} onValueChange={setKycCountry}>
-                    <SelectTrigger size="sm" className="w-44 text-xs h-8">
-                      <Filter className="size-3 mr-1 text-muted-foreground" />
-                      <SelectValue placeholder="Country" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All countries</SelectItem>
-                      {filterableCountries.map((c) => (
-                        <SelectItem key={c.countryCode} value={c.countryCode}>
-                          {c.countryCode} · {c.countryName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={kycStatus} onValueChange={setKycStatus}>
-                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {STATUS_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                {filteredKyc.length === 0 ? (
+          <TabsContent value="kyc" className="space-y-3">
+            <FilterBar
+              search={kycSearch}
+              setSearch={setKycSearch}
+              country={kycCountry}
+              setCountry={setKycCountry}
+              status={kycStatus}
+              setStatus={setKycStatus}
+              countries={filterableCountries}
+              searchPlaceholder="Search customer name..."
+              count={filteredKyc.length}
+              icon={ShieldCheck}
+              title="KYC Queue"
+              iconColor="text-emerald-600"
+            />
+            {filteredKyc.length === 0 ? (
+              <Card>
+                <CardContent className="p-0">
                   <EmptyState
                     icon={ShieldCheck}
                     title="No KYC cases match"
                     description="Adjust the filters above or check back later for new submissions."
                   />
-                ) : (
-                  <ScrollTable>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
-                      <TableRow>
-                        <TableHead className="pl-4">Customer</TableHead>
-                        <TableHead>Country</TableHead>
-                        <TableHead>Nationality</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead>Documents</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Reviewer</TableHead>
-                        <TableHead>SLA</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredKyc.map((k) => {
-                        const badge = statusBadge("kyc", k.status);
-                        const linkedConsumer = findConsumerForKyc(k);
-                        return (
-                          <TableRow
-                            key={k.id}
-                            className="cursor-pointer"
-                            onClick={() => setSelectedKyc(k)}
-                          >
-                            <TableCell className="pl-4 font-medium">
-                              <div className="flex flex-col gap-1">
-                                <span>{k.customerName}</span>
-                                {linkedConsumer && tierChip(linkedConsumer.kycTier)}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-xs">
-                              <span className="font-mono">{k.countryCode}</span>
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {k.nationality}
-                            </TableCell>
-                            <TableCell>{riskScoreBadge(k.riskScore)}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {timeAgo(k.submittedAt)}
-                            </TableCell>
-                            <TableCell>{docChips(k.requiredDocuments)}</TableCell>
-                            <TableCell>
-                              <Badge
-                                variant="secondary"
-                                className={cn("text-[10px]", badge.className)}
-                              >
-                                {badge.label}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                            <TableCell>{slaBadge(k.slaDeadline)}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </ScrollTable>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            ) : (
+              filteredKyc.map((k) => (
+                <KycCaseCard
+                  key={k.id}
+                  kyc={k}
+                  consumer={findConsumerForKyc(k)}
+                  docs={documentsForKyc(k, findConsumerForKyc(k))}
+                  onApprove={() => approveKyc(k)}
+                  onReject={() =>
+                    setRejectTarget({
+                      type: "kyc",
+                      id: k.id,
+                      name: k.customerName,
+                    })
+                  }
+                  onEscalate={() => escalateKyc(k)}
+                  onRequestDocs={() => requestDocsKyc(k)}
+                  onAssign={() => assignReviewerKyc(k)}
+                  onViewProfile={() => viewKycProfile(k)}
+                  onViewDoc={setViewDoc}
+                  onApproveDoc={approveDocument}
+                  onRejectDoc={rejectDocument}
+                  staffName={staffName}
+                  countryName={countryName}
+                  riskScoreBadge={riskScoreBadge}
+                  slaBadge={slaBadge}
+                  tierChip={tierChip}
+                  consumerStatusBadge={consumerStatusBadge}
+                  platformChips={platformChips}
+                />
+              ))
+            )}
           </TabsContent>
 
           {/* ---------------------- KYB QUEUE ---------------------- */}
-          <TabsContent value="kyb">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <FileText className="size-4 text-amber-600" />
-                  KYB Queue
-                  <Badge variant="secondary" className="text-[10px]">
-                    {filteredKyb.length}
-                  </Badge>
-                </CardTitle>
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <div className="relative">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-                    <Input
-                      placeholder="Search merchant name..."
-                      value={kybSearch}
-                      onChange={(e) => setKybSearch(e.target.value)}
-                      className="pl-7 h-8 w-56 text-xs"
-                    />
-                  </div>
-                  <Select value={kybCountry} onValueChange={setKybCountry}>
-                    <SelectTrigger size="sm" className="w-44 text-xs h-8">
-                      <Filter className="size-3 mr-1 text-muted-foreground" />
-                      <SelectValue placeholder="Country" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All countries</SelectItem>
-                      {filterableCountries.map((c) => (
-                        <SelectItem key={c.countryCode} value={c.countryCode}>
-                          {c.countryCode} · {c.countryName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={kybStatus} onValueChange={setKybStatus}>
-                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {STATUS_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                {filteredKyb.length === 0 ? (
+          <TabsContent value="kyb" className="space-y-3">
+            <FilterBar
+              search={kybSearch}
+              setSearch={setKybSearch}
+              country={kybCountry}
+              setCountry={setKybCountry}
+              status={kybStatus}
+              setStatus={setKybStatus}
+              countries={filterableCountries}
+              searchPlaceholder="Search merchant name..."
+              count={filteredKyb.length}
+              icon={FileText}
+              title="KYB Queue"
+              iconColor="text-amber-600"
+            />
+            {filteredKyb.length === 0 ? (
+              <Card>
+                <CardContent className="p-0">
                   <EmptyState
                     icon={FileText}
                     title="No KYB cases match"
                     description="Adjust the filters above or check back later for new merchant onboarding submissions."
                   />
-                ) : (
-                  <ScrollTable>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
-                      <TableRow>
-                        <TableHead className="pl-4">Merchant</TableHead>
-                        <TableHead>Country</TableHead>
-                        <TableHead>Business type</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead>Missing docs</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Reviewer</TableHead>
-                        <TableHead>SLA</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredKyb.map((k) => {
-                        const badge = statusBadge("kyb", k.status);
-                        const linkedMerchant = findMerchantForKyb(k);
-                        return (
-                          <TableRow
-                            key={k.id}
-                            className="cursor-pointer"
-                            onClick={() => setSelectedKyb(k)}
-                          >
-                            <TableCell className="pl-4 font-medium">
-                              <div className="flex flex-col gap-1">
-                                <span>{k.merchantName}</span>
-                                {linkedMerchant && merchantRiskChip(linkedMerchant.riskCategory)}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-xs">
-                              <span className="font-mono">{k.countryCode}</span>
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {k.businessType}
-                            </TableCell>
-                            <TableCell>{riskCategoryBadge(k.riskCategory)}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {timeAgo(k.submittedAt)}
-                            </TableCell>
-                            <TableCell>{docChips(k.missingDocuments, "Complete")}</TableCell>
-                            <TableCell>
-                              <Badge
-                                variant="secondary"
-                                className={cn("text-[10px]", badge.className)}
-                              >
-                                {badge.label}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                            <TableCell>{slaBadge(k.slaDeadline)}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </ScrollTable>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            ) : (
+              filteredKyb.map((k) => (
+                <KybCaseCard
+                  key={k.id}
+                  kyb={k}
+                  merchant={findMerchantForKyb(k)}
+                  docs={documentsForKyb(k, findMerchantForKyb(k))}
+                  onApprove={() => approveKyb(k)}
+                  onReject={() =>
+                    setRejectTarget({
+                      type: "kyb",
+                      id: k.id,
+                      name: k.merchantName,
+                    })
+                  }
+                  onEscalate={() => escalateKyb(k)}
+                  onRequestDocs={() => requestDocsKyb(k)}
+                  onAssign={() => assignReviewerKyb(k)}
+                  onViewProfile={() => viewKybProfile(k)}
+                  onViewDoc={setViewDoc}
+                  onApproveDoc={approveDocument}
+                  onRejectDoc={rejectDocument}
+                  staffName={staffName}
+                  countryName={countryName}
+                  riskCategoryBadge={riskCategoryBadge}
+                  slaBadge={slaBadge}
+                  merchantStatusBadge={merchantStatusBadge}
+                  platformChips={platformChips}
+                />
+              ))
+            )}
           </TabsContent>
 
           {/* -------------------- SANCTIONS / PEP ------------------- */}
-          <TabsContent value="sanctions" className="space-y-4">
+          <TabsContent value="sanctions" className="space-y-3">
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
@@ -1036,46 +982,38 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
                     description="Sanctions/PEP escalations from the KYC queue will appear here for senior compliance review."
                   />
                 ) : (
-                  <ScrollTable>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
-                      <TableRow>
-                        <TableHead className="pl-4">Customer</TableHead>
-                        <TableHead>Country</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead>Reviewer</TableHead>
-                        <TableHead>SLA</TableHead>
-                        <TableHead>Notes</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {escalatedKyc.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyc(k)}
-                        >
-                          <TableCell className="pl-4 font-medium">{k.customerName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskScoreBadge(k.riskScore)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                          <TableCell>{slaBadge(k.slaDeadline)}</TableCell>
-                          <TableCell className="max-w-[280px]">
-                            {k.notes ? (
-                              <span className="text-xs text-amber-800 dark:text-amber-300 line-clamp-2">
-                                {k.notes}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-muted-foreground italic">—</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </ScrollTable>
+                  <div className="p-3 space-y-3">
+                    {escalatedKyc.map((k) => (
+                      <KycCaseCard
+                        key={k.id}
+                        kyc={k}
+                        consumer={findConsumerForKyc(k)}
+                        docs={documentsForKyc(k, findConsumerForKyc(k))}
+                        onApprove={() => approveKyc(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyc",
+                            id: k.id,
+                            name: k.customerName,
+                          })
+                        }
+                        onEscalate={() => escalateKyc(k)}
+                        onRequestDocs={() => requestDocsKyc(k)}
+                        onAssign={() => assignReviewerKyc(k)}
+                        onViewProfile={() => viewKycProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskScoreBadge={riskScoreBadge}
+                        slaBadge={slaBadge}
+                        tierChip={tierChip}
+                        consumerStatusBadge={consumerStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -1128,7 +1066,7 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
           </TabsContent>
 
           {/* -------------------- MANUAL REVIEW -------------------- */}
-          <TabsContent value="manual">
+          <TabsContent value="manual" className="space-y-3">
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
@@ -1147,62 +1085,74 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
                     description="KYC/KYB cases currently being reviewed by an analyst will appear here."
                   />
                 ) : (
-                  <ScrollTable>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
-                      <TableRow>
-                        <TableHead className="pl-4">Type</TableHead>
-                        <TableHead>Entity</TableHead>
-                        <TableHead>Country</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead>Reviewer</TableHead>
-                        <TableHead>SLA</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {manualReviewKyc.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyc(k)}
-                        >
-                          <TableCell className="pl-4">{typeBadge("kyc")}</TableCell>
-                          <TableCell className="font-medium">{k.customerName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskScoreBadge(k.riskScore)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                          <TableCell>{slaBadge(k.slaDeadline)}</TableCell>
-                        </TableRow>
-                      ))}
-                      {manualReviewKyb.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyb(k)}
-                        >
-                          <TableCell className="pl-4">{typeBadge("kyb")}</TableCell>
-                          <TableCell className="font-medium">{k.merchantName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskCategoryBadge(k.riskCategory)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                          <TableCell>{slaBadge(k.slaDeadline)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </ScrollTable>
+                  <div className="p-3 space-y-3">
+                    {manualReviewKyc.map((k) => (
+                      <KycCaseCard
+                        key={k.id}
+                        kyc={k}
+                        consumer={findConsumerForKyc(k)}
+                        docs={documentsForKyc(k, findConsumerForKyc(k))}
+                        onApprove={() => approveKyc(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyc",
+                            id: k.id,
+                            name: k.customerName,
+                          })
+                        }
+                        onEscalate={() => escalateKyc(k)}
+                        onRequestDocs={() => requestDocsKyc(k)}
+                        onAssign={() => assignReviewerKyc(k)}
+                        onViewProfile={() => viewKycProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskScoreBadge={riskScoreBadge}
+                        slaBadge={slaBadge}
+                        tierChip={tierChip}
+                        consumerStatusBadge={consumerStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                    {manualReviewKyb.map((k) => (
+                      <KybCaseCard
+                        key={k.id}
+                        kyb={k}
+                        merchant={findMerchantForKyb(k)}
+                        docs={documentsForKyb(k, findMerchantForKyb(k))}
+                        onApprove={() => approveKyb(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyb",
+                            id: k.id,
+                            name: k.merchantName,
+                          })
+                        }
+                        onEscalate={() => escalateKyb(k)}
+                        onRequestDocs={() => requestDocsKyb(k)}
+                        onAssign={() => assignReviewerKyb(k)}
+                        onViewProfile={() => viewKybProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskCategoryBadge={riskCategoryBadge}
+                        slaBadge={slaBadge}
+                        merchantStatusBadge={merchantStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
           </TabsContent>
 
           {/* ----------------------- APPROVED ---------------------- */}
-          <TabsContent value="approved">
+          <TabsContent value="approved" className="space-y-3">
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
@@ -1221,59 +1171,74 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
                     description="Approved KYC and KYB cases will be archived here for audit."
                   />
                 ) : (
-                  <ScrollTable>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
-                      <TableRow>
-                        <TableHead className="pl-4">Type</TableHead>
-                        <TableHead>Entity</TableHead>
-                        <TableHead>Country</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead>Reviewer</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {approvedKyc.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyc(k)}
-                        >
-                          <TableCell className="pl-4">{typeBadge("kyc")}</TableCell>
-                          <TableCell className="font-medium">{k.customerName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskScoreBadge(k.riskScore)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                        </TableRow>
-                      ))}
-                      {approvedKyb.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyb(k)}
-                        >
-                          <TableCell className="pl-4">{typeBadge("kyb")}</TableCell>
-                          <TableCell className="font-medium">{k.merchantName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskCategoryBadge(k.riskCategory)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </ScrollTable>
+                  <div className="p-3 space-y-3">
+                    {approvedKyc.map((k) => (
+                      <KycCaseCard
+                        key={k.id}
+                        kyc={k}
+                        consumer={findConsumerForKyc(k)}
+                        docs={documentsForKyc(k, findConsumerForKyc(k))}
+                        onApprove={() => approveKyc(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyc",
+                            id: k.id,
+                            name: k.customerName,
+                          })
+                        }
+                        onEscalate={() => escalateKyc(k)}
+                        onRequestDocs={() => requestDocsKyc(k)}
+                        onAssign={() => assignReviewerKyc(k)}
+                        onViewProfile={() => viewKycProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskScoreBadge={riskScoreBadge}
+                        slaBadge={slaBadge}
+                        tierChip={tierChip}
+                        consumerStatusBadge={consumerStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                    {approvedKyb.map((k) => (
+                      <KybCaseCard
+                        key={k.id}
+                        kyb={k}
+                        merchant={findMerchantForKyb(k)}
+                        docs={documentsForKyb(k, findMerchantForKyb(k))}
+                        onApprove={() => approveKyb(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyb",
+                            id: k.id,
+                            name: k.merchantName,
+                          })
+                        }
+                        onEscalate={() => escalateKyb(k)}
+                        onRequestDocs={() => requestDocsKyb(k)}
+                        onAssign={() => assignReviewerKyb(k)}
+                        onViewProfile={() => viewKybProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskCategoryBadge={riskCategoryBadge}
+                        slaBadge={slaBadge}
+                        merchantStatusBadge={merchantStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
           </TabsContent>
 
           {/* ----------------------- REJECTED ---------------------- */}
-          <TabsContent value="rejected">
+          <TabsContent value="rejected" className="space-y-3">
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
@@ -1292,127 +1257,73 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
                     description="Rejected KYC and KYB cases will be archived here for audit."
                   />
                 ) : (
-                  <ScrollTable>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
-                      <TableRow>
-                        <TableHead className="pl-4">Type</TableHead>
-                        <TableHead>Entity</TableHead>
-                        <TableHead>Country</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead>Reviewer</TableHead>
-                        <TableHead>Reason</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rejectedKyc.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyc(k)}
-                        >
-                          <TableCell className="pl-4">{typeBadge("kyc")}</TableCell>
-                          <TableCell className="font-medium">{k.customerName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskScoreBadge(k.riskScore)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                          <TableCell className="max-w-[240px] text-xs text-muted-foreground line-clamp-2">
-                            {k.notes || "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {rejectedKyb.map((k) => (
-                        <TableRow
-                          key={k.id}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedKyb(k)}
-                        >
-                          <TableCell className="pl-4">{typeBadge("kyb")}</TableCell>
-                          <TableCell className="font-medium">{k.merchantName}</TableCell>
-                          <TableCell className="text-xs font-mono">{k.countryCode}</TableCell>
-                          <TableCell>{riskCategoryBadge(k.riskCategory)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {timeAgo(k.submittedAt)}
-                          </TableCell>
-                          <TableCell>{reviewerCell(k.assignedReviewer)}</TableCell>
-                          <TableCell className="max-w-[240px] text-xs text-muted-foreground line-clamp-2">
-                            {k.notes || "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </ScrollTable>
+                  <div className="p-3 space-y-3">
+                    {rejectedKyc.map((k) => (
+                      <KycCaseCard
+                        key={k.id}
+                        kyc={k}
+                        consumer={findConsumerForKyc(k)}
+                        docs={documentsForKyc(k, findConsumerForKyc(k))}
+                        onApprove={() => approveKyc(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyc",
+                            id: k.id,
+                            name: k.customerName,
+                          })
+                        }
+                        onEscalate={() => escalateKyc(k)}
+                        onRequestDocs={() => requestDocsKyc(k)}
+                        onAssign={() => assignReviewerKyc(k)}
+                        onViewProfile={() => viewKycProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskScoreBadge={riskScoreBadge}
+                        slaBadge={slaBadge}
+                        tierChip={tierChip}
+                        consumerStatusBadge={consumerStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                    {rejectedKyb.map((k) => (
+                      <KybCaseCard
+                        key={k.id}
+                        kyb={k}
+                        merchant={findMerchantForKyb(k)}
+                        docs={documentsForKyb(k, findMerchantForKyb(k))}
+                        onApprove={() => approveKyb(k)}
+                        onReject={() =>
+                          setRejectTarget({
+                            type: "kyb",
+                            id: k.id,
+                            name: k.merchantName,
+                          })
+                        }
+                        onEscalate={() => escalateKyb(k)}
+                        onRequestDocs={() => requestDocsKyb(k)}
+                        onAssign={() => assignReviewerKyb(k)}
+                        onViewProfile={() => viewKybProfile(k)}
+                        onViewDoc={setViewDoc}
+                        onApproveDoc={approveDocument}
+                        onRejectDoc={rejectDocument}
+                        staffName={staffName}
+                        countryName={countryName}
+                        riskCategoryBadge={riskCategoryBadge}
+                        slaBadge={slaBadge}
+                        merchantStatusBadge={merchantStatusBadge}
+                        platformChips={platformChips}
+                      />
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
           </TabsContent>
         </Tabs>
       </ViewContainer>
-
-      {/* ------------------- KYC Detail Sheet ------------------- */}
-      <Sheet open={!!selectedKyc} onOpenChange={(o) => !o && setSelectedKyc(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col">
-          {selectedKyc && (
-            <KycDetailSheet
-              kyc={selectedKyc}
-              consumer={findConsumerForKyc(selectedKyc)}
-              staffName={staffName}
-              countryName={countryName}
-              onClose={() => setSelectedKyc(null)}
-              onApprove={() => approveKyc(selectedKyc)}
-              onReject={() =>
-                setRejectTarget({
-                  type: "kyc",
-                  id: selectedKyc.id,
-                  name: selectedKyc.customerName,
-                })
-              }
-              onEscalate={() => escalateKyc(selectedKyc)}
-              onRequestDocs={() => requestDocsKyc(selectedKyc)}
-              onAssign={() => assignReviewerKyc(selectedKyc)}
-              riskScoreBadge={riskScoreBadge}
-              slaBadge={slaBadge}
-              docChips={docChips}
-              tierChip={tierChip}
-              consumerStatusBadge={consumerStatusBadge}
-              platformChips={platformChips}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
-
-      {/* ------------------- KYB Detail Sheet ------------------- */}
-      <Sheet open={!!selectedKyb} onOpenChange={(o) => !o && setSelectedKyb(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col">
-          {selectedKyb && (
-            <KybDetailSheet
-              kyb={selectedKyb}
-              merchant={findMerchantForKyb(selectedKyb)}
-              staffName={staffName}
-              countryName={countryName}
-              onClose={() => setSelectedKyb(null)}
-              onApprove={() => approveKyb(selectedKyb)}
-              onReject={() =>
-                setRejectTarget({
-                  type: "kyb",
-                  id: selectedKyb.id,
-                  name: selectedKyb.merchantName,
-                })
-              }
-              onEscalate={() => escalateKyb(selectedKyb)}
-              onRequestDocs={() => requestDocsKyb(selectedKyb)}
-              onAssign={() => assignReviewerKyb(selectedKyb)}
-              slaBadge={slaBadge}
-              docChips={docChips}
-              merchantStatusBadge={merchantStatusBadge}
-              platformChips={platformChips}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
 
       {/* ----------------- Reject confirmation ----------------- */}
       <AlertDialog open={!!rejectTarget} onOpenChange={(o) => !o && setRejectTarget(null)}>
@@ -1438,6 +1349,14 @@ export function ComplianceView({ kycCases, kybCases, staff, countries, consumers
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ----------------- Document viewer dialog ----------------- */}
+      <DocumentViewerDialog
+        doc={viewDoc}
+        countryName={countryName}
+        staffName={staffName}
+        onOpenChange={(o) => !o && setViewDoc(null)}
+      />
 
       <SonnerToaster richColors closeButton position="bottom-right" />
     </>
@@ -1469,47 +1388,99 @@ const SANCTIONS_WORKFLOW: { title: string; desc: string }[] = [
   },
 ];
 
-/**
- * Scrollable table wrapper with sticky-header support and custom scrollbar.
- *
- * NOTE: we use a raw <table> here (not the Table primitive) because the
- * Table primitive wraps the table in its own `overflow-x-auto` div, which
- * becomes a separate scroll container and prevents the <thead> from sticking
- * to this outer vertical-scroll viewport.
- */
-function ScrollTable({ children }: { children: React.ReactNode }) {
+/* --------------------------- Filter bar --------------------------- */
+
+function FilterBar({
+  search,
+  setSearch,
+  country,
+  setCountry,
+  status,
+  setStatus,
+  countries,
+  searchPlaceholder,
+  count,
+  icon: Icon,
+  title,
+  iconColor,
+}: {
+  search: string;
+  setSearch: (s: string) => void;
+  country: string;
+  setCountry: (s: string) => void;
+  status: string;
+  setStatus: (s: string) => void;
+  countries: CountryConfig[];
+  searchPlaceholder: string;
+  count: number;
+  icon: typeof ShieldCheck;
+  title: string;
+  iconColor: string;
+}) {
   return (
-    <div
-      className={
-        "max-h-[60vh] overflow-auto " +
-        "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
-        "[&::-webkit-scrollbar-thumb]:rounded-full " +
-        "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
-        "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
-      }
-    >
-      <table className="w-full caption-bottom text-sm">{children}</table>
-    </div>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Icon className={cn("size-4", iconColor)} />
+          {title}
+          <Badge variant="secondary" className="text-[10px]">
+            {count}
+          </Badge>
+        </CardTitle>
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder={searchPlaceholder}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-7 h-8 w-56 text-xs"
+            />
+          </div>
+          <Select value={country} onValueChange={setCountry}>
+            <SelectTrigger size="sm" className="w-44 text-xs h-8">
+              <Filter className="size-3 mr-1 text-muted-foreground" />
+              <SelectValue placeholder="Country" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All countries</SelectItem>
+              {countries.map((c) => (
+                <SelectItem key={c.countryCode} value={c.countryCode}>
+                  {c.countryCode} · {c.countryName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger size="sm" className="w-36 text-xs h-8">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </CardHeader>
+    </Card>
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3 py-1.5">
-      <span className="text-xs text-muted-foreground uppercase tracking-wide">{label}</span>
-      <span className="text-sm text-right min-w-0">{value}</span>
-    </div>
-  );
-}
+/* --------------------------- Action buttons --------------------------- */
 
-function ActionButtons({
+function ActionBar({
   canAct,
   onApprove,
   onReject,
   onEscalate,
   onRequestDocs,
   onAssign,
+  onViewProfile,
   statusLabel,
+  viewProfileLabel,
 }: {
   canAct: boolean;
   onApprove: () => void;
@@ -1517,137 +1488,160 @@ function ActionButtons({
   onEscalate: () => void;
   onRequestDocs: () => void;
   onAssign: () => void;
+  onViewProfile: () => void;
   statusLabel: string;
+  viewProfileLabel: string;
 }) {
-  if (!canAct) {
-    return (
-      <div className="text-center text-xs text-muted-foreground py-3 border rounded-md bg-muted/30">
-        Case is <span className="font-medium">{statusLabel}</span> — no further actions available.
-      </div>
-    );
-  }
   return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          onClick={onApprove}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white"
-        >
-          <Check className="size-4" /> Approve
-        </Button>
-        <Button onClick={onReject} variant="destructive">
-          <X className="size-4" /> Reject
-        </Button>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <Button onClick={onRequestDocs} variant="outline">
-          <FileText className="size-4" /> Request docs
-        </Button>
-        <Button
-          onClick={onEscalate}
-          variant="outline"
-          className="text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-800 dark:hover:bg-amber-900/20"
-        >
-          <ArrowUpCircle className="size-4" /> Escalate
-        </Button>
-      </div>
-      <Button onClick={onAssign} variant="secondary" className="w-full">
-        <UserCheck className="size-4" /> Assign to me
+    <div className="flex flex-wrap items-center gap-2 pt-3 border-t">
+      <Button
+        onClick={onViewProfile}
+        variant="outline"
+        className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
+      >
+        <ExternalLink className="size-4" /> {viewProfileLabel}
       </Button>
+      <div className="flex-1" />
+      {canAct ? (
+        <>
+          <Button
+            onClick={onApprove}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            <Check className="size-4" /> Approve
+          </Button>
+          <Button
+            onClick={onReject}
+            variant="destructive"
+          >
+            <X className="size-4" /> Reject
+          </Button>
+          <Button
+            onClick={onEscalate}
+            variant="outline"
+            className="text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-800 dark:hover:bg-amber-900/20"
+          >
+            <ArrowUpCircle className="size-4" /> Escalate
+          </Button>
+          <Button onClick={onRequestDocs} variant="outline">
+            <FileText className="size-4" /> Request docs
+          </Button>
+          <Button onClick={onAssign} variant="secondary">
+            <UserCheck className="size-4" /> Assign to me
+          </Button>
+        </>
+      ) : (
+        <div className="text-xs text-muted-foreground italic">
+          Case is <span className="font-medium">{statusLabel}</span> — no further actions available.
+        </div>
+      )}
     </div>
   );
 }
 
-function KycDetailSheet({
+/* --------------------------- KYC case card --------------------------- */
+
+function KycCaseCard({
   kyc,
   consumer,
-  staffName,
-  countryName,
-  onClose,
+  docs,
   onApprove,
   onReject,
   onEscalate,
   onRequestDocs,
   onAssign,
+  onViewProfile,
+  onViewDoc,
+  onApproveDoc,
+  onRejectDoc,
+  staffName,
+  countryName,
   riskScoreBadge,
   slaBadge,
-  docChips,
   tierChip,
   consumerStatusBadge,
   platformChips,
 }: {
   kyc: KycCase;
   consumer: Consumer | null;
-  staffName: (id: string | null) => string;
-  countryName: (code: string) => string;
-  onClose: () => void;
+  docs: UserDocument[];
   onApprove: () => void;
   onReject: () => void;
   onEscalate: () => void;
   onRequestDocs: () => void;
   onAssign: () => void;
+  onViewProfile: () => void;
+  onViewDoc: (d: UserDocument) => void;
+  onApproveDoc: (d: UserDocument) => void;
+  onRejectDoc: (d: UserDocument) => void;
+  staffName: (id: string | null) => string;
+  countryName: (code: string) => string;
   riskScoreBadge: (s: number) => React.ReactNode;
   slaBadge: (d: number) => React.ReactNode;
-  docChips: (d: string[], emptyLabel?: string) => React.ReactNode;
   tierChip: (t: KycTier) => React.ReactNode;
   consumerStatusBadge: (s: ConsumerStatus) => React.ReactNode;
   platformChips: (p: PlatformKey[]) => React.ReactNode;
 }) {
   const badge = statusBadge("kyc", kyc.status);
   const canAct = kyc.status !== "approved" && kyc.status !== "rejected";
-  return (
-    <>
-      <SheetHeader>
-        <SheetDescription className="text-[11px] font-mono">{kyc.id}</SheetDescription>
-        <SheetTitle className="text-lg flex items-center gap-2">
-          <ShieldCheck className="size-5 text-emerald-600" />
-          {kyc.customerName}
-        </SheetTitle>
-        <div className="flex flex-wrap items-center gap-2 mt-1">
-          <Badge variant="secondary" className={cn("text-[10px]", badge.className)}>
-            {badge.label}
-          </Badge>
-          {riskScoreBadge(kyc.riskScore)}
-          {slaBadge(kyc.slaDeadline)}
-          {consumer && tierChip(consumer.kycTier)}
-        </div>
-      </SheetHeader>
 
-      <div className="flex-1 overflow-y-auto px-4 space-y-4 text-sm">
-        <div className="rounded-md border divide-y">
-          <DetailRow label="Country" value={`${kyc.countryCode} · ${countryName(kyc.countryCode)}`} />
-          <DetailRow label="Nationality" value={kyc.nationality} />
-          <DetailRow label="Submitted" value={formatDateTime(kyc.submittedAt)} />
-          <DetailRow label="SLA deadline" value={formatDateTime(kyc.slaDeadline)} />
-          <DetailRow label="Risk score" value={`${kyc.riskScore} / 100`} />
-          <DetailRow label="Reviewer" value={staffName(kyc.assignedReviewer)} />
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        {/* Case header */}
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <ShieldCheck className="size-4 text-emerald-600" />
+              <span className="font-medium text-sm">{kyc.customerName}</span>
+              {consumer && tierChip(consumer.kycTier)}
+              <Badge variant="secondary" className={cn("text-[10px]", badge.className)}>
+                {badge.label}
+              </Badge>
+              {riskScoreBadge(kyc.riskScore)}
+              {slaBadge(kyc.slaDeadline)}
+            </div>
+            <div className="text-[11px] font-mono text-muted-foreground mt-1">
+              {kyc.id} · {kyc.countryCode} · {countryName(kyc.countryCode)}
+            </div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              Nationality: {kyc.nationality} · Submitted {timeAgo(kyc.submittedAt)} ·
+              Reviewer: {staffName(kyc.assignedReviewer)}
+            </div>
+          </div>
         </div>
 
         {/* Linked consumer record */}
         {consumer ? (
-          <div>
-            <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
-              <User className="size-3" /> Linked consumer record
-              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1">
+          <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 text-xs">
+            <div className="flex items-center gap-1 font-medium text-emerald-800 dark:text-emerald-300 mb-1">
+              <User className="size-3" /> Linked consumer · {consumer.consumerCode}
+              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-300 bg-white dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1">
                 Live sync
               </Badge>
             </div>
-            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
-              <DetailRow label="Name" value={`${consumer.firstName} ${consumer.lastName}`} />
-              <DetailRow label="Consumer code" value={<span className="font-mono text-xs">{consumer.consumerCode}</span>} />
-              <DetailRow label="Email" value={<span className="text-xs">{consumer.email}</span>} />
-              <DetailRow label="Phone" value={<span className="text-xs">{consumer.phone}</span>} />
-              <DetailRow label="Nationality" value={consumer.nationality} />
-              <DetailRow label="Date of birth" value={consumer.dateOfBirth} />
-              <DetailRow label="KYC tier" value={tierChip(consumer.kycTier)} />
-              <DetailRow label="Risk score" value={riskScoreBadge(consumer.riskScore)} />
-              <DetailRow label="Current status" value={consumerStatusBadge(consumer.status)} />
-              <DetailRow label="Platforms" value={platformChips(consumer.platforms)} />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+              <div>
+                <span className="text-muted-foreground">Name:</span>{" "}
+                {consumer.firstName} {consumer.lastName}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Email:</span>{" "}
+                <span className="font-mono">{consumer.email}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Risk:</span>{" "}
+                {riskScoreBadge(consumer.riskScore)}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Status:</span>{" "}
+                {consumerStatusBadge(consumer.status)}
+              </div>
+              <div className="col-span-2 md:col-span-4">
+                <span className="text-muted-foreground">Platforms:</span>{" "}
+                {platformChips(consumer.platforms)}
+              </div>
             </div>
-            <p className="text-[11px] text-muted-foreground mt-1.5">
-              Approving this case will set this consumer to <span className="font-medium text-emerald-700 dark:text-emerald-400">KYC approved · Active</span>.
-              Rejecting will set them to <span className="font-medium text-orange-700 dark:text-orange-400">KYC rejected · Restricted</span>.
-            </p>
           </div>
         ) : (
           <div className="rounded-md border border-dashed border-amber-300 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
@@ -1656,138 +1650,157 @@ function KycDetailSheet({
           </div>
         )}
 
+        {/* Inline documents */}
         <div>
-          <div className="text-xs font-medium text-muted-foreground uppercase mb-2">
-            Required documents
+          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+            <FileText className="size-3" /> Submitted Documents ({docs.length})
           </div>
-          {docChips(kyc.requiredDocuments, "No documents required")}
+          {docs.length === 0 ? (
+            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground italic">
+              No documents uploaded yet for this case.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {docs.map((d) => (
+                <DocumentCard
+                  key={d.id}
+                  doc={d}
+                  onView={() => onViewDoc(d)}
+                  onApprove={() => onApproveDoc(d)}
+                  onReject={() => onRejectDoc(d)}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
+        {/* Notes */}
         {kyc.notes && (
-          <div>
-            <div className="text-xs font-medium text-muted-foreground uppercase mb-1">
-              Analyst notes
-            </div>
-            <p className="text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-md p-3 text-amber-900 dark:text-amber-200">
-              {kyc.notes}
-            </p>
+          <div className="rounded-md border border-amber-200 dark:border-amber-800/40 bg-amber-50 dark:bg-amber-900/20 p-2.5 text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-medium">Analyst notes:</span> {kyc.notes}
           </div>
         )}
-      </div>
 
-      <SheetFooter className="flex flex-col gap-2 items-stretch">
-        <ActionButtons
+        {/* Actions */}
+        <ActionBar
           canAct={canAct}
           statusLabel={badge.label}
+          viewProfileLabel="View consumer profile"
           onApprove={onApprove}
           onReject={onReject}
           onEscalate={onEscalate}
           onRequestDocs={onRequestDocs}
           onAssign={onAssign}
+          onViewProfile={onViewProfile}
         />
-        <Button variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </SheetFooter>
-    </>
+      </CardContent>
+    </Card>
   );
 }
 
-function KybDetailSheet({
+/* --------------------------- KYB case card --------------------------- */
+
+function KybCaseCard({
   kyb,
   merchant,
-  staffName,
-  countryName,
-  onClose,
+  docs,
   onApprove,
   onReject,
   onEscalate,
   onRequestDocs,
   onAssign,
+  onViewProfile,
+  onViewDoc,
+  onApproveDoc,
+  onRejectDoc,
+  staffName,
+  countryName,
+  riskCategoryBadge,
   slaBadge,
-  docChips,
   merchantStatusBadge,
   platformChips,
 }: {
   kyb: KybCase;
   merchant: Merchant | null;
-  staffName: (id: string | null) => string;
-  countryName: (code: string) => string;
-  onClose: () => void;
+  docs: UserDocument[];
   onApprove: () => void;
   onReject: () => void;
   onEscalate: () => void;
   onRequestDocs: () => void;
   onAssign: () => void;
+  onViewProfile: () => void;
+  onViewDoc: (d: UserDocument) => void;
+  onApproveDoc: (d: UserDocument) => void;
+  onRejectDoc: (d: UserDocument) => void;
+  staffName: (id: string | null) => string;
+  countryName: (code: string) => string;
+  riskCategoryBadge: (cat: KybCase["riskCategory"]) => React.ReactNode;
   slaBadge: (d: number) => React.ReactNode;
-  docChips: (d: string[], emptyLabel?: string) => React.ReactNode;
   merchantStatusBadge: (s: MerchantStatus) => React.ReactNode;
   platformChips: (p: PlatformKey[]) => React.ReactNode;
 }) {
   const badge = statusBadge("kyb", kyb.status);
   const canAct = kyb.status !== "approved" && kyb.status !== "rejected";
-  const riskBadge = statusBadge("risk", kyb.riskCategory);
-  const merchantRisk = merchant ? statusBadge("risk", merchant.riskCategory) : null;
-  return (
-    <>
-      <SheetHeader>
-        <SheetDescription className="text-[11px] font-mono">{kyb.id}</SheetDescription>
-        <SheetTitle className="text-lg flex items-center gap-2">
-          <FileText className="size-5 text-amber-600" />
-          {kyb.merchantName}
-        </SheetTitle>
-        <div className="flex flex-wrap items-center gap-2 mt-1">
-          <Badge variant="secondary" className={cn("text-[10px]", badge.className)}>
-            {badge.label}
-          </Badge>
-          <Badge variant="secondary" className={cn("text-[10px] capitalize", riskBadge.className)}>
-            {riskBadge.label} risk
-          </Badge>
-          {slaBadge(kyb.slaDeadline)}
-          {merchant && merchantRisk && (
-            <Badge variant="outline" className={cn("text-[10px] capitalize", merchantRisk.className)}>
-              M·{merchantRisk.label}
-            </Badge>
-          )}
-        </div>
-      </SheetHeader>
 
-      <div className="flex-1 overflow-y-auto px-4 space-y-4 text-sm">
-        <div className="rounded-md border divide-y">
-          <DetailRow label="Country" value={`${kyb.countryCode} · ${countryName(kyb.countryCode)}`} />
-          <DetailRow label="Business type" value={kyb.businessType} />
-          <DetailRow label="Submitted" value={formatDateTime(kyb.submittedAt)} />
-          <DetailRow label="SLA deadline" value={formatDateTime(kyb.slaDeadline)} />
-          <DetailRow label="Risk category" value={<span className="capitalize">{kyb.riskCategory}</span>} />
-          <DetailRow label="Reviewer" value={staffName(kyb.assignedReviewer)} />
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        {/* Case header */}
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <FileText className="size-4 text-amber-600" />
+              <span className="font-medium text-sm">{kyb.merchantName}</span>
+              {merchant && (
+                <Badge variant="outline" className="text-[10px] font-mono">
+                  {merchant.merchantCode}
+                </Badge>
+              )}
+              <Badge variant="secondary" className={cn("text-[10px]", badge.className)}>
+                {badge.label}
+              </Badge>
+              {riskCategoryBadge(kyb.riskCategory)}
+              {slaBadge(kyb.slaDeadline)}
+            </div>
+            <div className="text-[11px] font-mono text-muted-foreground mt-1">
+              {kyb.id} · {kyb.countryCode} · {countryName(kyb.countryCode)}
+            </div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              Type: {kyb.businessType} · Submitted {timeAgo(kyb.submittedAt)} ·
+              Reviewer: {staffName(kyb.assignedReviewer)}
+            </div>
+          </div>
         </div>
 
         {/* Linked merchant record */}
         {merchant ? (
-          <div>
-            <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
-              <Building2 className="size-3" /> Linked merchant record
-              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1">
+          <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 text-xs">
+            <div className="flex items-center gap-1 font-medium text-emerald-800 dark:text-emerald-300 mb-1">
+              <Building2 className="size-3" /> Linked merchant · {merchant.merchantCode}
+              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-300 bg-white dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800 ml-1">
                 Live sync
               </Badge>
             </div>
-            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
-              <DetailRow label="Trading name" value={merchant.tradingName} />
-              <DetailRow label="Legal name" value={merchant.legalName} />
-              <DetailRow label="Merchant code" value={<span className="font-mono text-xs">{merchant.merchantCode}</span>} />
-              <DetailRow label="Contact email" value={<span className="text-xs">{merchant.contactEmail}</span>} />
-              <DetailRow label="Contact phone" value={<span className="text-xs">{merchant.contactPhone}</span>} />
-              <DetailRow label="Owner" value={<span className="text-xs">{merchant.ownerName} · {merchant.ownerEmail}</span>} />
-              <DetailRow label="Business type" value={<span className="capitalize">{merchant.businessType.replace(/_/g, " ")}</span>} />
-              <DetailRow label="Industry" value={merchant.industry} />
-              <DetailRow label="Risk category" value={<span className="capitalize">{merchant.riskCategory}</span>} />
-              <DetailRow label="Current status" value={merchantStatusBadge(merchant.status)} />
-              <DetailRow label="Platforms" value={platformChips(merchant.platforms)} />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+              <div>
+                <span className="text-muted-foreground">Trading:</span> {merchant.tradingName}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Legal:</span> {merchant.legalName}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Risk:</span>{" "}
+                <span className="capitalize">{merchant.riskCategory}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Status:</span>{" "}
+                {merchantStatusBadge(merchant.status)}
+              </div>
+              <div className="col-span-2 md:col-span-4">
+                <span className="text-muted-foreground">Platforms:</span>{" "}
+                {platformChips(merchant.platforms)}
+              </div>
             </div>
-            <p className="text-[11px] text-muted-foreground mt-1.5">
-              Approving this case will set this merchant to <span className="font-medium text-emerald-700 dark:text-emerald-400">KYB approved · Active</span>.
-              Rejecting will set them to <span className="font-medium text-orange-700 dark:text-orange-400">KYB rejected · Restricted</span>.
-            </p>
           </div>
         ) : (
           <div className="rounded-md border border-dashed border-amber-300 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
@@ -1796,39 +1809,286 @@ function KybDetailSheet({
           </div>
         )}
 
+        {/* Inline documents */}
         <div>
-          <div className="text-xs font-medium text-muted-foreground uppercase mb-2">
-            Missing documents
+          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+            <FileText className="size-3" /> Submitted Documents ({docs.length})
           </div>
-          {docChips(kyb.missingDocuments, "All required documents received")}
+          {docs.length === 0 ? (
+            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground italic">
+              No documents uploaded yet for this case.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {docs.map((d) => (
+                <DocumentCard
+                  key={d.id}
+                  doc={d}
+                  onView={() => onViewDoc(d)}
+                  onApprove={() => onApproveDoc(d)}
+                  onReject={() => onRejectDoc(d)}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
+        {/* Notes */}
         {kyb.notes && (
-          <div>
-            <div className="text-xs font-medium text-muted-foreground uppercase mb-1">
-              Analyst notes
-            </div>
-            <p className="text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-md p-3 text-amber-900 dark:text-amber-200">
-              {kyb.notes}
-            </p>
+          <div className="rounded-md border border-amber-200 dark:border-amber-800/40 bg-amber-50 dark:bg-amber-900/20 p-2.5 text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-medium">Analyst notes:</span> {kyb.notes}
           </div>
         )}
-      </div>
 
-      <SheetFooter className="flex flex-col gap-2 items-stretch">
-        <ActionButtons
+        {/* Actions */}
+        <ActionBar
           canAct={canAct}
           statusLabel={badge.label}
+          viewProfileLabel="View merchant profile"
           onApprove={onApprove}
           onReject={onReject}
           onEscalate={onEscalate}
           onRequestDocs={onRequestDocs}
           onAssign={onAssign}
+          onViewProfile={onViewProfile}
         />
-        <Button variant="ghost" onClick={onClose}>
-          Close
+      </CardContent>
+    </Card>
+  );
+}
+
+/* --------------------------- Document card (inline) --------------------------- */
+
+function DocumentCard({
+  doc,
+  onView,
+  onApprove,
+  onReject,
+}: {
+  doc: UserDocument;
+  onView: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const statusStyle = DOCUMENT_STATUS_STYLES[doc.status];
+  const typeLabel = DOCUMENT_TYPE_LABELS[doc.documentType] ?? doc.documentType.replace(/_/g, " ");
+  const canReview = doc.status === "pending" || doc.status === "replacement_requested";
+
+  return (
+    <div className="rounded-md border p-2.5 space-y-1.5 bg-card">
+      <div className="flex items-start justify-between gap-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="size-7 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+            <FileText className="size-3.5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium truncate">{typeLabel}</div>
+            <div className="text-[10px] text-muted-foreground font-mono truncate">
+              {doc.fileName}
+            </div>
+          </div>
+        </div>
+        <Badge variant="secondary" className={cn("text-[9px] shrink-0", statusStyle.className)}>
+          {statusStyle.label}
+        </Badge>
+      </div>
+      <div className="text-[10px] text-muted-foreground">
+        Uploaded {timeAgo(doc.uploadedAt)}
+      </div>
+      <div className="flex items-center gap-1 pt-0.5">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 text-[10px] flex-1"
+          onClick={onView}
+        >
+          <Eye className="size-3 mr-1" /> View
         </Button>
-      </SheetFooter>
-    </>
+        {canReview && (
+          <>
+            <Button
+              size="sm"
+              className="h-6 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={onApprove}
+            >
+              <Check className="size-3" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/20"
+              onClick={onReject}
+            >
+              <X className="size-3" />
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------- Document viewer dialog --------------------------- */
+
+/**
+ * Document metadata viewer — NO download button.
+ * Shows type, file name, entity, country, uploaded date, status, reviewed by,
+ * notes, and a placeholder explaining the file is stored in Firebase Storage
+ * (production preview only).
+ */
+function DocumentViewerDialog({
+  doc,
+  countryName,
+  staffName,
+  onOpenChange,
+}: {
+  doc: UserDocument | null;
+  countryName: (code: string) => string;
+  staffName: (id: string | null) => string;
+  onOpenChange: (open: boolean) => void;
+}) {
+  if (!doc) return null;
+  const statusStyle = DOCUMENT_STATUS_STYLES[doc.status];
+  const typeLabel = DOCUMENT_TYPE_LABELS[doc.documentType] ?? doc.documentType.replace(/_/g, " ");
+
+  return (
+    <Dialog open={!!doc} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <FileText className="size-5 text-emerald-600" />
+            Document metadata
+          </DialogTitle>
+          <DialogDescription>
+            Inline review only — no download available from the admin portal.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-2">
+          {/* Status badge */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="text-[10px]">
+              {typeLabel}
+            </Badge>
+            <Badge variant="secondary" className={cn("text-[10px]", statusStyle.className)}>
+              {statusStyle.label}
+            </Badge>
+          </div>
+
+          {/* Metadata rows */}
+          <div className="rounded-md border divide-y">
+            <DetailRow
+              label="Type"
+              value={<span className="text-sm">{typeLabel}</span>}
+            />
+            <DetailRow
+              label="File name"
+              value={<span className="text-xs font-mono break-all">{doc.fileName}</span>}
+            />
+            <DetailRow
+              label="MIME type"
+              value={<span className="text-xs font-mono">{doc.mimeType || "—"}</span>}
+            />
+            <DetailRow
+              label="Entity"
+              value={
+                <span className="text-xs">
+                  <span className="capitalize">{doc.entityType}</span> · {doc.entityName}
+                </span>
+              }
+            />
+            <DetailRow
+              label="Country"
+              value={
+                <span className="text-xs">
+                  <span className="font-mono">{doc.countryCode}</span>
+                  <span className="text-muted-foreground ml-1">· {countryName(doc.countryCode)}</span>
+                </span>
+              }
+            />
+            <DetailRow
+              label="Uploaded"
+              value={<span className="text-xs">{formatDateTime(doc.uploadedAt)}</span>}
+            />
+            <DetailRow
+              label="Status"
+              value={
+                <Badge variant="secondary" className={cn("text-[10px]", statusStyle.className)}>
+                  {statusStyle.label}
+                </Badge>
+              }
+            />
+            <DetailRow
+              label="Reviewed by"
+              value={
+                doc.reviewedBy ? (
+                  <span className="text-xs">
+                    {staffName(doc.reviewedBy)}
+                    {doc.reviewedAt && (
+                      <span className="text-muted-foreground ml-1">
+                        · {formatDateTime(doc.reviewedAt)}
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground italic">Not yet reviewed</span>
+                )
+              }
+            />
+            {doc.notes && (
+              <DetailRow
+                label="Notes"
+                value={<span className="text-xs">{doc.notes}</span>}
+              />
+            )}
+          </div>
+
+          {/* Preview placeholder */}
+          <div className="rounded-md border border-dashed border-emerald-300 dark:border-emerald-800/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-4 text-center">
+            <ImageIcon className="size-8 text-emerald-600 mx-auto mb-1.5" />
+            <div className="text-xs font-medium text-emerald-900 dark:text-emerald-200">
+              Document preview available in production
+            </div>
+            <div className="text-[10px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+              File stored in Firebase Storage — preview rendered server-side
+              when the storage bucket is configured.
+            </div>
+          </div>
+
+          {/* No-download notice */}
+          <div className="rounded-md border border-amber-200 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-900/10 p-2 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+            <Download className="size-3 mt-0.5 shrink-0" />
+            <span>
+              <strong>No download</strong> — admin portal does not allow
+              downloading customer documents. All review is done inline for
+              compliance and data-protection reasons.
+            </span>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-1.5 px-3">
+      <span className="text-xs text-muted-foreground uppercase tracking-wide">
+        {label}
+      </span>
+      <span className="text-sm text-right min-w-0">{value}</span>
+    </div>
   );
 }

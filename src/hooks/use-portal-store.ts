@@ -11,6 +11,7 @@ export type PortalView =
   | "user_detail"
   | "merchants"
   | "merchant_detail"
+  | "stock"
   | "staff"
   | "departments"
   | "countries"

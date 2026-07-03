@@ -19,6 +19,7 @@ import {
   ChevronRight,
   ShieldAlert,
   Store,
+  Package,
 } from "lucide-react";
 import { usePortalStore, type PortalView } from "@/hooks/use-portal-store";
 import { useAuth } from "@/hooks/use-auth";
@@ -41,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { view: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "operations" },
   { view: "users", label: "Users (Consumers)", icon: Users, group: "operations" },
   { view: "merchants", label: "Merchants", icon: Store, group: "operations" },
+  { view: "stock", label: "Stock & Inventory", icon: Package, group: "operations" },
   { view: "compliance", label: "Compliance · KYC/KYB", icon: ShieldCheck, group: "operations" },
   { view: "risk", label: "Risk & Fraud", icon: AlertTriangle, group: "operations" },
   { view: "devices", label: "Devices & Terminals", icon: Smartphone, group: "operations" },

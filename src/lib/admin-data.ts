@@ -59,6 +59,7 @@ import type {
   ProviderLog,
   WebhookLog,
   PosDeviceRequest,
+  StockItem,
 } from "./types";
 import {
   SEED_DEPARTMENTS,
@@ -90,6 +91,7 @@ import {
   SEED_PROVIDER_LOGS,
   SEED_WEBHOOK_LOGS,
   SEED_POS_DEVICE_REQUESTS,
+  SEED_STOCK_ITEMS,
 } from "./seed-data";
 
 const PREFIX = "faya_admin_";
@@ -124,6 +126,7 @@ export const COLLECTIONS = {
   providerLogs: `${PREFIX}provider_logs`,
   webhookLogs: `${PREFIX}webhook_logs`,
   posDeviceRequests: `${PREFIX}pos_device_requests`,
+  stock: `${PREFIX}stock`,
   meta: `${PREFIX}meta`,
 } as const;
 
@@ -241,6 +244,7 @@ export async function ensureSeedData(): Promise<void> {
       await seedBatch(COLLECTIONS.providerLogs, SEED_PROVIDER_LOGS);
       await seedBatch(COLLECTIONS.webhookLogs, SEED_WEBHOOK_LOGS);
       await seedBatch(COLLECTIONS.posDeviceRequests, SEED_POS_DEVICE_REQUESTS);
+      await seedBatch(COLLECTIONS.stock, SEED_STOCK_ITEMS);
 
       await setDoc(doc(d, COLLECTIONS.meta, "seed_status"), {
         seeded: true,
@@ -659,11 +663,17 @@ export const adminData = {
     subscribe<WebhookLog>(COLLECTIONS.webhookLogs, cb, orderBy("receivedAt", "desc")),
   updateWebhookLog: (id: string, patchData: Partial<WebhookLog>) => patch<WebhookLog>(COLLECTIONS.webhookLogs, id, patchData),
 
-  // POS Device Requests — terminal/phone POS approval workflow
+  // POS Device Requests — device binding requests from POS app login
   subscribePosDeviceRequests: (cb: (items: PosDeviceRequest[]) => void) =>
     subscribe<PosDeviceRequest>(COLLECTIONS.posDeviceRequests, cb, orderBy("createdAt", "desc")),
   createPosDeviceRequest: (item: PosDeviceRequest) => upsert(COLLECTIONS.posDeviceRequests, item),
   updatePosDeviceRequest: (id: string, patchData: Partial<PosDeviceRequest>) => patch<PosDeviceRequest>(COLLECTIONS.posDeviceRequests, id, patchData),
+
+  // Stock / Inventory — physical terminals and physical cards
+  subscribeStock: (cb: (items: StockItem[]) => void) =>
+    subscribe<StockItem>(COLLECTIONS.stock, cb, orderBy("createdAt", "desc")),
+  createStockItem: (item: StockItem) => upsert(COLLECTIONS.stock, item),
+  updateStockItem: (id: string, patchData: Partial<StockItem>) => patch<StockItem>(COLLECTIONS.stock, id, patchData),
 
   // Local store management
   resetLocalStore: () => localStore.reset(),
