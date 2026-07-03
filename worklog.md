@@ -474,3 +474,93 @@ Stage Summary:
   • Device integrity check warning (rooted devices)
   • Screen lock warning
   • All approvals/declines audit-logged
+
+---
+Task ID: CP1
+Agent: subagent-comprehensive-consumer-profile
+Task: Rebuild consumer profile with ALL related data in tabs
+
+Work Log:
+- Read worklog.md, types.ts, admin-data.ts, access-scope.ts, formatters.ts, view-helpers.tsx, use-auth.ts, merchants-view.tsx (for conventions), and the existing users-view.tsx
+- Completely rewrote `/home/z/my-project/src/components/portal/views/users-view.tsx`:
+  - MAIN VIEW: stat cards (Total / Active / Pending KYC / Restricted+Suspended), filters (search, country, KYC status, account status), consumer table (Consumer Code, Name, Email, Phone, Country, KYC, Status, Wallet Balance, Cards count, Txns count, Updated, Actions), row click opens detail Sheet, row dropdown for View profile / Restrict / Suspend / Reactivate (via updateConsumer + logAudit), with AlertDialog confirmation
+  - DETAIL SHEET (sm:max-w-4xl — wider):
+    - Profile Summary Header (always visible above tabs): avatar with initials, full name, consumer code, country flag/code, KYC badge, account status badge, KYC tier badge; quick actions (Restrict / Suspend / Reactivate); 6 quick stats row (Cards, Wallets, Total Balance, Txns, Open Tickets, Open Disputes) each with icon
+    - 10 tabs with count badges in compact text-[11px]:
+      1. Overview — personal details, contact, KYC summary, platforms, wallet summary, transaction stats, quick-links note
+      2. Cards — table (Card ID, Type, Scheme, Last 4, Status, Currency, Frozen, Tokenized, Created, Actions) — Freeze/Unfreeze (updateCard), View details; security note "Admin never sees full PAN, CVV or PIN"
+      3. Wallets — table (Wallet ID, Currency, Balance, Available, Held, Status, Linked Cards, Actions) — Freeze/Unfreeze (updateWallet); note "Manual balance adjustment requires dual approval"
+      4. Transactions — table (Reference, Amount, Currency, Type, Status, Method, Card Last4, Risk, Created, Actions) — View receipt, Open dispute, Escalate, Add note (toast + logAudit)
+      5. Documents — table (Type, File Name, Status, Uploaded, Reviewed By, Actions) — Approve, Reject, Request replacement (updateDocument + logAudit)
+      6. KYC Cases — table (Case ID, Country, Nationality, Risk, Submitted, Status, Reviewer, SLA, Actions) — Approve (updateKyc + updateConsumer kycStatus=approved status=active), Reject, Escalate (all + logAudit)
+      7. Support Tickets — table (Ticket ID, Country, Type, Subject, Priority, Status, Created, SLA, Actions) — Reply, Assign, Close (updateTicket + logAudit)
+      8. Disputes — table (Dispute ID, Merchant, Amount, Reason, Status, Deadline, Actions) — View details + Update status dropdown (updateDispute + logAudit)
+      9. Risk & Alerts — table (Alert ID, Trigger, Severity, Amount, Device, Created, Status, Actions) — Close false positive, Escalate (updateFraud + logAudit)
+      10. Activity & Audit — table (Timestamp, Action, Entity, Reason, IP, Actor) — read-only; immutable note
+  - Each tab subscribes live via useEffect(() => adminData.subscribe*(setItems), []), filters by the selected consumer (matching rules per the task spec), shows EmptyState if 0 items, uses max-h-60 overflow-y-auto scroll table with sticky header
+  - Aliased type imports (Card as CardRecord, Wallet as WalletRecord, etc.) to avoid collision
+  - Emerald accent throughout; NO indigo/blue primary
+  - All mutations funnel through adminData.update* + logAudit with proper action keys; Sonner toasts for feedback
+  - Imports: toast from "sonner", adminData + logAudit from "@/lib/admin-data", useAuth from "@/hooks/use-auth", getVisibleConsumers + getScopeLabel from "@/lib/access-scope"
+
+Stage Summary:
+- A truly comprehensive consumer profile view where EVERYTHING connected to a consumer — cards, wallets, transactions, documents, KYC cases, support tickets, disputes, risk alerts, audit logs — lives under their profile in 10 tabs, all driven by live Firestore subscriptions. Replaces the prior narrower users-view.tsx entirely. The companion Faya Pay consumer app reads the same Firestore collections through the same `adminData` patch helpers.
+
+---
+Task ID: MP1
+Agent: subagent-comprehensive-merchant-profile
+Task: Rebuild merchant profile with ALL related data in tabs
+
+Work Log:
+- Read worklog.md, types.ts, admin-data.ts, access-scope.ts, formatters.ts, view-helpers.tsx, use-auth.ts, and existing merchants-view.tsx for project conventions
+- Confirmed available subscribe/update methods in admin-data.ts (subscribePosStaff/Terminals/PosDeviceRequests/Transactions/Settlements/Disputes/Documents/Kyb/Tickets/Fraud/Audit + matching updateXxx methods + logAudit helper)
+- Completely rewrote src/components/portal/views/merchants-view.tsx:
+  - MAIN VIEW: stat cards (Total / Active / Onboarding / Restricted+Suspended), filters (search, country, KYB status, account status, risk category), merchant table (Code, Trading Name, Country, Business Type, KYB, Risk, Status, Terminals, Phone POS, Monthly Volume, Actions), row click opens detail Sheet, row dropdown actions (View profile / Approve KYB / Reject KYB / Restrict / Suspend / Reactivate) via updateMerchant + logAudit, AlertDialog confirmation
+  - DETAIL SHEET (sm:max-w-4xl) with sticky Profile Summary Header (business name, merchant code, country, KYB/status/risk badges, platform chips, merchant actions dropdown, 6-cell quick stats row: POS Staff / Terminals / Phone POS / Monthly Volume / Open Disputes / Open Tickets) above 12 tabs (compact text-[11px] each with count badge):
+    1. Overview — business profile / owner details / KYB summary / platforms / terminal & transaction stats / settlement info / notes
+    2. POS Staff — table + Suspend/Reactivate (updatePosStaff), Reset PIN, Force logout (toast + logAudit)
+    3. Terminals — table + Activate/Block (updateTerminal)
+    4. POS Requests — KEY device approval workflow: NFC/Card/Swipe capability badges, integrity & screen-lock indicators, Approve DISABLED if canBeApproved === false, Auto-decline button when no payment methods, manual Decline dialog with reason, amber warnings for failed integrity / no screen lock, logAudit pos_device.approve/decline/auto_decline
+    5. Transactions — table + View details / Open dispute / Escalate (logAudit)
+    6. Settlements — table + Retry if failed (updateSettlement + logAudit "settlement.retry"), View details
+    7. Disputes — table + Request evidence / Advance status (updateDispute + logAudit)
+    8. Documents — table + Approve / Reject / Request replacement (updateDocument + logAudit)
+    9. KYB Cases — table + Approve (updateKyb approved + updateMerchant kybStatus=approved status=active) / Reject / Escalate, SLA pill column
+    10. Support Tickets — table + Reply / Assign / Close (updateTicket + logAudit), priority + status + SLA columns
+    11. Risk & Alerts — table of fraud alerts filtered by entityName matching merchant legal/trading name, severity + status badges
+    12. Activity & Audit — read-only audit logs filtered by entityId === merchant.id
+  - Single useEffect in MerchantProfileSheet subscribes to all 11 collections once and passes filtered items to each tab (one subscription per collection). MerchantProfileSheet is key={merchant.id} in parent so a fresh mount resets the active tab to Overview.
+  - Each tab uses max-h-60 overflow-y-auto scroll table with sticky header, shows EmptyState when 0 items
+  - Emerald accent throughout, NO indigo/blue primary
+- Lint fix: replaced in-effect setTab("overview") call with parent key={merchant.id} remount pattern to satisfy react-hooks/set-state-in-effect rule
+- bun run lint passes clean (0 errors, 0 warnings). Dev server compiles successfully.
+
+Stage Summary:
+A truly comprehensive merchant profile view where EVERYTHING connected to a merchant — POS staff, terminals, POS device requests, transactions, settlements, disputes, documents, KYB cases, support tickets, fraud alerts, and audit logs — lives under their profile Sheet in 12 tabs, all driven by live Firestore subscriptions. The POS device approval workflow enforces the spec rule (cannot approve if device has no NFC, card reader, or swipe; offers auto-decline instead). Replaces the prior narrower merchants-view.tsx entirely. The companion Faya Business merchant app reads the same Firestore collections through the same adminData patch helpers.
+
+---
+Task ID: COMPREHENSIVE-PROFILES
+Agent: main
+Task: Create comprehensive profiles with EVERYTHING connected to a user under their profile
+
+Work Log:
+- Subagent CP1: Rebuilt users-view.tsx with 10-tab comprehensive consumer profile:
+  • Profile summary header with quick stats (cards, wallets, balance, txns, tickets, disputes counts)
+  • Tabs: Overview, Cards, Wallets, Transactions, Documents, KYC Cases, Support Tickets, Disputes, Risk & Alerts, Activity & Audit
+  • Each tab subscribes to its own data via adminData.subscribe* and filters by consumer
+- Subagent MP1: Rebuilt merchants-view.tsx with 12-tab comprehensive merchant profile:
+  • Profile summary header with quick stats (POS staff, terminals, phone POS, monthly volume, disputes, tickets)
+  • Tabs: Overview, POS Staff, Terminals, POS Requests (device approval), Transactions, Settlements, Disputes, Documents, KYB Cases, Support Tickets, Risk & Alerts, Activity & Audit
+- Fixed TypeScript error: kycBadge and consumerStatusBadge were defined inside UsersView but used by sub-components — moved to module level
+- Fixed TypeScript error: failureReason: null → undefined in merchants-view
+- Browser verification:
+  * Consumer (Adebayo Ogun): 10 tabs showing — Overview, Cards (2), Wallets (1), Transactions (3), Documents (1), KYC Cases (0), Support (0), Disputes (0), Risk & Alerts (0), Activity (0)
+  * Merchant (Lagos Foods): 12 tabs showing — Overview, POS Staff (2), Terminals (0), POS Requests (1), Transactions (4), Settlements (0), Disputes (0), Documents (1), KYB Cases (1), Tickets (0), Risk & Alerts (0), Activity & Audit (0)
+- Lint: 0 errors. Dev server: 200 OK.
+
+Stage Summary:
+- Consumer profile now has EVERYTHING: cards, wallets, transactions, documents, KYC cases, support tickets, disputes, fraud alerts, audit history — all in one place
+- Merchant profile now has EVERYTHING: POS staff, terminals, POS device requests, transactions, settlements, disputes, documents, KYB cases, support tickets, fraud alerts, audit history — all in one place
+- Each tab shows a live count badge so the admin instantly sees how many items exist
+- POS device approval workflow is under Merchant → POS Requests tab
+- No more jumping between separate pages — everything is contextualized under the user's profile

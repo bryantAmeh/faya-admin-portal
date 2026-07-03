@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Merchants View
+     5→ *
+     6→ * Tabbed merchant profiles — POS Staff / Terminals / Settlements / Disputes
+     7→ * / POS Device Requests are rendered as TABS inside the merchant detail
+     8→ * Sheet (not as separate nav items). Per the architecture spec, the admin
+     9→ * manages merchant data here; the separate Faya Business merchant app reads
+    10→ * from the same Firestore collections via the same `adminData` patch helpers.
+    11→ *
+    12→ * Country scoping: Super Admin sees all merchants; other staff see only
+    13→ * the country codes listed on their `staff.countries` access record
+    14→ * (resolved via `getVisibleMerchants`).
+    15→ *
+    16→ * POS Device Requests implement the spec's device capability approval rule:
+    17→ *   - The Faya POS app reports device capabilities (NFC, card reader, swipe)
+    18→ *     when the merchant requests a terminal or activates phone POS.
+    19→ *   - If at least one of NFC / card reader / swipe is supported → canBeApproved = true
+    20→ *   - If NONE are supported → canBeApproved = false → the Approve button is
+    21→ *     disabled and an "Auto-decline" action sets status to "auto_declined".
+    22→ *   - Device integrity and screen lock warnings surface as amber banners.
+    23→ *
+    24→ * Audit action keys: merchant.approve_kyb / merchant.reject_kyb /
+    25→ * merchant.restrict / merchant.suspend / merchant.reactivate /
+    26→ * pos_staff.suspend / pos_staff.reactivate / pos_staff.reset_pin /
+    27→ * pos_staff.force_logout / terminal.activate / terminal.block /
+    28→ * settlement.retry / dispute.request_evidence / dispute.update_status /
+    29→ * pos_device.approve / pos_device.decline / pos_device.auto_decline.
+    30→ */
+    31→import { useEffect, useMemo, useState } from "react";
+    32→import {
+    33→  Building2,
+    34→  Search,
+    35→  Filter,
+    36→  Eye,
+    37→  MoreHorizontal,
+    38→  Ban,
+    39→  Pause,
+    40→  RotateCcw,
+    41→  CheckCircle2,
+    42→  XCircle,
+    43→  Users as UsersIcon,
+    44→  Smartphone,
+    45→  CreditCard,
+    46→  Wallet,
+    47→  Receipt,
+    48→  Scale,
+    49→  Package,
+    50→  ShieldCheck,
+    51→  ShieldAlert,
+    52→  AlertTriangle,
+    53→  Info,
+    54→  Clock,
+    55→  UserCheck,
+    56→  UserX,
+    57→  KeyRound,
+    58→  LogOut,
+    59→  PlayCircle,
+    60→  Lock,
+    61→  Snowflake,
+    62→  Cpu,
+    63→  Battery,
+    64→  MonitorSmartphone,
+    65→  RefreshCw,
+    66→  Lock as LockIcon,
+    67→} from "lucide-react";
+    68→import { toast } from "sonner";
+    69→import {
+    70→  ViewHeader,
+    71→  ViewContainer,
+    72→  EmptyState,
+    73→  StatCard,
+    74→} from "@/components/portal/view-helpers";
+    75→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    76→import { Badge } from "@/components/ui/badge";
+    77→import { Button } from "@/components/ui/button";
+    78→import { Input } from "@/components/ui/input";
+    79→import { Label } from "@/components/ui/label";
+    80→import { Textarea } from "@/components/ui/textarea";
+    81→import {
+    82→  TableBody,
+    83→  TableCell,
+    84→  TableHead,
+    85→  TableHeader,
+    86→  TableRow,
+    87→} from "@/components/ui/table";
+    88→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    89→import {
+    90→  Select,
+    91→  SelectContent,
+    92→  SelectItem,
+    93→  SelectTrigger,
+    94→  SelectValue,
+    95→} from "@/components/ui/select";
+    96→import {
+    97→  Sheet,
+    98→  SheetContent,
+    99→  SheetDescription,
+   100→  SheetHeader,
+   101→  SheetTitle,
+   102→} from "@/components/ui/sheet";
+   103→import {
+   104→  DropdownMenu,
+   105→  DropdownMenuContent,
+   106→  DropdownMenuItem,
+   107→  DropdownMenuLabel,
+   108→  DropdownMenuSeparator,
+   109→  DropdownMenuTrigger,
+   110→} from "@/components/ui/dropdown-menu";
+   111→import {
+   112→  AlertDialog,
+   113→  AlertDialogAction,
+   114→  AlertDialogCancel,
+   115→  AlertDialogContent,
+   116→  AlertDialogDescription,
+   117→  AlertDialogFooter,
+   118→  AlertDialogHeader,
+   119→  AlertDialogTitle,
+   120→} from "@/components/ui/alert-dialog";
+   121→import {
+   122→  Dialog,
+   123→  DialogContent,
+   124→  DialogDescription,
+   125→  DialogFooter,
+   126→  DialogHeader,
+   127→  DialogTitle,
+   128→} from "@/components/ui/dialog";
+   129→import {
+   130→  Tooltip,
+   131→  TooltipContent,
+   132→  TooltipProvider,
+   133→  TooltipTrigger,
+   134→} from "@/components/ui/tooltip";
+   135→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+   136→import { useAuth } from "@/hooks/use-auth";
+   137→import { adminData, logAudit } from "@/lib/admin-data";
+   138→import { getVisibleMerchants, getScopeLabel } from "@/lib/access-scope";
+   139→import {
+   140→  formatCurrency,
+   141→  formatDateTime,
+   142→  formatNumber,
+   143→  timeAgo,
+   144→  statusBadge,
+   145→} from "@/lib/formatters";
+   146→import type {
+   147→  Merchant,
+   148→  CountryConfig,
+   149→  PosStaff,
+   150→  Terminal,
+   151→  Settlement,
+   152→  Dispute,
+   153→  PosDeviceRequest,
+   154→  MerchantStatus,
+   155→  KybStatus,
+   156→  PlatformKey,
+   157→  RiskLevel,
+   158→} from "@/lib/types";
+   159→import { PLATFORM_LABELS } from "@/lib/types";
+   160→import { cn } from "@/lib/utils";
+   161→
+   162→interface MerchantsViewProps {
+   163→  merchants: Merchant[];
+   164→  countries: CountryConfig[];
+   165→}
+   166→
+   167→/* ----------------------------- Status styling ---------------------------- */
+   168→
+   169→const MERCHANT_STATUS_STYLES: Record<
+   170→  MerchantStatus,
+   171→  { label: string; className: string }
+   172→> = {
+   173→  onboarding: {
+   174→    label: "Onboarding",
+   175→    className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+   176→  },
+   177→  active: {
+   178→    label: "Active",
+   179→    className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   180→  },
+   181→  restricted: {
+   182→    label: "Restricted",
+   183→    className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
+   184→  },
+   185→  suspended: {
+   186→    label: "Suspended",
+   187→    className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+   188→  },
+   189→  closed: {
+   190→    label: "Closed",
+   191→    className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
+   192→  },
+   193→};
+   194→
+   195→const POS_STAFF_STATUS_STYLES: Record<
+   196→  PosStaff["status"],
+   197→  { label: string; className: string }
+   198→> = {
+   199→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   200→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   201→  removed: { label: "Removed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   202→};
+   203→
+   204→const TERMINAL_STATUS_STYLES: Record<
+   205→  Terminal["status"],
+   206→  { label: string; className: string }
+   207→> = {
+   208→  inventory: { label: "Inventory", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   209→  shipped: { label: "Shipped", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   210→  delivered: { label: "Delivered", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   211→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   212→  blocked: { label: "Blocked", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   213→  damaged: { label: "Damaged", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   214→};
+   215→
+   216→const SETTLEMENT_STATUS_STYLES: Record<
+   217→  Settlement["status"],
+   218→  { label: string; className: string }
+   219→> = {
+   220→  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   221→  processing: { label: "Processing", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   222→  completed: { label: "Completed", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   223→  failed: { label: "Failed", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   224→  held: { label: "Held", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   225→};
+   226→
+   227→const DISPUTE_STATUS_STYLES: Record<
+   228→  Dispute["status"],
+   229→  { label: string; className: string }
+   230→> = {
+   231→  new: { label: "New", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   232→  awaiting_evidence: { label: "Awaiting Evidence", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   233→  evidence_submitted: { label: "Evidence Submitted", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   234→  under_review: { label: "Under Review", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   235→  won: { label: "Won", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   236→  lost: { label: "Lost", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   237→  expired: { label: "Expired", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   238→};
+   239→
+   240→const POS_DEVICE_REQUEST_STATUS_STYLES: Record<
+   241→  PosDeviceRequest["status"],
+   242→  { label: string; className: string }
+   243→> = {
+   244→  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   245→  approved: { label: "Approved", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   246→  declined: { label: "Declined", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   247→  auto_declined: { label: "Auto-Declined", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   248→};
+   249→
+   250→const RISK_TONE = (level: RiskLevel) => statusBadge("risk", level);
+   251→
+   252→/* ------------------------------ Main view -------------------------------- */
+   253→
+   254→export function MerchantsView({ merchants, countries }: MerchantsViewProps) {
+   255→  const { staff } = useAuth();
+   256→  const [search, setSearch] = useState("");
+   257→  const [countryFilter, setCountryFilter] = useState("all");
+   258→  const [kybFilter, setKybFilter] = useState("all");
+   259→  const [statusFilter, setStatusFilter] = useState("all");
+   260→  const [riskFilter, setRiskFilter] = useState("all");
+   261→  const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
+   262→  const [confirmAction, setConfirmAction] = useState<{
+   263→    merchant: Merchant;
+   264→    action: "restrict" | "suspend" | "reactivate" | "approve_kyb" | "reject_kyb";
+   265→  } | null>(null);
+   266→
+   267→  const visibleMerchants = useMemo(
+   268→    () => getVisibleMerchants(staff, countries, merchants),
+   269→    [staff, countries, merchants],
+   270→  );
+   271→
+   272→  const filterableCountries = useMemo(() => {
+   273→    const codes = new Set(visibleMerchants.map((m) => m.countryCode));
+   274→    return countries.filter((c) => codes.has(c.countryCode));
+   275→  }, [countries, visibleMerchants]);
+   276→
+   277→  const filtered = useMemo(() => {
+   278→    let list = visibleMerchants;
+   279→    if (countryFilter !== "all")
+   280→      list = list.filter((m) => m.countryCode === countryFilter);
+   281→    if (kybFilter !== "all") list = list.filter((m) => m.kybStatus === kybFilter);
+   282→    if (statusFilter !== "all") list = list.filter((m) => m.status === statusFilter);
+   283→    if (riskFilter !== "all") list = list.filter((m) => m.riskCategory === riskFilter);
+   284→    if (search.trim()) {
+   285→      const q = search.trim().toLowerCase();
+   286→      list = list.filter(
+   287→        (m) =>
+   288→          m.tradingName.toLowerCase().includes(q) ||
+   289→          m.legalName.toLowerCase().includes(q) ||
+   290→          m.merchantCode.toLowerCase().includes(q) ||
+   291→          m.contactEmail.toLowerCase().includes(q) ||
+   292→          m.ownerName.toLowerCase().includes(q),
+   293→      );
+   294→    }
+   295→    return list;
+   296→  }, [visibleMerchants, countryFilter, kybFilter, statusFilter, riskFilter, search]);
+   297→
+   298→  const stats = useMemo(() => {
+   299→    const total = visibleMerchants.length;
+   300→    const active = visibleMerchants.filter((m) => m.status === "active").length;
+   301→    const onboarding = visibleMerchants.filter((m) => m.status === "onboarding").length;
+   302→    const restricted = visibleMerchants.filter(
+   303→      (m) => m.status === "restricted" || m.status === "suspended",
+   304→    ).length;
+   305→    return { total, active, onboarding, restricted };
+   306→  }, [visibleMerchants]);
+   307→
+   308→  function countryName(code: string): string {
+   309→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   310→  }
+   311→
+   312→  function merchantStatusBadge(s: MerchantStatus) {
+   313→    const v = MERCHANT_STATUS_STYLES[s];
+   314→    return (
+   315→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+   316→        {v.label}
+   317→      </Badge>
+   318→    );
+   319→  }
+   320→
+   321→  function kybBadge(s: KybStatus) {
+   322→    const v = statusBadge("kyb", s);
+   323→    return (
+   324→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+   325→        {v.label}
+   326→      </Badge>
+   327→    );
+   328→  }
+   329→
+   330→  function riskBadge(level: RiskLevel) {
+   331→    const v = RISK_TONE(level);
+   332→    return (
+   333→      <Badge variant="secondary" className={cn("text-[10px] capitalize", v.className)}>
+   334→        {v.label}
+   335→      </Badge>
+   336→    );
+   337→  }
+   338→
+   339→  function platformChips(platforms: PlatformKey[]) {
+   340→    if (!platforms.length)
+   341→      return <span className="text-xs text-muted-foreground italic">No platforms</span>;
+   342→    return (
+   343→      <div className="flex flex-wrap gap-1">
+   344→        {platforms.map((p) => (
+   345→          <Badge
+   346→            key={p}
+   347→            variant="outline"
+   348→            className="text-[9px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+   349→          >
+   350→            {PLATFORM_LABELS[p].label}
+   351→          </Badge>
+   352→        ))}
+   353→      </div>
+   354→    );
+   355→  }
+   356→
+   357→  /* --------------------------- Mutations --------------------------- */
+   358→
+   359→  function applyMerchantAction(
+   360→    merchant: Merchant,
+   361→    action: "restrict" | "suspend" | "reactivate" | "approve_kyb" | "reject_kyb",
+   362→  ) {
+   363→    if (!staff) return;
+   364→    const before = `${merchant.kybStatus} / ${merchant.status}`;
+   365→    let patch: Partial<Merchant> = {};
+   366→    let after = "";
+   367→
+   368→    if (action === "restrict") {
+   369→      patch = { status: "restricted", updatedAt: Date.now() };
+   370→      after = `${merchant.kybStatus} / restricted`;
+   371→    } else if (action === "suspend") {
+   372→      patch = { status: "suspended", updatedAt: Date.now() };
+   373→      after = `${merchant.kybStatus} / suspended`;
+   374→    } else if (action === "reactivate") {
+   375→      patch = { status: "active", updatedAt: Date.now() };
+   376→      after = `${merchant.kybStatus} / active`;
+   377→    } else if (action === "approve_kyb") {
+   378→      patch = { kybStatus: "approved", status: "active", updatedAt: Date.now() };
+   379→      after = `approved / active`;
+   380→    } else if (action === "reject_kyb") {
+   381→      patch = { kybStatus: "rejected", status: "restricted", updatedAt: Date.now() };
+   382→      after = `rejected / restricted`;
+   383→    }
+   384→
+   385→    adminData.updateMerchant(merchant.id, patch);
+   386→    logAudit(
+   387→      {
+   388→        staffId: staff.id,
+   389→        staffName: `${staff.firstName} ${staff.lastName}`,
+   390→        department: staff.departmentId,
+   391→        role: staff.roleId,
+   392→      },
+   393→      `merchant.${action}`,
+   394→      "merchant",
+   395→      merchant.id,
+   396→      {
+   397→        countryCode: merchant.countryCode,
+   398→        beforeValue: before,
+   399→        afterValue: after,
+   400→      },
+   401→    );
+   402→    toast.success(
+   403→      `${action.replace(/_/g, " ")} — ${merchant.tradingName}`,
+   404→      {
+   405→        description: `${merchant.merchantCode} · ${before} → ${after}`,
+   406→      },
+   407→    );
+   408→    setConfirmAction(null);
+   409→    setSelectedMerchant(null);
+   410→  }
+   411→
+   412→  function confirmTitle(action: string): string {
+   413→    if (action === "approve_kyb") return "Approve KYB?";
+   414→    if (action === "reject_kyb") return "Reject KYB?";
+   415→    if (action === "restrict") return "Restrict merchant?";
+   416→    if (action === "suspend") return "Suspend merchant?";
+   417→    return "Reactivate merchant?";
+   418→  }
+   419→
+   420→  function confirmDescription(action: string, merchant: Merchant): string {
+   421→    if (action === "approve_kyb") {
+   422→      return `Approving KYB for ${merchant.tradingName} will set the merchant to KYB approved and status active. The merchant app reads from the same database — they will see the change on next login. This is recorded in the audit log.`;
+   423→    }
+   424→    if (action === "reject_kyb") {
+   425→      return `Rejecting KYB for ${merchant.tradingName} will set the merchant to KYB rejected and status restricted. This is recorded in the audit log and cannot be undone.`;
+   426→    }
+   427→    const newStatus =
+   428→      action === "restrict" ? "restricted" : action === "suspend" ? "suspended" : "active";
+   429→    return `You are about to set ${merchant.tradingName} (${merchant.merchantCode}) to status "${newStatus}". The merchant app reads from the same database — they will see the change on next login. This is recorded in the audit log.`;
+   430→  }
+   431→
+   432→  return (
+   433→    <>
+   434→      <ViewHeader
+   435→        title="Merchants"
+   436→        description="Manage Faya Business merchants — KYB, POS staff, terminals, settlements, disputes, and POS device requests."
+   437→        icon={Building2}
+   438→        actions={
+   439→          <Badge variant="outline" className="hidden sm:inline-flex text-[11px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800">
+   440→            Scope: {getScopeLabel(staff)}
+   441→          </Badge>
+   442→        }
+   443→      />
+   444→      <ViewContainer>
+   445→        {/* Stats */}
+   446→        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+   447→          <StatCard
+   448→            label="Total Merchants"
+   449→            value={formatNumber(stats.total)}
+   450→            hint="Visible in scope"
+   451→            icon={Building2}
+   452→            tone="default"
+   453→          />
+   454→          <StatCard
+   455→            label="Active"
+   456→            value={formatNumber(stats.active)}
+   457→            hint="Status: active"
+   458→            icon={UserCheck}
+   459→            tone="success"
+   460→          />
+   461→          <StatCard
+   462→            label="Onboarding"
+   463→            value={formatNumber(stats.onboarding)}
+   464→            hint="Awaiting KYB"
+   465→            icon={Clock}
+   466→            tone="warning"
+   467→          />
+   468→          <StatCard
+   469→            label="Restricted / Suspended"
+   470→            value={formatNumber(stats.restricted)}
+   471→            hint="Actioned merchants"
+   472→            icon={UserX}
+   473→            tone="danger"
+   474→          />
+   475→        </div>
+   476→
+   477→        {/* Filters */}
+   478→        <Card>
+   479→          <CardContent className="p-4 space-y-3">
+   480→            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+   481→              <Filter className="size-3.5" /> Filters
+   482→            </div>
+   483→            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+   484→              <div className="space-y-1.5">
+   485→                <Label className="text-xs">Search</Label>
+   486→                <div className="relative">
+   487→                  <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+   488→                  <Input
+   489→                    value={search}
+   490→                    onChange={(e) => setSearch(e.target.value)}
+   491→                    placeholder="Trading/legal name, code…"
+   492→                    className="pl-9 h-9 text-sm"
+   493→                  />
+   494→                </div>
+   495→              </div>
+   496→              <div className="space-y-1.5">
+   497→                <Label className="text-xs">Country</Label>
+   498→                <Select value={countryFilter} onValueChange={setCountryFilter}>
+   499→                  <SelectTrigger className="h-9 text-sm">
+   500→                    <SelectValue placeholder="All countries" />
+   501→                  </SelectTrigger>
+   502→                  <SelectContent>
+   503→                    <SelectItem value="all">All countries</SelectItem>
+   504→                    {filterableCountries.map((c) => (
+   505→                      <SelectItem key={c.countryCode} value={c.countryCode}>
+   506→                        {c.countryName} ({c.countryCode})
+   507→                      </SelectItem>
+   508→                    ))}
+   509→                  </SelectContent>
+   510→                </Select>
+   511→              </div>
+   512→              <div className="space-y-1.5">
+   513→                <Label className="text-xs">KYB status</Label>
+   514→                <Select value={kybFilter} onValueChange={setKybFilter}>
+   515→                  <SelectTrigger className="h-9 text-sm">
+   516→                    <SelectValue placeholder="All KYB" />
+   517→                  </SelectTrigger>
+   518→                  <SelectContent>
+   519→                    <SelectItem value="all">All KYB</SelectItem>
+   520→                    <SelectItem value="pending">Pending</SelectItem>
+   521→                    <SelectItem value="in_review">In Review</SelectItem>
+   522→                    <SelectItem value="approved">Approved</SelectItem>
+   523→                    <SelectItem value="rejected">Rejected</SelectItem>
+   524→                    <SelectItem value="escalated">Escalated</SelectItem>
+   525→                  </SelectContent>
+   526→                </Select>
+   527→              </div>
+   528→              <div className="space-y-1.5">
+   529→                <Label className="text-xs">Account status</Label>
+   530→                <Select value={statusFilter} onValueChange={setStatusFilter}>
+   531→                  <SelectTrigger className="h-9 text-sm">
+   532→                    <SelectValue placeholder="All statuses" />
+   533→                  </SelectTrigger>
+   534→                  <SelectContent>
+   535→                    <SelectItem value="all">All statuses</SelectItem>
+   536→                    <SelectItem value="onboarding">Onboarding</SelectItem>
+   537→                    <SelectItem value="active">Active</SelectItem>
+   538→                    <SelectItem value="restricted">Restricted</SelectItem>
+   539→                    <SelectItem value="suspended">Suspended</SelectItem>
+   540→                    <SelectItem value="closed">Closed</SelectItem>
+   541→                  </SelectContent>
+   542→                </Select>
+   543→              </div>
+   544→              <div className="space-y-1.5">
+   545→                <Label className="text-xs">Risk</Label>
+   546→                <Select value={riskFilter} onValueChange={setRiskFilter}>
+   547→                  <SelectTrigger className="h-9 text-sm">
+   548→                    <SelectValue placeholder="All risk" />
+   549→                  </SelectTrigger>
+   550→                  <SelectContent>
+   551→                    <SelectItem value="all">All risk</SelectItem>
+   552→                    <SelectItem value="low">Low</SelectItem>
+   553→                    <SelectItem value="medium">Medium</SelectItem>
+   554→                    <SelectItem value="high">High</SelectItem>
+   555→                    <SelectItem value="critical">Critical</SelectItem>
+   556→                  </SelectContent>
+   557→                </Select>
+   558→              </div>
+   559→            </div>
+   560→            <div className="flex items-center justify-between text-xs text-muted-foreground">
+   561→              <span>
+   562→                Showing <strong className="text-foreground">{filtered.length}</strong> of{" "}
+   563→                {visibleMerchants.length} visible merchants
+   564→              </span>
+   565→              {(search ||
+   566→                countryFilter !== "all" ||
+   567→                kybFilter !== "all" ||
+   568→                statusFilter !== "all" ||
+   569→                riskFilter !== "all") && (
+   570→                <Button
+   571→                  variant="ghost"
+   572→                  size="sm"
+   573→                  className="h-7 text-xs"
+   574→                  onClick={() => {
+   575→                    setSearch("");
+   576→                    setCountryFilter("all");
+   577→                    setKybFilter("all");
+   578→                    setStatusFilter("all");
+   579→                    setRiskFilter("all");
+   580→                  }}
+   581→                >
+   582→                  Clear filters
+   583→                </Button>
+   584→              )}
+   585→            </div>
+   586→          </CardContent>
+   587→        </Card>
+   588→
+   589→        {/* Merchants table */}
+   590→        <Card>
+   591→          <CardHeader className="pb-3">
+   592→            <CardTitle className="text-sm flex items-center gap-2">
+   593→              <Building2 className="size-4 text-emerald-600" /> Merchants
+   594→            </CardTitle>
+   595→          </CardHeader>
+   596→          <CardContent className="p-0">
+   597→            {filtered.length === 0 ? (
+   598→              <EmptyState
+   599→                icon={Building2}
+   600→                title="No merchants found"
+   601→                description="Adjust the filters above or wait for new merchant signups."
+   602→              />
+   603→            ) : (
+   604→              <ScrollTable>
+   605→                <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   606→                  <TableRow>
+   607→                    <TableHead className="pl-4">Merchant Code</TableHead>
+   608→                    <TableHead>Trading Name</TableHead>
+   609→                    <TableHead>Country</TableHead>
+   610→                    <TableHead className="hidden md:table-cell">Business Type</TableHead>
+   611→                    <TableHead>KYB</TableHead>
+   612→                    <TableHead>Risk</TableHead>
+   613→                    <TableHead>Status</TableHead>
+   614→                    <TableHead className="text-right">Terminals</TableHead>
+   615→                    <TableHead className="text-right hidden lg:table-cell">Monthly Vol</TableHead>
+   616→                    <TableHead className="text-right pr-4">Actions</TableHead>
+   617→                  </TableRow>
+   618→                </TableHeader>
+   619→                <TableBody>
+   620→                  {filtered.map((m) => (
+   621→                    <TableRow key={m.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => setSelectedMerchant(m)}>
+   622→                      <TableCell className="pl-4 font-mono text-xs">{m.merchantCode}</TableCell>
+   623→                      <TableCell>
+   624→                        <div className="font-medium text-sm">{m.tradingName}</div>
+   625→                        <div className="text-[11px] text-muted-foreground">{m.legalName}</div>
+   626→                      </TableCell>
+   627→                      <TableCell>
+   628→                        <span className="font-mono text-xs">{m.countryCode}</span>
+   629→                        <div className="text-[10px] text-muted-foreground">
+   630→                          {countryName(m.countryCode)}
+   631→                        </div>
+   632→                      </TableCell>
+   633→                      <TableCell className="hidden md:table-cell text-xs capitalize">
+   634→                        {m.businessType.replace(/_/g, " ")}
+   635→                      </TableCell>
+   636→                      <TableCell>{kybBadge(m.kybStatus)}</TableCell>
+   637→                      <TableCell>{riskBadge(m.riskCategory)}</TableCell>
+   638→                      <TableCell>{merchantStatusBadge(m.status)}</TableCell>
+   639→                      <TableCell className="text-right tabular-nums text-xs">
+   640→                        {formatNumber(m.terminalCount + m.phonePosCount)}
+   641→                      </TableCell>
+   642→                      <TableCell className="text-right hidden lg:table-cell font-mono text-xs tabular-nums">
+   643→                        {formatCurrency(m.monthlyVolume, m.settlementCurrency)}
+   644→                      </TableCell>
+   645→                      <TableCell className="text-right pr-4">
+   646→                        <DropdownMenu>
+   647→                          <DropdownMenuTrigger asChild>
+   648→                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+   649→                              <MoreHorizontal className="size-4" />
+   650→                            </Button>
+   651→                          </DropdownMenuTrigger>
+   652→                          <DropdownMenuContent align="end" className="w-48">
+   653→                            <DropdownMenuLabel className="text-xs">Actions</DropdownMenuLabel>
+   654→                            <DropdownMenuItem onClick={() => setSelectedMerchant(m)}>
+   655→                              <Eye className="size-4 mr-2" /> View profile
+   656→                            </DropdownMenuItem>
+   657→                            <DropdownMenuSeparator />
+   658→                            {(m.kybStatus === "pending" ||
+   659→                              m.kybStatus === "in_review" ||
+   660→                              m.kybStatus === "escalated") && (
+   661→                              <DropdownMenuItem
+   662→                                onClick={() =>
+   663→                                  setConfirmAction({ merchant: m, action: "approve_kyb" })
+   664→                                }
+   665→                              >
+   666→                                <CheckCircle2 className="size-4 mr-2 text-emerald-600" /> Approve KYB
+   667→                              </DropdownMenuItem>
+   668→                            )}
+   669→                            {(m.kybStatus === "pending" ||
+   670→                              m.kybStatus === "in_review" ||
+   671→                              m.kybStatus === "escalated") && (
+   672→                              <DropdownMenuItem
+   673→                                onClick={() =>
+   674→                                  setConfirmAction({ merchant: m, action: "reject_kyb" })
+   675→                                }
+   676→                              >
+   677→                                <XCircle className="size-4 mr-2 text-red-600" /> Reject KYB
+   678→                              </DropdownMenuItem>
+   679→                            )}
+   680→                            {m.status !== "restricted" &&
+   681→                              m.status !== "suspended" &&
+   682→                              m.status !== "closed" && (
+   683→                                <DropdownMenuItem
+   684→                                  onClick={() =>
+   685→                                    setConfirmAction({ merchant: m, action: "restrict" })
+   686→                                  }
+   687→                                >
+   688→                                  <Ban className="size-4 mr-2 text-orange-600" /> Restrict
+   689→                                </DropdownMenuItem>
+   690→                              )}
+   691→                            {m.status !== "suspended" && m.status !== "closed" && (
+   692→                              <DropdownMenuItem
+   693→                                onClick={() =>
+   694→                                  setConfirmAction({ merchant: m, action: "suspend" })
+   695→                                }
+   696→                              >
+   697→                                <Pause className="size-4 mr-2 text-red-600" /> Suspend
+   698→                              </DropdownMenuItem>
+   699→                            )}
+   700→                            {(m.status === "restricted" || m.status === "suspended") && (
+   701→                              <DropdownMenuItem
+   702→                                onClick={() =>
+   703→                                  setConfirmAction({ merchant: m, action: "reactivate" })
+   704→                                }
+   705→                              >
+   706→                                <RotateCcw className="size-4 mr-2 text-emerald-600" /> Reactivate
+   707→                              </DropdownMenuItem>
+   708→                            )}
+   709→                          </DropdownMenuContent>
+   710→                        </DropdownMenu>
+   711→                      </TableCell>
+   712→                    </TableRow>
+   713→                  ))}
+   714→                </TableBody>
+   715→              </ScrollTable>
+   716→            )}
+   717→          </CardContent>
+   718→        </Card>
+   719→      </ViewContainer>
+   720→
+   721→      {/* --------------------- Merchant detail sheet (tabbed) -------------------- */}
+   722→      <Sheet open={!!selectedMerchant} onOpenChange={(o) => !o && setSelectedMerchant(null)}>
+   723→        <SheetContent side="right" className="w-full sm:max-w-3xl flex flex-col p-0">
+   724→          {selectedMerchant && (
+   725→            <MerchantDetailSheet
+   726→              merchant={selectedMerchant}
+   727→              countryName={countryName}
+   728→              merchantStatusBadge={merchantStatusBadge}
+   729→              kybBadge={kybBadge}
+   730→              riskBadge={riskBadge}
+   731→              platformChips={platformChips}
+   732→              onClose={() => setSelectedMerchant(null)}
+   733→            />
+   734→          )}
+   735→        </SheetContent>
+   736→      </Sheet>
+   737→
+   738→      {/* ----------------------- Confirmation dialog ---------------------- */}
+   739→      <AlertDialog open={!!confirmAction} onOpenChange={(o) => !o && setConfirmAction(null)}>
+   740→        <AlertDialogContent>
+   741→          <AlertDialogHeader>
+   742→            <AlertDialogTitle>
+   743→              {confirmAction && confirmTitle(confirmAction.action)}
+   744→            </AlertDialogTitle>
+   745→            <AlertDialogDescription>
+   746→              {confirmAction && confirmDescription(confirmAction.action, confirmAction.merchant)}
+   747→            </AlertDialogDescription>
+   748→          </AlertDialogHeader>
+   749→          <AlertDialogFooter>
+   750→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   751→            <AlertDialogAction
+   752→              className={cn(
+   753→                confirmAction?.action === "reactivate" ||
+   754→                  confirmAction?.action === "approve_kyb"
+   755→                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+   756→                  : "bg-red-600 hover:bg-red-700 text-white",
+   757→              )}
+   758→              onClick={() =>
+   759→                confirmAction && applyMerchantAction(confirmAction.merchant, confirmAction.action)
+   760→              }
+   761→            >
+   762→              {confirmAction?.action === "approve_kyb" && (
+   763→                <CheckCircle2 className="size-4 mr-1" />
+   764→              )}
+   765→              {confirmAction?.action === "reject_kyb" && <XCircle className="size-4 mr-1" />}
+   766→              {confirmAction?.action === "restrict" && <Ban className="size-4 mr-1" />}
+   767→              {confirmAction?.action === "suspend" && <Pause className="size-4 mr-1" />}
+   768→              {confirmAction?.action === "reactivate" && <RotateCcw className="size-4 mr-1" />}
+   769→              {confirmAction
+   770→                ? confirmAction.action === "approve_kyb"
+   771→                  ? "Approve KYB"
+   772→                  : confirmAction.action === "reject_kyb"
+   773→                    ? "Reject KYB"
+   774→                    : confirmAction.action === "restrict"
+   775→                      ? "Restrict"
+   776→                      : confirmAction.action === "suspend"
+   777→                        ? "Suspend"
+   778→                        : "Reactivate"
+   779→                : "Confirm"}
+   780→            </AlertDialogAction>
+   781→          </AlertDialogFooter>
+   782→        </AlertDialogContent>
+   783→      </AlertDialog>
+   784→
+   785→      <SonnerToaster richColors closeButton position="bottom-right" />
+   786→    </>
+   787→  );
+   788→}
+   789→
+   790→/* --------------------------- Merchant detail sheet ----------------------- */
+   791→
+   792→function MerchantDetailSheet({
+   793→  merchant,
+   794→  countryName,
+   795→  merchantStatusBadge,
+   796→  kybBadge,
+   797→  riskBadge,
+   798→  platformChips,
+   799→  onClose,
+   800→}: {
+   801→  merchant: Merchant;
+   802→  countryName: (code: string) => string;
+   803→  merchantStatusBadge: (s: MerchantStatus) => React.ReactNode;
+   804→  kybBadge: (s: KybStatus) => React.ReactNode;
+   805→  riskBadge: (level: RiskLevel) => React.ReactNode;
+   806→  platformChips: (p: PlatformKey[]) => React.ReactNode;
+   807→  onClose: () => void;
+   808→}) {
+   809→  const { staff } = useAuth();
+   810→  const [tab, setTab] = useState("profile");
+   811→
+   812→  // Live subscriptions — open while sheet is mounted.
+   813→  const [posStaff, setPosStaff] = useState<PosStaff[]>([]);
+   814→  const [terminals, setTerminals] = useState<Terminal[]>([]);
+   815→  const [settlements, setSettlements] = useState<Settlement[]>([]);
+   816→  const [disputes, setDisputes] = useState<Dispute[]>([]);
+   817→  const [posRequests, setPosRequests] = useState<PosDeviceRequest[]>([]);
+   818→
+   819→  useEffect(() => {
+   820→    const unsubs: Array<() => void> = [];
+   821→    try {
+   822→      unsubs.push(
+   823→        adminData.subscribePosStaff((items) =>
+   824→          setPosStaff(items.filter((s) => s.merchantId === merchant.id)),
+   825→        ),
+   826→      );
+   827→      unsubs.push(
+   828→        adminData.subscribeTerminals((items) =>
+   829→          setTerminals(
+   830→            items.filter(
+   831→              (t) =>
+   832→                t.merchantName === merchant.tradingName ||
+   833→                t.merchantName === merchant.legalName,
+   834→            ),
+   835→          ),
+   836→        ),
+   837→      );
+   838→      unsubs.push(
+   839→        adminData.subscribeSettlements((items) =>
+   840→          setSettlements(
+   841→            items.filter(
+   842→              (s) =>
+   843→                s.merchantName === merchant.legalName ||
+   844→                s.merchantName === merchant.tradingName,
+   845→            ),
+   846→          ),
+   847→        ),
+   848→      );
+   849→      unsubs.push(
+   850→        adminData.subscribeDisputes((items) =>
+   851→          setDisputes(
+   852→            items.filter(
+   853→              (d) =>
+   854→                d.merchantName === merchant.legalName ||
+   855→                d.merchantName === merchant.tradingName,
+   856→            ),
+   857→          ),
+   858→        ),
+   859→      );
+   860→      unsubs.push(
+   861→        adminData.subscribePosDeviceRequests((items) =>
+   862→          setPosRequests(items.filter((r) => r.merchantId === merchant.id)),
+   863→        ),
+   864→      );
+   865→    } catch (e) {
+   866→      console.error("[MerchantDetailSheet] subscription error:", e);
+   867→    }
+   868→    return () => unsubs.forEach((u) => u());
+   869→  }, [merchant.id, merchant.tradingName, merchant.legalName]);
+   870→
+   871→  /* --------------------------- POS staff actions --------------------------- */
+   872→  function suspendStaff(s: PosStaff) {
+   873→    if (!staff) return;
+   874→    adminData.updatePosStaff(s.id, { status: "suspended", updatedAt: Date.now() });
+   875→    logAudit(
+   876→      {
+   877→        staffId: staff.id,
+   878→        staffName: `${staff.firstName} ${staff.lastName}`,
+   879→        department: staff.departmentId,
+   880→        role: staff.roleId,
+   881→      },
+   882→      "pos_staff.suspend",
+   883→      "pos_staff",
+   884→      s.id,
+   885→      {
+   886→        countryCode: s.countryCode,
+   887→        beforeValue: s.status,
+   888→        afterValue: "suspended",
+   889→      },
+   890→    );
+   891→    toast.success(`Suspended POS staff: ${s.firstName} ${s.lastName}`, {
+   892→      description: `${s.staffCode} · ${s.branchName}`,
+   893→    });
+   894→  }
+   895→
+   896→  function reactivateStaff(s: PosStaff) {
+   897→    if (!staff) return;
+   898→    adminData.updatePosStaff(s.id, { status: "active", updatedAt: Date.now() });
+   899→    logAudit(
+   900→      {
+   901→        staffId: staff.id,
+   902→        staffName: `${staff.firstName} ${staff.lastName}`,
+   903→        department: staff.departmentId,
+   904→        role: staff.roleId,
+   905→      },
+   906→      "pos_staff.reactivate",
+   907→      "pos_staff",
+   908→      s.id,
+   909→      {
+   910→        countryCode: s.countryCode,
+   911→        beforeValue: s.status,
+   912→        afterValue: "active",
+   913→      },
+   914→    );
+   915→    toast.success(`Reactivated POS staff: ${s.firstName} ${s.lastName}`, {
+   916→      description: `${s.staffCode} · ${s.branchName}`,
+   917→    });
+   918→  }
+   919→
+   920→  function resetStaffPin(s: PosStaff) {
+   921→    if (!staff) return;
+   922→    logAudit(
+   923→      {
+   924→        staffId: staff.id,
+   925→        staffName: `${staff.firstName} ${staff.lastName}`,
+   926→        department: staff.departmentId,
+   927→        role: staff.roleId,
+   928→      },
+   929→      "pos_staff.reset_pin",
+   930→      "pos_staff",
+   931→      s.id,
+   932→      {
+   933→        countryCode: s.countryCode,
+   934→        reason: `PIN reset requested for ${s.staffCode}`,
+   935→      },
+   936→    );
+   937→    toast.success(`PIN reset email sent: ${s.firstName} ${s.lastName}`, {
+   938→      description: `${s.staffCode} · they will set a new PIN on next POS app login`,
+   939→    });
+   940→  }
+   941→
+   942→  function forceStaffLogout(s: PosStaff) {
+   943→    if (!staff) return;
+   944→    logAudit(
+   945→      {
+   946→        staffId: staff.id,
+   947→        staffName: `${staff.firstName} ${staff.lastName}`,
+   948→        department: staff.departmentId,
+   949→        role: staff.roleId,
+   950→      },
+   951→      "pos_staff.force_logout",
+   952→      "pos_staff",
+   953→      s.id,
+   954→      {
+   955→        countryCode: s.countryCode,
+   956→        reason: `Force logout for ${s.staffCode}`,
+   957→      },
+   958→    );
+   959→    toast.success(`Force logout issued: ${s.firstName} ${s.lastName}`, {
+   960→      description: `${s.staffCode} · their POS session will be terminated on next sync`,
+   961→    });
+   962→  }
+   963→
+   964→  /* --------------------------- Terminal actions --------------------------- */
+   965→  function activateTerminal(t: Terminal) {
+   966→    if (!staff) return;
+   967→    adminData.updateTerminal(t.id, {
+   968→      status: "active",
+   969→      activatedAt: Date.now(),
+   970→      lastSeenAt: Date.now(),
+   971→    });
+   972→    logAudit(
+   973→      {
+   974→        staffId: staff.id,
+   975→        staffName: `${staff.firstName} ${staff.lastName}`,
+   976→        department: staff.departmentId,
+   977→        role: staff.roleId,
+   978→      },
+   979→      "terminal.activate",
+   980→      "terminal",
+   981→      t.id,
+   982→      {
+   983→        countryCode: t.countryCode,
+   984→        beforeValue: t.status,
+   985→        afterValue: "active",
+   986→      },
+   987→    );
+   988→    toast.success(`Terminal activated: ${t.serialNumber}`, {
+   989→      description: `${t.model} · ${t.merchantName}`,
+   990→    });
+   991→  }
+   992→
+   993→  function blockTerminal(t: Terminal) {
+   994→    if (!staff) return;
+   995→    adminData.updateTerminal(t.id, { status: "blocked", lastSeenAt: Date.now() });
+   996→    logAudit(
+   997→      {
+   998→        staffId: staff.id,
+   999→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1000→        department: staff.departmentId,
+  1001→        role: staff.roleId,
+  1002→      },
+  1003→      "terminal.block",
+  1004→      "terminal",
+  1005→      t.id,
+  1006→      {
+  1007→        countryCode: t.countryCode,
+  1008→        beforeValue: t.status,
+  1009→        afterValue: "blocked",
+  1010→      },
+  1011→    );
+  1012→    toast.error(`Terminal blocked: ${t.serialNumber}`, {
+  1013→      description: `${t.model} · ${t.merchantName}`,
+  1014→    });
+  1015→  }
+  1016→
+  1017→  /* --------------------------- Settlement actions --------------------------- */
+  1018→  function retrySettlement(s: Settlement) {
+  1019→    if (!staff) return;
+  1020→    logAudit(
+  1021→      {
+  1022→        staffId: staff.id,
+  1023→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1024→        department: staff.departmentId,
+  1025→        role: staff.roleId,
+  1026→      },
+  1027→      "settlement.retry",
+  1028→      "settlement",
+  1029→      s.id,
+  1030→      {
+  1031→        countryCode: s.countryCode,
+  1032→        beforeValue: s.status,
+  1033→        afterValue: "processing",
+  1034→        reason: `Retry requested for failed settlement ${s.batchId}`,
+  1035→      },
+  1036→    );
+  1037→    toast.success(`Settlement retry queued: ${s.batchId}`, {
+  1038→      description: `${formatCurrency(s.amount, s.currency)} · ${s.merchantName}`,
+  1039→    });
+  1040→  }
+  1041→
+  1042→  function viewSettlementDetails(s: Settlement) {
+  1043→    toast.info(`Settlement: ${s.batchId}`, {
+  1044→      description: `${formatCurrency(s.amount, s.currency)} · ${s.status} · scheduled ${formatDateTime(s.scheduledAt)}${s.failureReason ? ` · reason: ${s.failureReason}` : ""}`,
+  1045→    });
+  1046→  }
+  1047→
+  1048→  /* --------------------------- Dispute actions --------------------------- */
+  1049→  function requestEvidence(d: Dispute) {
+  1050→    if (!staff) return;
+  1051→    logAudit(
+  1052→      {
+  1053→        staffId: staff.id,
+  1054→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1055→        department: staff.departmentId,
+  1056→        role: staff.roleId,
+  1057→      },
+  1058→      "dispute.request_evidence",
+  1059→      "dispute",
+  1060→      d.id,
+  1061→      {
+  1062→        countryCode: d.countryCode,
+  1063→        beforeValue: d.status,
+  1064→        afterValue: "awaiting_evidence",
+  1065→        reason: `Evidence requested from ${d.merchantName}`,
+  1066→      },
+  1067→    );
+  1068→    toast.success(`Evidence requested: ${d.id}`, {
+  1069→      description: `${formatCurrency(d.amount, d.currency)} · ${d.merchantName}`,
+  1070→    });
+  1071→  }
+  1072→
+  1073→  function updateDisputeStatus(d: Dispute, status: Dispute["status"]) {
+  1074→    if (!staff) return;
+  1075→    logAudit(
+  1076→      {
+  1077→        staffId: staff.id,
+  1078→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1079→        department: staff.departmentId,
+  1080→        role: staff.roleId,
+  1081→      },
+  1082→      "dispute.update_status",
+  1083→      "dispute",
+  1084→      d.id,
+  1085→      {
+  1086→        countryCode: d.countryCode,
+  1087→        beforeValue: d.status,
+  1088→        afterValue: status,
+  1089→      },
+  1090→    );
+  1091→    toast.success(`Dispute updated: ${d.id}`, {
+  1092→      description: `${d.status} → ${status}`,
+  1093→    });
+  1094→  }
+  1095→
+  1096→  /* --------------------------- POS device request actions --------------------------- */
+  1097→  function approvePosRequest(r: PosDeviceRequest) {
+  1098→    if (!staff) return;
+  1099→    adminData.updatePosDeviceRequest(r.id, {
+  1100→      status: "approved",
+  1101→      reviewedBy: staff.id,
+  1102→      reviewedAt: Date.now(),
+  1103→      updatedAt: Date.now(),
+  1104→    });
+  1105→    logAudit(
+  1106→      {
+  1107→        staffId: staff.id,
+  1108→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1109→        department: staff.departmentId,
+  1110→        role: staff.roleId,
+  1111→      },
+  1112→      "pos_device.approve",
+  1113→      "pos_device_request",
+  1114→      r.id,
+  1115→      {
+  1116→        countryCode: r.countryCode,
+  1117→        beforeValue: r.status,
+  1118→        afterValue: "approved",
+  1119→        reason: `Device ${r.deviceInfo.deviceModel} supports payment method`,
+  1120→      },
+  1121→    );
+  1122→    toast.success(`POS device approved: ${r.requestCode}`, {
+  1123→      description: `${r.deviceInfo.deviceModel} · ${r.type.replace(/_/g, " ")}`,
+  1124→    });
+  1125→  }
+  1126→
+  1127→  function autoDeclinePosRequest(r: PosDeviceRequest) {
+  1128→    if (!staff) return;
+  1129→    adminData.updatePosDeviceRequest(r.id, {
+  1130→      status: "auto_declined",
+  1131→      reviewedAt: Date.now(),
+  1132→      declineReason: "Device does not support NFC, card reader, or swipe.",
+  1133→      updatedAt: Date.now(),
+  1134→    });
+  1135→    logAudit(
+  1136→      {
+  1137→        staffId: staff.id,
+  1138→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1139→        department: staff.departmentId,
+  1140→        role: staff.roleId,
+  1141→      },
+  1142→      "pos_device.auto_decline",
+  1143→      "pos_device_request",
+  1144→      r.id,
+  1145→      {
+  1146→        countryCode: r.countryCode,
+  1147→        beforeValue: r.status,
+  1148→        afterValue: "auto_declined",
+  1149→        reason: "Device does not support NFC, card reader, or swipe.",
+  1150→      },
+  1151→    );
+  1152→    toast.error(`POS device auto-declined: ${r.requestCode}`, {
+  1153→      description: `No payment method (NFC/card reader/swipe) supported on ${r.deviceInfo.deviceModel}`,
+  1154→    });
+  1155→  }
+  1156→
+  1157→  /* --------------------------- Decline dialog --------------------------- */
+  1158→  const [declineTarget, setDeclineTarget] = useState<PosDeviceRequest | null>(null);
+  1159→  const [declineReason, setDeclineReason] = useState("");
+  1160→
+  1161→  function submitDecline() {
+  1162→    if (!staff || !declineTarget) return;
+  1163→    const reason =
+  1164→      declineReason.trim() || "Declined by reviewer — see audit log for details.";
+  1165→    adminData.updatePosDeviceRequest(declineTarget.id, {
+  1166→      status: "declined",
+  1167→      reviewedBy: staff.id,
+  1168→      reviewedAt: Date.now(),
+  1169→      declineReason: reason,
+  1170→      updatedAt: Date.now(),
+  1171→    });
+  1172→    logAudit(
+  1173→      {
+  1174→        staffId: staff.id,
+  1175→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1176→        department: staff.departmentId,
+  1177→        role: staff.roleId,
+  1178→      },
+  1179→      "pos_device.decline",
+  1180→      "pos_device_request",
+  1181→      declineTarget.id,
+  1182→      {
+  1183→        countryCode: declineTarget.countryCode,
+  1184→        beforeValue: declineTarget.status,
+  1185→        afterValue: "declined",
+  1186→        reason,
+  1187→      },
+  1188→    );
+  1189→    toast.error(`POS device declined: ${declineTarget.requestCode}`, {
+  1190→      description: reason,
+  1191→    });
+  1192→    setDeclineTarget(null);
+  1193→    setDeclineReason("");
+  1194→  }
+  1195→
+  1196→  /* --------------------------- Badge helpers --------------------------- */
+  1197→  function posStaffStatusBadge(s: PosStaff["status"]) {
+  1198→    const v = POS_STAFF_STATUS_STYLES[s];
+  1199→    return (
+  1200→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+  1201→        {v.label}
+  1202→      </Badge>
+  1203→    );
+  1204→  }
+  1205→  function terminalStatusBadge(s: Terminal["status"]) {
+  1206→    const v = TERMINAL_STATUS_STYLES[s];
+  1207→    return (
+  1208→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+  1209→        {v.label}
+  1210→      </Badge>
+  1211→    );
+  1212→  }
+  1213→  function settlementStatusBadge(s: Settlement["status"]) {
+  1214→    const v = SETTLEMENT_STATUS_STYLES[s];
+  1215→    return (
+  1216→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+  1217→        {v.label}
+  1218→      </Badge>
+  1219→    );
+  1220→  }
+  1221→  function disputeStatusBadge(s: Dispute["status"]) {
+  1222→    const v = DISPUTE_STATUS_STYLES[s];
+  1223→    return (
+  1224→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+  1225→        {v.label}
+  1226→      </Badge>
+  1227→    );
+  1228→  }
+  1229→  function posRequestStatusBadge(s: PosDeviceRequest["status"]) {
+  1230→    const v = POS_DEVICE_REQUEST_STATUS_STYLES[s];
+  1231→    return (
+  1232→      <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+  1233→        {v.label}
+  1234→      </Badge>
+  1235→    );
+  1236→  }
+  1237→
+  1238→  return (
+  1239→    <>
+  1240→      <SheetHeader className="px-6 pt-6 pb-3 border-b">
+  1241→        <SheetDescription className="text-[11px] font-mono">{merchant.merchantCode}</SheetDescription>
+  1242→        <SheetTitle className="text-lg flex items-center gap-2">
+  1243→          <Building2 className="size-5 text-emerald-600" />
+  1244→          {merchant.tradingName}
+  1245→        </SheetTitle>
+  1246→        <div className="flex flex-wrap items-center gap-2 mt-1">
+  1247→          {merchantStatusBadge(merchant.status)}
+  1248→          {kybBadge(merchant.kybStatus)}
+  1249→          {riskBadge(merchant.riskCategory)}
+  1250→          <Badge variant="outline" className="text-[10px] font-mono">
+  1251→            {merchant.countryCode} · {countryName(merchant.countryCode)}
+  1252→          </Badge>
+  1253→        </div>
+  1254→      </SheetHeader>
+  1255→
+  1256→      <div className="flex-1 overflow-y-auto">
+  1257→        <Tabs value={tab} onValueChange={setTab} className="w-full">
+  1258→          <div className="px-6 pt-3 border-b bg-muted/30">
+  1259→            <TabsList className="bg-transparent h-auto p-0 flex flex-wrap gap-1">
+  1260→              <TabsTrigger value="profile" className="text-xs">
+  1261→                <Building2 className="size-3.5 mr-1" /> Profile
+  1262→              </TabsTrigger>
+  1263→              <TabsTrigger value="pos_staff" className="text-xs">
+  1264→                <UsersIcon className="size-3.5 mr-1" /> POS Staff
+  1265→                <CountBadge n={posStaff.length} />
+  1266→              </TabsTrigger>
+  1267→              <TabsTrigger value="terminals" className="text-xs">
+  1268→                <Smartphone className="size-3.5 mr-1" /> Terminals
+  1269→                <CountBadge n={terminals.length} />
+  1270→              </TabsTrigger>
+  1271→              <TabsTrigger value="settlements" className="text-xs">
+  1272→                <Wallet className="size-3.5 mr-1" /> Settlements
+  1273→                <CountBadge n={settlements.length} />
+  1274→              </TabsTrigger>
+  1275→              <TabsTrigger value="disputes" className="text-xs">
+  1276→                <Scale className="size-3.5 mr-1" /> Disputes
+  1277→                <CountBadge n={disputes.length} />
+  1278→              </TabsTrigger>
+  1279→              <TabsTrigger value="pos_requests" className="text-xs">
+  1280→                <Package className="size-3.5 mr-1" /> POS Requests
+  1281→                <CountBadge n={posRequests.length} />
+  1282→              </TabsTrigger>
+  1283→            </TabsList>
+  1284→          </div>
+  1285→
+  1286→          {/* Profile tab */}
+  1287→          <TabsContent value="profile" className="p-6 pt-4 m-0 space-y-4 text-sm">
+  1288→            <div>
+  1289→              <SectionLabel icon={Building2}>Business profile</SectionLabel>
+  1290→              <div className="rounded-md border divide-y">
+  1291→                <DetailRow label="Trading name" value={merchant.tradingName} />
+  1292→                <DetailRow label="Legal name" value={merchant.legalName} />
+  1293→                <DetailRow label="Merchant code" value={<span className="font-mono text-xs">{merchant.merchantCode}</span>} />
+  1294→                <DetailRow label="Business type" value={<span className="capitalize">{merchant.businessType.replace(/_/g, " ")}</span>} />
+  1295→                <DetailRow label="Industry" value={merchant.industry} />
+  1296→                <DetailRow label="City" value={merchant.city} />
+  1297→                <DetailRow label="Address" value={merchant.address} />
+  1298→              </div>
+  1299→            </div>
+  1300→
+  1301→            <div>
+  1302→              <SectionLabel icon={UsersIcon}>Owner details</SectionLabel>
+  1303→              <div className="rounded-md border divide-y">
+  1304→                <DetailRow label="Owner" value={merchant.ownerName} />
+  1305→                <DetailRow label="Owner email" value={merchant.ownerEmail} />
+  1306→                <DetailRow label="Owner phone" value={merchant.ownerPhone} />
+  1307→                <DetailRow label="Contact email" value={merchant.contactEmail} />
+  1308→                <DetailRow label="Contact phone" value={merchant.contactPhone} />
+  1309→              </div>
+  1310→            </div>
+  1311→
+  1312→            <div>
+  1313→              <SectionLabel icon={ShieldCheck}>KYB</SectionLabel>
+  1314→              <div className="rounded-md border divide-y">
+  1315→                <DetailRow label="KYB status" value={kybBadge(merchant.kybStatus)} />
+  1316→                <DetailRow label="KYB case" value={merchant.kybCaseId ? <span className="font-mono text-xs">{merchant.kybCaseId}</span> : "—"} />
+  1317→                <DetailRow label="Risk category" value={riskBadge(merchant.riskCategory)} />
+  1318→                <DetailRow label="Account status" value={merchantStatusBadge(merchant.status)} />
+  1319→                <DetailRow label="Chargeback rate" value={<span className="tabular-nums">{merchant.chargebackRate.toFixed(1)}%</span>} />
+  1320→              </div>
+  1321→            </div>
+  1322→
+  1323→            <div>
+  1324→              <SectionLabel icon={Info}>Platforms</SectionLabel>
+  1325→              <div className="rounded-md border p-3">
+  1326→                {platformChips(merchant.platforms)}
+  1327→              </div>
+  1328→            </div>
+  1329→
+  1330→            <div>
+  1331→              <SectionLabel icon={Smartphone}>Terminal stats</SectionLabel>
+  1332→              <div className="grid grid-cols-3 gap-3">
+  1333→                <MiniStat
+  1334→                  label="Physical terminals"
+  1335→                  value={formatNumber(merchant.terminalCount)}
+  1336→                  tone="default"
+  1337→                />
+  1338→                <MiniStat
+  1339→                  label="Phone POS"
+  1340→                  value={formatNumber(merchant.phonePosCount)}
+  1341→                  tone="info"
+  1342→                />
+  1343→                <MiniStat
+  1344→                  label="Total devices"
+  1345→                  value={formatNumber(merchant.terminalCount + merchant.phonePosCount)}
+  1346→                  tone="success"
+  1347→                />
+  1348→              </div>
+  1349→            </div>
+  1350→
+  1351→            <div>
+  1352→              <SectionLabel icon={Receipt}>Transaction stats</SectionLabel>
+  1353→              <div className="grid grid-cols-3 gap-3">
+  1354→                <MiniStat
+  1355→                  label="Lifetime volume"
+  1356→                  value={formatCurrency(merchant.lifetimeVolume, merchant.settlementCurrency)}
+  1357→                  tone="success"
+  1358→                />
+  1359→                <MiniStat
+  1360→                  label="Monthly volume"
+  1361→                  value={formatCurrency(merchant.monthlyVolume, merchant.settlementCurrency)}
+  1362→                  tone="info"
+  1363→                />
+  1364→                <MiniStat
+  1365→                  label="Transactions"
+  1366→                  value={formatNumber(merchant.transactionCount)}
+  1367→                  tone="default"
+  1368→                />
+  1369→              </div>
+  1370→            </div>
+  1371→
+  1372→            <div>
+  1373→              <SectionLabel icon={Wallet}>Settlement info</SectionLabel>
+  1374→              <div className="rounded-md border divide-y">
+  1375→                <DetailRow label="Settlement currency" value={<span className="font-mono text-xs">{merchant.settlementCurrency}</span>} />
+  1376→                <DetailRow label="Member since" value={formatDateTime(merchant.createdAt)} />
+  1377→                <DetailRow label="Last updated" value={timeAgo(merchant.updatedAt)} />
+  1378→              </div>
+  1379→            </div>
+  1380→
+  1381→            {merchant.notes && (
+  1382→              <div>
+  1383→                <SectionLabel icon={Info}>Notes</SectionLabel>
+  1384→                <p className="text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-md p-3 text-amber-900 dark:text-amber-200">
+  1385→                  {merchant.notes}
+  1386→                </p>
+  1387→              </div>
+  1388→            )}
+  1389→
+  1390→            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 text-xs text-emerald-800 dark:text-emerald-300">
+  1391→              <Info className="size-3.5 inline mr-1 -mt-0.5" />
+  1392→              The Faya Business merchant app reads this record from the same
+  1393→              Firestore collection — status changes appear on the merchant&apos;s
+  1394→              next login.
+  1395→            </div>
+  1396→
+  1397→            <div className="pt-2">
+  1398→              <Button variant="outline" size="sm" onClick={onClose} className="w-full">
+  1399→                Close profile
+  1400→              </Button>
+  1401→            </div>
+  1402→          </TabsContent>
+  1403→
+  1404→          {/* POS Staff tab */}
+  1405→          <TabsContent value="pos_staff" className="p-6 pt-4 m-0 space-y-3 text-sm">
+  1406→            {posStaff.length === 0 ? (
+  1407→              <EmptyState
+  1408→                icon={UsersIcon}
+  1409→                title="No POS staff"
+  1410→                description="This merchant has not provisioned any Faya POS app users (cashiers, supervisors, branch managers)."
+  1411→              />
+  1412→            ) : (
+  1413→              <Card>
+  1414→                <CardContent className="p-0">
+  1415→                  <ScrollTable>
+  1416→                    <TableHeader className="sticky top-0 z-10 bg-card">
+  1417→                      <TableRow>
+  1418→                        <TableHead className="pl-4">Code</TableHead>
+  1419→                        <TableHead>Name</TableHead>
+  1420→                        <TableHead>Role</TableHead>
+  1421→                        <TableHead className="hidden md:table-cell">Branch</TableHead>
+  1422→                        <TableHead className="hidden lg:table-cell">Device</TableHead>
+  1423→                        <TableHead>Status</TableHead>
+  1424→                        <TableHead className="text-right pr-4">Actions</TableHead>
+  1425→                      </TableRow>
+  1426→                    </TableHeader>
+  1427→                    <TableBody>
+  1428→                      {posStaff.map((s) => (
+  1429→                        <TableRow key={s.id}>
+  1430→                          <TableCell className="pl-4 font-mono text-xs">{s.staffCode}</TableCell>
+  1431→                          <TableCell>
+  1432→                            <div className="font-medium text-sm">
+  1433→                              {s.firstName} {s.lastName}
+  1434→                            </div>
+  1435→                            <div className="text-[11px] text-muted-foreground">
+  1436→                              {s.email}
+  1437→                            </div>
+  1438→                          </TableCell>
+  1439→                          <TableCell className="capitalize text-xs">
+  1440→                            {s.role.replace(/_/g, " ")}
+  1441→                          </TableCell>
+  1442→                          <TableCell className="hidden md:table-cell text-xs">
+  1443→                            {s.branchName}
+  1444→                          </TableCell>
+  1445→                          <TableCell className="hidden lg:table-cell font-mono text-xs">
+  1446→                            {s.deviceAssigned ?? "—"}
+  1447→                          </TableCell>
+  1448→                          <TableCell>{posStaffStatusBadge(s.status)}</TableCell>
+  1449→                          <TableCell className="text-right pr-4">
+  1450→                            <DropdownMenu>
+  1451→                              <DropdownMenuTrigger asChild>
+  1452→                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+  1453→                                  <MoreHorizontal className="size-4" />
+  1454→                                </Button>
+  1455→                              </DropdownMenuTrigger>
+  1456→                              <DropdownMenuContent align="end" className="w-48">
+  1457→                                <DropdownMenuLabel className="text-xs">Staff actions</DropdownMenuLabel>
+  1458→                                {s.status === "active" && (
+  1459→                                  <DropdownMenuItem onClick={() => suspendStaff(s)}>
+  1460→                                    <Pause className="size-4 mr-2 text-red-600" /> Suspend
+  1461→                                  </DropdownMenuItem>
+  1462→                                )}
+  1463→                                {s.status === "suspended" && (
+  1464→                                  <DropdownMenuItem onClick={() => reactivateStaff(s)}>
+  1465→                                    <RotateCcw className="size-4 mr-2 text-emerald-600" /> Reactivate
+  1466→                                  </DropdownMenuItem>
+  1467→                                )}
+  1468→                                <DropdownMenuItem onClick={() => resetStaffPin(s)}>
+  1469→                                  <KeyRound className="size-4 mr-2 text-amber-600" /> Reset PIN
+  1470→                                </DropdownMenuItem>
+  1471→                                <DropdownMenuItem onClick={() => forceStaffLogout(s)}>
+  1472→                                  <LogOut className="size-4 mr-2 text-orange-600" /> Force logout
+  1473→                                </DropdownMenuItem>
+  1474→                              </DropdownMenuContent>
+  1475→                            </DropdownMenu>
+  1476→                          </TableCell>
+  1477→                        </TableRow>
+  1478→                      ))}
+  1479→                    </TableBody>
+  1480→                  </ScrollTable>
+  1481→                </CardContent>
+  1482→              </Card>
+  1483→            )}
+  1484→          </TabsContent>
+  1485→
+  1486→          {/* Terminals tab */}
+  1487→          <TabsContent value="terminals" className="p-6 pt-4 m-0 space-y-3 text-sm">
+  1488→            {terminals.length === 0 ? (
+  1489→              <EmptyState
+  1490→                icon={Smartphone}
+  1491→                title="No terminals"
+  1492→                description="This merchant has no physical terminals or phone POS devices registered. Terminals are matched by merchant name (trading or legal)."
+  1493→              />
+  1494→            ) : (
+  1495→              <Card>
+  1496→                <CardContent className="p-0">
+  1497→                  <ScrollTable>
+  1498→                    <TableHeader className="sticky top-0 z-10 bg-card">
+  1499→                      <TableRow>
+  1500→                        <TableHead className="pl-4">Serial</TableHead>
+  1501→                        <TableHead>Type</TableHead>
+  1502→                        <TableHead>Model</TableHead>
+  1503→                        <TableHead>Status</TableHead>
+  1504→                        <TableHead className="hidden md:table-cell">Activated</TableHead>
+  1505→                        <TableHead className="hidden lg:table-cell">Last seen</TableHead>
+  1506→                        <TableHead className="text-right pr-4">Actions</TableHead>
+  1507→                      </TableRow>
+  1508→                    </TableHeader>
+  1509→                    <TableBody>
+  1510→                      {terminals.map((t) => (
+  1511→                        <TableRow key={t.id}>
+  1512→                          <TableCell className="pl-4 font-mono text-xs">{t.serialNumber}</TableCell>
+  1513→                          <TableCell className="capitalize text-xs">
+  1514→                            {t.type === "phone_pos" ? "Phone POS" : t.type}
+  1515→                          </TableCell>
+  1516→                          <TableCell className="text-xs">{t.model}</TableCell>
+  1517→                          <TableCell>{terminalStatusBadge(t.status)}</TableCell>
+  1518→                          <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+  1519→                            {t.activatedAt ? formatDateTime(t.activatedAt) : "Not activated"}
+  1520→                          </TableCell>
+  1521→                          <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
+  1522→                            {timeAgo(t.lastSeenAt)}
+  1523→                          </TableCell>
+  1524→                          <TableCell className="text-right pr-4">
+  1525→                            <div className="flex justify-end gap-1">
+  1526→                              <Button
+  1527→                                variant="ghost"
+  1528→                                size="sm"
+  1529→                                className="h-8 text-emerald-700 dark:text-emerald-400"
+  1530→                                disabled={t.status === "active" || t.status === "blocked" || t.status === "damaged"}
+  1531→                                onClick={() => activateTerminal(t)}
+  1532→                              >
+  1533→                                <CheckCircle2 className="size-3.5 mr-1" /> Activate
+  1534→                              </Button>
+  1535→                              <Button
+  1536→                                variant="ghost"
+  1537→                                size="sm"
+  1538→                                className="h-8 text-red-700 dark:text-red-400"
+  1539→                                disabled={t.status === "blocked" || t.status === "damaged"}
+  1540→                                onClick={() => blockTerminal(t)}
+  1541→                              >
+  1542→                                <Ban className="size-3.5 mr-1" /> Block
+  1543→                              </Button>
+  1544→                            </div>
+  1545→                          </TableCell>
+  1546→                        </TableRow>
+  1547→                      ))}
+  1548→                    </TableBody>
+  1549→                  </ScrollTable>
+  1550→                </CardContent>
+  1551→              </Card>
+  1552→            )}
+  1553→          </TabsContent>
+  1554→
+  1555→          {/* Settlements tab */}
+  1556→          <TabsContent value="settlements" className="p-6 pt-4 m-0 space-y-3 text-sm">
+  1557→            {settlements.length === 0 ? (
+  1558→              <EmptyState
+  1559→                icon={Wallet}
+  1560→                title="No settlements"
+  1561→                description="This merchant has no scheduled or processed settlements. Settlements are matched by merchant legal/trading name."
+  1562→              />
+  1563→            ) : (
+  1564→              <Card>
+  1565→                <CardContent className="p-0">
+  1566→                  <ScrollTable>
+  1567→                    <TableHeader className="sticky top-0 z-10 bg-card">
+  1568→                      <TableRow>
+  1569→                        <TableHead className="pl-4">Batch ID</TableHead>
+  1570→                        <TableHead className="text-right">Amount</TableHead>
+  1571→                        <TableHead>Currency</TableHead>
+  1572→                        <TableHead className="hidden md:table-cell">Scheduled</TableHead>
+  1573→                        <TableHead>Status</TableHead>
+  1574→                        <TableHead className="text-right pr-4">Actions</TableHead>
+  1575→                      </TableRow>
+  1576→                    </TableHeader>
+  1577→                    <TableBody>
+  1578→                      {settlements.map((s) => (
+  1579→                        <TableRow key={s.id}>
+  1580→                          <TableCell className="pl-4 font-mono text-xs">{s.batchId}</TableCell>
+  1581→                          <TableCell className="text-right font-mono text-xs tabular-nums">
+  1582→                            {formatCurrency(s.amount, s.currency)}
+  1583→                          </TableCell>
+  1584→                          <TableCell className="font-mono text-xs">{s.currency}</TableCell>
+  1585→                          <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+  1586→                            {formatDateTime(s.scheduledAt)}
+  1587→                          </TableCell>
+  1588→                          <TableCell>
+  1589→                            <div>{settlementStatusBadge(s.status)}</div>
+  1590→                            {s.failureReason && (
+  1591→                              <div className="text-[10px] text-red-700 dark:text-red-400 mt-0.5">
+  1592→                                {s.failureReason}
+  1593→                              </div>
+  1594→                            )}
+  1595→                          </TableCell>
+  1596→                          <TableCell className="text-right pr-4">
+  1597→                            <div className="flex justify-end gap-1">
+  1598→                              {s.status === "failed" && (
+  1599→                                <Button
+  1600→                                  variant="ghost"
+  1601→                                  size="sm"
+  1602→                                  className="h-8 text-amber-700 dark:text-amber-400"
+  1603→                                  onClick={() => retrySettlement(s)}
+  1604→                                >
+  1605→                                  <RefreshCw className="size-3.5 mr-1" /> Retry
+  1606→                                </Button>
+  1607→                              )}
+  1608→                              <Button
+  1609→                                variant="ghost"
+  1610→                                size="sm"
+  1611→                                className="h-8"
+  1612→                                onClick={() => viewSettlementDetails(s)}
+  1613→                              >
+  1614→                                <Eye className="size-3.5 mr-1" /> Details
+  1615→                              </Button>
+  1616→                            </div>
+  1617→                          </TableCell>
+  1618→                        </TableRow>
+  1619→                      ))}
+  1620→                    </TableBody>
+  1621→                  </ScrollTable>
+  1622→                </CardContent>
+  1623→              </Card>
+  1624→            )}
+  1625→          </TabsContent>
+  1626→
+  1627→          {/* Disputes tab */}
+  1628→          <TabsContent value="disputes" className="p-6 pt-4 m-0 space-y-3 text-sm">
+  1629→            {disputes.length === 0 ? (
+  1630→              <EmptyState
+  1631→                icon={Scale}
+  1632→                title="No disputes"
+  1633→                description="This merchant has no disputes. Disputes are matched by merchant legal/trading name."
+  1634→              />
+  1635→            ) : (
+  1636→              <Card>
+  1637→                <CardContent className="p-0">
+  1638→                  <ScrollTable>
+  1639→                    <TableHeader className="sticky top-0 z-10 bg-card">
+  1640→                      <TableRow>
+  1641→                        <TableHead className="pl-4">Dispute ID</TableHead>
+  1642→                        <TableHead>Customer</TableHead>
+  1643→                        <TableHead className="text-right">Amount</TableHead>
+  1644→                        <TableHead className="hidden lg:table-cell">Reason</TableHead>
+  1645→                        <TableHead>Status</TableHead>
+  1646→                        <TableHead className="text-right pr-4">Actions</TableHead>
+  1647→                      </TableRow>
+  1648→                    </TableHeader>
+  1649→                    <TableBody>
+  1650→                      {disputes.map((d) => (
+  1651→                        <TableRow key={d.id}>
+  1652→                          <TableCell className="pl-4 font-mono text-xs">{d.id}</TableCell>
+  1653→                          <TableCell className="text-xs">{d.customerName}</TableCell>
+  1654→                          <TableCell className="text-right font-mono text-xs tabular-nums">
+  1655→                            {formatCurrency(d.amount, d.currency)}
+  1656→                          </TableCell>
+  1657→                          <TableCell className="hidden lg:table-cell text-xs">
+  1658→                            {d.reason}
+  1659→                          </TableCell>
+  1660→                          <TableCell>{disputeStatusBadge(d.status)}</TableCell>
+  1661→                          <TableCell className="text-right pr-4">
+  1662→                            <DropdownMenu>
+  1663→                              <DropdownMenuTrigger asChild>
+  1664→                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+  1665→                                  <MoreHorizontal className="size-4" />
+  1666→                                </Button>
+  1667→                              </DropdownMenuTrigger>
+  1668→                              <DropdownMenuContent align="end" className="w-48">
+  1669→                                <DropdownMenuLabel className="text-xs">Dispute actions</DropdownMenuLabel>
+  1670→                                <DropdownMenuItem
+  1671→                                  onClick={() => requestEvidence(d)}
+  1672→                                  disabled={d.status !== "new"}
+  1673→                                >
+  1674→                                  <ShieldAlert className="size-4 mr-2" /> Request evidence
+  1675→                                </DropdownMenuItem>
+  1676→                                <DropdownMenuItem
+  1677→                                  onClick={() => updateDisputeStatus(d, "under_review")}
+  1678→                                  disabled={d.status === "under_review" || d.status === "won" || d.status === "lost"}
+  1679→                                >
+  1680→                                  <Clock className="size-4 mr-2 text-sky-600" /> Mark under review
+  1681→                                </DropdownMenuItem>
+  1682→                                <DropdownMenuItem
+  1683→                                  onClick={() => updateDisputeStatus(d, "won")}
+  1684→                                  disabled={d.status === "won" || d.status === "lost"}
+  1685→                                >
+  1686→                                  <CheckCircle2 className="size-4 mr-2 text-emerald-600" /> Mark won
+  1687→                                </DropdownMenuItem>
+  1688→                                <DropdownMenuItem
+  1689→                                  onClick={() => updateDisputeStatus(d, "lost")}
+  1690→                                  disabled={d.status === "won" || d.status === "lost"}
+  1691→                                >
+  1692→                                  <XCircle className="size-4 mr-2 text-red-600" /> Mark lost
+  1693→                                </DropdownMenuItem>
+  1694→                              </DropdownMenuContent>
+  1695→                            </DropdownMenu>
+  1696→                          </TableCell>
+  1697→                        </TableRow>
+  1698→                      ))}
+  1699→                    </TableBody>
+  1700→                  </ScrollTable>
+  1701→                </CardContent>
+  1702→              </Card>
+  1703→            )}
+  1704→          </TabsContent>
+  1705→
+  1706→          {/* POS Requests tab — KEY FEATURE */}
+  1707→          <TabsContent value="pos_requests" className="p-6 pt-4 m-0 space-y-3 text-sm">
+  1708→            <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 text-xs text-emerald-800 dark:text-emerald-300">
+  1709→              <ShieldCheck className="size-3.5 inline mr-1 -mt-0.5" />
+  1710→              <strong>Approval rule:</strong> A device MUST support at least one
+  1711→              of NFC, card reader, or swipe. If none are available, the request
+  1712→              is auto-declined. Device integrity and screen lock failures are
+  1713→              surfaced as warnings but do not block approval.
+  1714→            </div>
+  1715→            {posRequests.length === 0 ? (
+  1716→              <EmptyState
+  1717→                icon={Package}
+  1718→                title="No POS device requests"
+  1719→                description="This merchant has not requested any physical terminals or phone POS activations."
+  1720→              />
+  1721→            ) : (
+  1722→              <div className="space-y-3">
+  1723→                {posRequests.map((r) => (
+  1724→                  <PosRequestCard
+  1725→                    key={r.id}
+  1726→                    request={r}
+  1727→                    statusBadge={posRequestStatusBadge(r.status)}
+  1728→                    onApprove={() => approvePosRequest(r)}
+  1729→                    onAutoDecline={() => autoDeclinePosRequest(r)}
+  1730→                    onDecline={() => setDeclineTarget(r)}
+  1731→                  />
+  1732→                ))}
+  1733→              </div>
+  1734→            )}
+  1735→          </TabsContent>
+  1736→        </Tabs>
+  1737→      </div>
+  1738→
+  1739→      {/* ----------------------- POS device decline dialog ---------------------- */}
+  1740→      <Dialog open={!!declineTarget} onOpenChange={(o) => !o && setDeclineTarget(null)}>
+  1741→        <DialogContent className="sm:max-w-md">
+  1742→          <DialogHeader>
+  1743→            <DialogTitle>Decline POS device request?</DialogTitle>
+  1744→            <DialogDescription>
+  1745→              {declineTarget && (
+  1746→                <>
+  1747→                  <span className="font-mono">{declineTarget.requestCode}</span> ·{" "}
+  1748→                  {declineTarget.deviceInfo.deviceModel} ·{" "}
+  1749→                  {declineTarget.type.replace(/_/g, " ")}
+  1750→                </>
+  1751→              )}
+  1752→            </DialogDescription>
+  1753→          </DialogHeader>
+  1754→          <div className="space-y-2 py-2">
+  1755→            <Label className="text-xs">Reason (optional)</Label>
+  1756→            <Textarea
+  1757→              value={declineReason}
+  1758→              onChange={(e) => setDeclineReason(e.target.value)}
+  1759→              placeholder="e.g. Merchant must update the Faya POS app to the latest version first."
+  1760→              className="text-sm min-h-[80px]"
+  1761→            />
+  1762→            <p className="text-[11px] text-muted-foreground">
+  1763→              If left blank, a default reason will be recorded in the audit log.
+  1764→            </p>
+  1765→          </div>
+  1766→          <DialogFooter>
+  1767→            <Button variant="outline" onClick={() => setDeclineTarget(null)}>
+  1768→              Cancel
+  1769→            </Button>
+  1770→            <Button
+  1771→              className="bg-red-600 hover:bg-red-700 text-white"
+  1772→              onClick={submitDecline}
+  1773→            >
+  1774→              <XCircle className="size-4 mr-1" /> Decline request
+  1775→            </Button>
+  1776→          </DialogFooter>
+  1777→        </DialogContent>
+  1778→      </Dialog>
+  1779→    </>
+  1780→  );
+  1781→}
+  1782→
+  1783→/* --------------------------- POS device request card --------------------- */
+  1784→
+  1785→function PosRequestCard({
+  1786→  request,
+  1787→  statusBadge,
+  1788→  onApprove,
+  1789→  onAutoDecline,
+  1790→  onDecline,
+  1791→}: {
+  1792→  request: PosDeviceRequest;
+  1793→  statusBadge: React.ReactNode;
+  1794→  onApprove: () => void;
+  1795→  onAutoDecline: () => void;
+  1796→  onDecline: () => void;
+  1797→}) {
+  1798→  const d = request.deviceInfo;
+  1799→  const isPending = request.status === "pending";
+  1800→  const showWarnings = isPending && (d.deviceIntegrityPassed === false || d.screenLockEnabled === false);
+  1801→
+  1802→  return (
+  1803→    <Card className="overflow-hidden">
+  1804→      <CardContent className="p-4 space-y-3">
+  1805→        {/* Header row */}
+  1806→        <div className="flex flex-wrap items-start justify-between gap-2">
+  1807→          <div>
+  1808→            <div className="flex items-center gap-2">
+  1809→              <span className="font-mono text-xs text-muted-foreground">
+  1810→                {request.requestCode}
+  1811→              </span>
+  1812→              <Badge variant="outline" className="text-[10px] capitalize">
+  1813→                {request.type === "physical_terminal" ? "Physical Terminal" : "Phone POS"}
+  1814→              </Badge>
+  1815→              {statusBadge}
+  1816→            </div>
+  1817→            <div className="font-medium text-sm mt-1 flex items-center gap-1.5">
+  1818→              <MonitorSmartphone className="size-4 text-emerald-600" />
+  1819→              {d.deviceModel}
+  1820→            </div>
+  1821→            <div className="text-[11px] text-muted-foreground mt-0.5">
+  1822→              OS {d.osVersion} · Faya POS v{d.appVersion} · battery {d.batteryLevel}%
+  1823→            </div>
+  1824→          </div>
+  1825→          <div className="text-right">
+  1826→            <div className="text-[10px] uppercase text-muted-foreground">Requested</div>
+  1827→            <div className="text-xs">{timeAgo(request.requestedAt)}</div>
+  1828→          </div>
+  1829→        </div>
+  1830→
+  1831→        {/* Device capability checks */}
+  1832→        <div>
+  1833→          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5 flex items-center gap-1">
+  1834→            <Cpu className="size-3 text-emerald-600" /> Device capability check
+  1835→          </div>
+  1836→          <div className="flex flex-wrap gap-1.5">
+  1837→            <CapabilityBadge label="NFC" supported={d.nfcSupported} />
+  1838→            <CapabilityBadge label="Card Reader" supported={d.cardReaderSupported} />
+  1839→            <CapabilityBadge label="Swipe" supported={d.swipeSupported} />
+  1840→          </div>
+  1841→          <div className="flex items-center gap-2 mt-2">
+  1842→            <span className="text-[11px] text-muted-foreground">Approval eligibility:</span>
+  1843→            {request.canBeApproved ? (
+  1844→              <Badge variant="outline" className="text-[10px] text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800">
+  1845→                <CheckCircle2 className="size-3 mr-1" /> Can approve — payment method available
+  1846→              </Badge>
+  1847→            ) : (
+  1848→              <Badge variant="outline" className="text-[10px] text-red-700 border-red-300 bg-red-50 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800">
+  1849→                <XCircle className="size-3 mr-1" /> Cannot approve — no payment method
+  1850→              </Badge>
+  1851→            )}
+  1852→          </div>
+  1853→        </div>
+  1854→
+  1855→        {/* Security warnings */}
+  1856→        {showWarnings && (
+  1857→          <div className="space-y-1.5">
+  1858→            {d.deviceIntegrityPassed === false && (
+  1859→              <div className="rounded-md border border-amber-300 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20 p-2.5 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+  1860→                <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
+  1861→                <span>
+  1862→                  <strong>WARNING:</strong> Device integrity check failed —
+  1863→                  device may be rooted or jailbroken. Approval is technically
+  1864→                  possible (a payment method is supported), but a real reviewer
+  1865→                  should consider this a hard block.
+  1866→                </span>
+  1867→              </div>
+  1868→            )}
+  1869→            {d.screenLockEnabled === false && (
+  1870→              <div className="rounded-md border border-amber-300 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20 p-2.5 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+  1871→                <LockIcon className="size-3.5 mt-0.5 shrink-0" />
+  1872→                <span>
+  1873→                  <strong>WARNING:</strong> Screen lock is disabled on the
+  1874→                  device. Encourage the merchant to enable PIN/biometric
+  1875→                  screen lock before approval.
+  1876→                </span>
+  1877→              </div>
+  1878→            )}
+  1879→          </div>
+  1880→        )}
+  1881→
+  1882→        {/* Decline reason for already-declined requests */}
+  1883→        {request.declineReason && !isPending && (
+  1884→          <div className="rounded-md border border-red-200 dark:border-red-900/50 bg-red-50/40 dark:bg-red-900/10 p-2.5 text-xs text-red-800 dark:text-red-300">
+  1885→            <strong>Decline reason:</strong> {request.declineReason}
+  1886→          </div>
+  1887→        )}
+  1888→
+  1889→        {/* Notes */}
+  1890→        {request.notes && (
+  1891→          <div className="text-xs text-muted-foreground italic">
+  1892→            “{request.notes}”
+  1893→          </div>
+  1894→        )}
+  1895→
+  1896→        {/* Action buttons */}
+  1897→        {isPending && (
+  1898→          <div className="flex flex-wrap items-center gap-2 pt-1 border-t">
+  1899→            <TooltipProvider>
+  1900→              <Tooltip>
+  1901→                <TooltipTrigger asChild>
+  1902→                  <span className="inline-flex">
+  1903→                    <Button
+  1904→                      size="sm"
+  1905→                      className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
+  1906→                      disabled={!request.canBeApproved}
+  1907→                      onClick={onApprove}
+  1908→                    >
+  1909→                      <CheckCircle2 className="size-3.5 mr-1" /> Approve
+  1910→                    </Button>
+  1911→                  </span>
+  1912→                </TooltipTrigger>
+  1913→                <TooltipContent>
+  1914→                  {request.canBeApproved
+  1915→                    ? "Approve this POS device request"
+  1916→                    : "Cannot approve — device doesn't support any payment method (NFC, card reader, or swipe)"}
+  1917→                </TooltipContent>
+  1918→              </Tooltip>
+  1919→            </TooltipProvider>
+  1920→            {!request.canBeApproved ? (
+  1921→              <Button
+  1922→                size="sm"
+  1923→                variant="outline"
+  1924→                className="h-8 border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
+  1925→                onClick={onAutoDecline}
+  1926→              >
+  1927→                <XCircle className="size-3.5 mr-1" /> Auto-decline
+  1928→              </Button>
+  1929→            ) : null}
+  1930→            <Button
+  1931→              size="sm"
+  1932→              variant="outline"
+  1933→              className="h-8"
+  1934→              onClick={onDecline}
+  1935→            >
+  1936→              <XCircle className="size-3.5 mr-1" /> Decline
+  1937→            </Button>
+  1938→          </div>
+  1939→        )}
+  1940→
+  1941→        {/* Reviewed-by info for closed requests */}
+  1942→        {!isPending && request.reviewedBy && (
+  1943→          <div className="text-[11px] text-muted-foreground pt-1 border-t">
+  1944→            Reviewed by{" "}
+  1945→            <span className="font-mono">{request.reviewedBy}</span>
+  1946→            {request.reviewedAt && ` · ${formatDateTime(request.reviewedAt)}`}
+  1947→          </div>
+  1948→        )}
+  1949→      </CardContent>
+  1950→    </Card>
+  1951→  );
+  1952→}
+  1953→
+  1954→function CapabilityBadge({ label, supported }: { label: string; supported: boolean }) {
+  1955→  return (
+  1956→    <Badge
+  1957→      variant="outline"
+  1958→      className={cn(
+  1959→        "text-[10px] gap-1",
+  1960→        supported
+  1961→          ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+  1962→          : "text-red-700 border-red-300 bg-red-50 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800",
+  1963→      )}
+  1964→    >
+  1965→      {supported ? (
+  1966→        <CheckCircle2 className="size-3" />
+  1967→      ) : (
+  1968→        <XCircle className="size-3" />
+  1969→      )}
+  1970→      {label}
+  1971→    </Badge>
+  1972→  );
+  1973→}
+  1974→
+  1975→/* --------------------------- Small UI helpers --------------------------- */
+  1976→
+  1977→function CountBadge({ n }: { n: number }) {
+  1978→  return (
+  1979→    <Badge
+  1980→      variant="secondary"
+  1981→      className={cn(
+  1982→        "ml-1.5 text-[9px] h-4 px-1.5 tabular-nums",
+  1983→        n > 0
+  1984→          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+  1985→          : "bg-muted text-muted-foreground",
+  1986→      )}
+  1987→    >
+  1988→      {n}
+  1989→    </Badge>
+  1990→  );
+  1991→}
+  1992→
+  1993→function SectionLabel({
+  1994→  icon: Icon,
+  1995→  children,
+  1996→}: {
+  1997→  icon: React.ComponentType<{ className?: string }>;
+  1998→  children: React.ReactNode;
+  1999→}) {
+  2000→  return (
+
+[showing lines 1-2000 of 2060; use offset=2001 with limit to continue reading]
