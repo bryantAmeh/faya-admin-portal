@@ -66,8 +66,16 @@ export function getVisibleConsumers(
   countries: CountryConfig[],
   consumers: Consumer[],
 ): Consumer[] {
+  if (isGlobalScope(staff)) return consumers;
   const codes = getVisibleCountryCodes(staff, countries);
-  return consumers.filter((c) => codes.has(c.countryCode));
+  // Also build a set of country names for matching (apps may store full names)
+  const names = new Set(
+    getVisibleCountries(staff, countries).map(c => c.countryName.toLowerCase())
+  );
+  return consumers.filter((c) => {
+    const code = (c.countryCode || c.countryOfResidence || "").toString();
+    return codes.has(code) || names.has(code.toLowerCase());
+  });
 }
 
 export function getVisibleStaff(

@@ -99,38 +99,41 @@ import {
 const PREFIX = "faya_admin_";
 
 export const COLLECTIONS = {
+  // Admin-managed (faya_admin_ prefix)
   departments: `${PREFIX}departments`,
   roles: `${PREFIX}roles`,
   permissions: `${PREFIX}permissions`,
   staff: `${PREFIX}staff`,
   countries: `${PREFIX}countries`,
-  kycCases: `${PREFIX}kyc_cases`,
-  kybCases: `${PREFIX}kyb_cases`,
-  fraudAlerts: `${PREFIX}fraud_alerts`,
-  settlements: `${PREFIX}settlements`,
-  tickets: `${PREFIX}tickets`,
-  disputes: `${PREFIX}disputes`,
-  terminals: `${PREFIX}terminals`,
   auditLogs: `${PREFIX}audit_logs`,
   approvals: `${PREFIX}approvals`,
-  merchants: `${PREFIX}merchants`,
-  consumers: `${PREFIX}consumers`,
-  posStaff: `${PREFIX}pos_staff`,
-  cards: `${PREFIX}cards`,
-  wallets: `${PREFIX}wallets`,
-  transactions: `${PREFIX}transactions`,
-  documents: `${PREFIX}documents`,
   policies: `${PREFIX}policies`,
   appContent: `${PREFIX}app_content`,
   notifications: `${PREFIX}notifications`,
   fees: `${PREFIX}fees`,
-  limits: `${PREFIX}limits`,
   providerLogs: `${PREFIX}provider_logs`,
   webhookLogs: `${PREFIX}webhook_logs`,
-  posDeviceRequests: `${PREFIX}pos_device_requests`,
   stock: `${PREFIX}stock`,
   stockOrders: `${PREFIX}stock_orders`,
   meta: `${PREFIX}meta`,
+  // App-managed (real collection names from Faya Pay / Merchant / POS apps)
+  consumers: "users",
+  cards: "cards",
+  devices: "devices",
+  kycCases: "kyc",
+  limits: "limits",
+  wallets: "wallets",
+  transactions: "transactions",
+  merchants: "merchants",
+  posStaff: "staff",
+  posDeviceRequests: "pos_device_requests",
+  terminals: "terminals",
+  settlements: "settlements",
+  disputes: "disputes",
+  tickets: "support_tickets",
+  documents: "documents",
+  kybCases: "kyb",
+  fraudAlerts: "fraud_alerts",
 } as const;
 
 /**
@@ -157,25 +160,11 @@ async function checkFirestoreAccess(): Promise<boolean> {
     try {
       // Try a tiny read — if it fails with permission-denied, fall back.
       await getDocs(collection(d, COLLECTIONS.meta));
+      console.log("[admin-data] Firestore access confirmed — using real data");
       return true;
     } catch (e) {
       const code = (e as { code?: string })?.code ?? "";
-      if (
-        code === "permission-denied" ||
-        code === "unavailable" ||
-        code === "unimplemented" ||
-        code.includes("permission")
-      ) {
-        console.warn(
-          "[admin-data] Firestore access denied — switching to local mode. Configure Firestore security rules to enable cloud sync.",
-          code,
-        );
-        useLocalMode = true;
-        localStore.active = true;
-        return false;
-      }
-      // Other errors — also fall back to keep the portal usable
-      console.warn("[admin-data] Firestore check failed, using local mode:", code || e);
+      console.warn("[admin-data] Firestore check failed:", code || e, "— switching to local mode");
       useLocalMode = true;
       localStore.active = true;
       return false;
@@ -242,6 +231,7 @@ export function subscribe<T extends { id: string }>(
           const { _serverTime, ...rest } = data as Record<string, unknown>;
           return { ...(rest as T), id: (rest.id as string) ?? d.id };
         });
+        console.log(`[subscribe:${colName}] received ${items.length} items`);
         cb(items);
       },
       (err) => {
@@ -442,7 +432,7 @@ export const adminData = {
     subscribe<CountryConfig>(COLLECTIONS.countries, cb, orderBy("countryName")),
   // KYC
   subscribeKyc: (cb: (items: KycCase[]) => void) =>
-    subscribe<KycCase>(COLLECTIONS.kycCases, cb, orderBy("submittedAt", "desc")),
+    subscribe<KycCase>(COLLECTIONS.kycCases, cb),
   // KYB
   subscribeKyb: (cb: (items: KybCase[]) => void) =>
     subscribe<KybCase>(COLLECTIONS.kybCases, cb, orderBy("submittedAt", "desc")),
@@ -474,7 +464,7 @@ export const adminData = {
   // Consumers — managed via Compliance (KYC) + Risk (restrict) + Country rules.
   // The consumer app is a separate application that reads from this same database.
   subscribeConsumers: (cb: (items: Consumer[]) => void) =>
-    subscribe<Consumer>(COLLECTIONS.consumers, cb, orderBy("createdAt", "desc")),
+    subscribe<Consumer>(COLLECTIONS.consumers, cb),
 
   // Single-doc filters
   subscribeStaffById: (id: string, cb: (item: AdminStaff | null) => void) => {
@@ -542,7 +532,7 @@ export const adminData = {
 
   // Cards
   subscribeCards: (cb: (items: Card[]) => void) =>
-    subscribe<Card>(COLLECTIONS.cards, cb, orderBy("createdAt", "desc")),
+    subscribe<Card>(COLLECTIONS.cards, cb),
   updateCard: (id: string, patchData: Partial<Card>) => patch<Card>(COLLECTIONS.cards, id, patchData),
 
   // Wallets

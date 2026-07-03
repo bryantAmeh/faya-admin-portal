@@ -332,31 +332,31 @@ export function UsersView({ consumers, countries }: UsersViewProps) {
                       onClick={() => openProfile(c)}
                     >
                       <TableCell className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
-                        {c.consumerCode}
+                        {c.consumerCode || "—"}
                       </TableCell>
                       <TableCell className="font-medium text-[12px]">
                         {c.firstName} {c.lastName}
                       </TableCell>
                       <TableCell className="text-[11px] text-muted-foreground">{c.email}</TableCell>
-                      <TableCell className="text-[11px] text-muted-foreground">{c.phone}</TableCell>
+                      <TableCell className="text-[11px] text-muted-foreground">{c.phone || "—"}</TableCell>
                       <TableCell className="text-[11px]">
                         <span className="inline-flex items-center gap-1">
                           <Globe2 className="size-3 text-muted-foreground" />
                           {c.countryCode}
                         </span>
                       </TableCell>
-                      <TableCell>{kycBadge(c.kycStatus)}</TableCell>
-                      <TableCell>{consumerStatusBadge(c.status)}</TableCell>
+                      <TableCell>{kycBadge(c.kycStatus || "pending")}</TableCell>
+                      <TableCell>{consumerStatusBadge((c.status as any) || "pending_kyc")}</TableCell>
                       <TableCell className="text-right text-[11px] tabular-nums">
-                        {formatCurrency(c.walletBalance, c.currency)}
+                        {formatCurrency(c.walletBalance || 0, c.currency || "NGN")}
                       </TableCell>
                       <TableCell className="text-center text-[11px] tabular-nums">
                         <Badge variant="secondary" className="text-[10px]">
-                          {formatNumber(c.transactionCount)}
+                          {formatNumber(c.transactionCount || 0)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-[11px] text-muted-foreground">
-                        {timeAgo(c.updatedAt)}
+                        {timeAgo(c.updatedAt || null)}
                       </TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>

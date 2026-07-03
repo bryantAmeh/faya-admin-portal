@@ -215,28 +215,38 @@ export interface Merchant {
 
 export interface Consumer {
   id: string;
-  consumerCode: string; // e.g. FAY-NG-C-00123
-  firstName: string;
-  lastName: string;
+  consumerCode?: string;
+  firstName?: string;
+  lastName?: string;
+  fullName?: string;
+  middleName?: string;
   email: string;
-  phone: string;
-  countryCode: string;
-  nationality: string;
-  dateOfBirth: string;
-  kycStatus: KycStatus;
-  kycTier: KycTier;
-  kycCaseId: string | null;
-  riskScore: number;
-  status: ConsumerStatus;
-  platforms: PlatformKey[]; // which platforms this consumer uses
-  lifetimeVolume: number;
-  monthlyVolume: number;
-  transactionCount: number;
-  walletBalance: number;
-  currency: string;
-  createdAt: number;
-  updatedAt: number;
-  notes: string;
+  phone?: string;
+  countryCode?: string;
+  countryOfResidence?: string;
+  nationality?: string;
+  dateOfBirth?: string;
+  kycStatus?: KycStatus;
+  kycTier?: KycTier;
+  kycCaseId?: string | null;
+  riskScore?: number;
+  status?: ConsumerStatus | string;
+  platforms?: PlatformKey[];
+  lifetimeVolume?: number;
+  monthlyVolume?: number;
+  transactionCount?: number;
+  walletBalance?: number;
+  currency?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  notes?: string;
+  gender?: string;
+  referralCode?: string;
+  acceptedTerms?: boolean;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  residencyStatus?: string;
+  [key: string]: unknown; // Allow extra fields from the app
 }
 
 export interface KycCase {
