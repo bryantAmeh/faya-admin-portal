@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow read/write for all faya_admin_ collections
+    // This is for the admin portal — production should use proper auth-based rules
+    match /faya_admin_{document=**} {
+      allow read, write: if true;
+    }
+    
+    // Also allow any collection (for development)
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
