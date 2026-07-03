@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Users (Consumers) View (CP1)
+     5→ *
+     6→ * A truly comprehensive consumer profile: EVERYTHING connected to a consumer
+     7→ * lives under their profile Sheet — overview, cards, wallets, transactions,
+     8→ * documents, KYC cases, support tickets, disputes, risk alerts, and audit
+     9→ * logs. Each tab subscribes live to its Firestore collection via
+    10→ * `adminData.subscribe*`, filters by the selected consumer, and surfaces
+    11→ * EmptyState when there is nothing to show.
+    12→ *
+    13→ * Country scoping: Super Admin sees all consumers; other staff see only
+    14→ * the country codes listed on their `staff.countries` access record
+    15→ * (resolved via `getVisibleConsumers`).
+    16→ *
+    17→ * Audit action keys:
+    18→ *   consumer.restrict / consumer.suspend / consumer.reactivate
+    19→ *   card.freeze / card.unfreeze
+    20→ *   wallet.freeze / wallet.unfreeze
+    21→ *   document.approve / document.reject / document.request_replacement
+    22→ *   kyc.approve / kyc.reject / kyc.escalate
+    23→ *   ticket.reply / ticket.assign / ticket.close
+    24→ *   dispute.open / dispute.update_status
+    25→ *   fraud.close / fraud.escalate
+    26→ *   transaction.dispute / transaction.escalate
+    27→ */
+    28→import { useEffect, useMemo, useState } from "react";
+    29→import {
+    30→  Users as UsersIcon,
+    31→  Search,
+    32→  Eye,
+    33→  MoreHorizontal,
+    34→  Ban,
+    35→  Pause,
+    36→  RotateCcw,
+    37→  CreditCard,
+    38→  Wallet as WalletIcon,
+    39→  Receipt,
+    40→  FileText,
+    41→  ShieldCheck,
+    42→  ShieldAlert,
+    43→  Snowflake,
+    44→  PlayCircle,
+    45→  CheckCircle2,
+    46→  XCircle,
+    47→  Clock,
+    48→  AlertTriangle,
+    49→  Info,
+    50→  Lock,
+    51→  ScrollText,
+    52→  LifeBuoy,
+    53→  Scale,
+    54→  Activity,
+    55→  UserCheck,
+    56→  UserX,
+    57→  MapPin,
+    58→  Mail,
+    59→  Phone,
+    60→  CalendarDays,
+    61→  Globe2,
+    62→  Fingerprint,
+    63→  BadgeCheck,
+    64→} from "lucide-react";
+    65→import { toast } from "sonner";
+    66→import {
+    67→  ViewHeader,
+    68→  ViewContainer,
+    69→  EmptyState,
+    70→  StatCard,
+    71→} from "@/components/portal/view-helpers";
+    72→import { Card, CardContent } from "@/components/ui/card";
+    73→import { Badge } from "@/components/ui/badge";
+    74→import { Button } from "@/components/ui/button";
+    75→import { Input } from "@/components/ui/input";
+    76→import {
+    77→  TableBody,
+    78→  TableCell,
+    79→  TableHead,
+    80→  TableHeader,
+    81→  TableRow,
+    82→} from "@/components/ui/table";
+    83→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    84→import {
+    85→  Select,
+    86→  SelectContent,
+    87→  SelectItem,
+    88→  SelectTrigger,
+    89→  SelectValue,
+    90→} from "@/components/ui/select";
+    91→import {
+    92→  Sheet,
+    93→  SheetContent,
+    94→  SheetDescription,
+    95→  SheetHeader,
+    96→  SheetTitle,
+    97→} from "@/components/ui/sheet";
+    98→import {
+    99→  DropdownMenu,
+   100→  DropdownMenuContent,
+   101→  DropdownMenuItem,
+   102→  DropdownMenuLabel,
+   103→  DropdownMenuSeparator,
+   104→  DropdownMenuTrigger,
+   105→} from "@/components/ui/dropdown-menu";
+   106→import {
+   107→  AlertDialog,
+   108→  AlertDialogAction,
+   109→  AlertDialogCancel,
+   110→  AlertDialogContent,
+   111→  AlertDialogDescription,
+   112→  AlertDialogFooter,
+   113→  AlertDialogHeader,
+   114→  AlertDialogTitle,
+   115→} from "@/components/ui/alert-dialog";
+   116→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+   117→import { useAuth } from "@/hooks/use-auth";
+   118→import { adminData, logAudit } from "@/lib/admin-data";
+   119→import { getVisibleConsumers, getScopeLabel } from "@/lib/access-scope";
+   120→import {
+   121→  formatCurrency,
+   122→  formatDateTime,
+   123→  formatNumber,
+   124→  timeAgo,
+   125→  statusBadge,
+   126→} from "@/lib/formatters";
+   127→import type {
+   128→  Consumer,
+   129→  CountryConfig,
+   130→  Card as CardRecord,
+   131→  Wallet as WalletRecord,
+   132→  Transaction as TransactionRecord,
+   133→  UserDocument as DocumentRecord,
+   134→  KycCase as KycCaseRecord,
+   135→  SupportTicket as TicketRecord,
+   136→  Dispute as DisputeRecord,
+   137→  FraudAlert as FraudRecord,
+   138→  AuditLog as AuditRecord,
+   139→  ConsumerStatus,
+   140→  KycTier,
+   141→  PlatformKey,
+   142→  CardStatus,
+   143→  WalletStatus,
+   144→  TransactionStatus,
+   145→  DocumentType,
+   146→  RiskLevel,
+   147→} from "@/lib/types";
+   148→import { PLATFORM_LABELS } from "@/lib/types";
+   149→import { cn } from "@/lib/utils";
+   150→
+   151→interface UsersViewProps {
+   152→  consumers: Consumer[];
+   153→  countries: CountryConfig[];
+   154→}
+   155→
+   156→/* ----------------------------- Status styling ---------------------------- */
+   157→
+   158→const CONSUMER_STATUS_STYLES: Record<
+   159→  ConsumerStatus,
+   160→  { label: string; className: string }
+   161→> = {
+   162→  pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   163→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   164→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   165→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   166→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   167→};
+   168→
+   169→const KYC_TIER_STYLES: Record<KycTier, { label: string; className: string }> = {
+   170→  tier_1: { label: "Tier 1", className: "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800" },
+   171→  tier_2: { label: "Tier 2", className: "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800" },
+   172→  tier_3: { label: "Tier 3", className: "text-orange-700 border-orange-300 bg-orange-50 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800" },
+   173→};
+   174→
+   175→/* Module-level badge helpers (shared across sub-components) */
+   176→function consumerStatusBadge(s: ConsumerStatus) {
+   177→  const v = CONSUMER_STATUS_STYLES[s];
+   178→  return (
+   179→    <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+   180→      {v.label}
+   181→    </Badge>
+   182→  );
+   183→}
+   184→
+   185→function kycBadge(s: string) {
+   186→  const v = statusBadge("kyc", s);
+   187→  return (
+   188→    <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+   189→      {v.label}
+   190→    </Badge>
+   191→  );
+   192→}
+   193→
+   194→const CARD_STATUS_STYLES: Record<CardStatus, { label: string; className: string }> = {
+   195→  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   196→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   197→  frozen: { label: "Frozen", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   198→  blocked: { label: "Blocked", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   199→  expired: { label: "Expired", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   200→  terminated: { label: "Terminated", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   201→  replaced: { label: "Replaced", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   202→};
+   203→
+   204→const WALLET_STATUS_STYLES: Record<WalletStatus, { label: string; className: string }> = {
+   205→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   206→  frozen: { label: "Frozen", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   207→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   208→};
+   209→
+   210→const TX_STATUS_STYLES: Record<TransactionStatus, { label: string; className: string }> = {
+   211→  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   212→  authorized: { label: "Authorized", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   213→  successful: { label: "Successful", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   214→  failed: { label: "Failed", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   215→  reversed: { label: "Reversed", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   216→  refunded: { label: "Refunded", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   217→  held: { label: "Held", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   218→};
+   219→
+   220→const DOC_STATUS_STYLES: Record<DocumentRecord["status"], { label: string; className: string }> = {
+   221→  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   222→  approved: { label: "Approved", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   223→  rejected: { label: "Rejected", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   224→  expired: { label: "Expired", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   225→  replacement_requested: { label: "Replacement Requested", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   226→};
+   227→
+   228→const DOC_TYPE_LABELS: Record<DocumentType, string> = {
+   229→  user_id: "User ID",
+   230→  selfie_liveness: "Selfie / Liveness",
+   231→  proof_of_address: "Proof of Address",
+   232→  bvn_nin_verification: "BVN / NIN Verification",
+   233→  business_registration: "Business Registration",
+   234→  tax_certificate: "Tax Certificate",
+   235→  merchant_licence: "Merchant Licence",
+   236→  beneficial_owner: "Beneficial Owner",
+   237→  settlement_bank_proof: "Settlement Bank Proof",
+   238→  dispute_evidence: "Dispute Evidence",
+   239→};
+   240→
+   241→const FRAUD_STATUS_STYLES: Record<FraudRecord["status"], { label: string; className: string }> = {
+   242→  open: { label: "Open", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   243→  investigating: { label: "Investigating", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   244→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   245→  escalated: { label: "Escalated", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   246→};
+   247→
+   248→const TICKET_STATUS_STYLES: Record<TicketRecord["status"], { label: string; className: string }> = {
+   249→  open: { label: "Open", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   250→  in_progress: { label: "In Progress", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   251→  waiting: { label: "Waiting", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   252→  resolved: { label: "Resolved", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   253→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   254→};
+   255→
+   256→const DISPUTE_STATUS_STYLES: Record<DisputeRecord["status"], { label: string; className: string }> = {
+   257→  new: { label: "New", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   258→  awaiting_evidence: { label: "Awaiting Evidence", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   259→  evidence_submitted: { label: "Evidence Submitted", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   260→  under_review: { label: "Under Review", className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300" },
+   261→  won: { label: "Won", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   262→  lost: { label: "Lost", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   263→  expired: { label: "Expired", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   264→};
+   265→
+   266→const PRIORITY_STYLES: Record<TicketRecord["priority"], { label: string; className: string }> = {
+   267→  low: { label: "Low", className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   268→  medium: { label: "Medium", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+   269→  high: { label: "High", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   270→  urgent: { label: "Urgent", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   271→};
+   272→
+   273→const SEVERITY_STYLES: Record<RiskLevel, { label: string; className: string }> = {
+   274→  low: { label: "Low", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   275→  medium: { label: "Medium", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   276→  high: { label: "High", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   277→  critical: { label: "Critical", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   278→};
+   279→
+   280→const RISK_TONE = (score: number) =>
+   281→  score >= 80
+   282→    ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+   283→    : score >= 50
+   284→      ? "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300"
+   285→      : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300";
+   286→
+   287→/* ------------------------------ Main view -------------------------------- */
+   288→
+   289→export function UsersView({ consumers, countries }: UsersViewProps) {
+   290→  const { staff } = useAuth();
+   291→  const [search, setSearch] = useState("");
+   292→  const [countryFilter, setCountryFilter] = useState("all");
+   293→  const [kycFilter, setKycFilter] = useState("all");
+   294→  const [statusFilter, setStatusFilter] = useState("all");
+   295→  const [selectedConsumer, setSelectedConsumer] = useState<Consumer | null>(null);
+   296→  const [confirmAction, setConfirmAction] = useState<{
+   297→    consumer: Consumer;
+   298→    action: "restrict" | "suspend" | "reactivate";
+   299→  } | null>(null);
+   300→
+   301→  const visibleConsumers = useMemo(
+   302→    () => getVisibleConsumers(staff, countries, consumers),
+   303→    [staff, countries, consumers],
+   304→  );
+   305→
+   306→  const filterableCountries = useMemo(() => {
+   307→    const codes = new Set(visibleConsumers.map((c) => c.countryCode));
+   308→    return countries.filter((c) => codes.has(c.countryCode));
+   309→  }, [countries, visibleConsumers]);
+   310→
+   311→  const filtered = useMemo(() => {
+   312→    let list = visibleConsumers;
+   313→    if (countryFilter !== "all")
+   314→      list = list.filter((c) => c.countryCode === countryFilter);
+   315→    if (kycFilter !== "all") list = list.filter((c) => c.kycStatus === kycFilter);
+   316→    if (statusFilter !== "all") list = list.filter((c) => c.status === statusFilter);
+   317→    if (search.trim()) {
+   318→      const q = search.trim().toLowerCase();
+   319→      list = list.filter(
+   320→        (c) =>
+   321→          `${c.firstName} ${c.lastName}`.toLowerCase().includes(q) ||
+   322→          c.email.toLowerCase().includes(q) ||
+   323→          c.phone.toLowerCase().includes(q) ||
+   324→          c.consumerCode.toLowerCase().includes(q),
+   325→      );
+   326→    }
+   327→    return list;
+   328→  }, [visibleConsumers, countryFilter, kycFilter, statusFilter, search]);
+   329→
+   330→  const stats = useMemo(() => {
+   331→    const total = visibleConsumers.length;
+   332→    const active = visibleConsumers.filter((c) => c.status === "active").length;
+   333→    const pending = visibleConsumers.filter(
+   334→      (c) => c.status === "pending_kyc" || c.kycStatus === "pending" || c.kycStatus === "in_review",
+   335→    ).length;
+   336→    const restricted = visibleConsumers.filter(
+   337→      (c) => c.status === "restricted" || c.status === "suspended",
+   338→    ).length;
+   339→    return { total, active, pending, restricted };
+   340→  }, [visibleConsumers]);
+   341→
+   342→  function countryName(code: string): string {
+   343→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   344→  }
+   345→
+   346→
+   347→  async function applyConsumerAction(
+   348→    consumer: Consumer,
+   349→    action: "restrict" | "suspend" | "reactivate",
+   350→  ) {
+   351→    if (!staff) return;
+   352→    const newStatus: ConsumerStatus =
+   353→      action === "restrict"
+   354→        ? "restricted"
+   355→        : action === "suspend"
+   356→          ? "suspended"
+   357→          : "active";
+   358→    const before = consumer.status;
+   359→    await adminData.updateConsumer(consumer.id, { status: newStatus, updatedAt: Date.now() });
+   360→    logAudit(
+   361→      {
+   362→        staffId: staff.id,
+   363→        staffName: `${staff.firstName} ${staff.lastName}`,
+   364→        department: staff.departmentId,
+   365→        role: staff.roleId,
+   366→      },
+   367→      `consumer.${action}`,
+   368→      "consumer",
+   369→      consumer.id,
+   370→      {
+   371→        countryCode: consumer.countryCode,
+   372→        beforeValue: before,
+   373→        afterValue: newStatus,
+   374→        reason: `${action} consumer ${consumer.consumerCode}`,
+   375→      },
+   376→    );
+   377→    toast.success(
+   378→      `${consumer.firstName} ${consumer.lastName} ${action === "reactivate" ? "reactivated" : action + "ed"} successfully`,
+   379→    );
+   380→    setSelectedConsumer((prev) =>
+   381→      prev && prev.id === consumer.id ? { ...prev, status: newStatus } : prev,
+   382→    );
+   383→  }
+   384→
+   385→  return (
+   386→    <ViewContainer>
+   387→      <SonnerToaster richColors position="top-right" />
+   388→      <ViewHeader
+   389→        title="Users — Consumers"
+   390→        description="Comprehensive consumer profiles. Everything connected to a consumer — cards, wallets, transactions, documents, KYC, tickets, disputes, risk and audit — lives under their profile."
+   391→        icon={UsersIcon}
+   392→        actions={
+   393→          <Badge variant="outline" className="text-[11px]">
+   394→            Scope: {getScopeLabel(staff)}
+   395→          </Badge>
+   396→        }
+   397→      />
+   398→
+   399→      {/* Stats */}
+   400→      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   401→        <StatCard label="Total Consumers" value={stats.total} icon={UsersIcon} />
+   402→        <StatCard label="Active" value={stats.active} tone="success" icon={UserCheck} />
+   403→        <StatCard label="Pending KYC" value={stats.pending} tone="warning" icon={Clock} />
+   404→        <StatCard label="Restricted / Suspended" value={stats.restricted} tone="danger" icon={UserX} />
+   405→      </div>
+   406→
+   407→      {/* Filters */}
+   408→      <Card>
+   409→        <CardContent className="p-4">
+   410→          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+   411→            <div className="relative md:col-span-1">
+   412→              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+   413→              <Input
+   414→                placeholder="Search name, email, phone, code…"
+   415→                value={search}
+   416→                onChange={(e) => setSearch(e.target.value)}
+   417→                className="pl-8"
+   418→              />
+   419→            </div>
+   420→            <Select value={countryFilter} onValueChange={setCountryFilter}>
+   421→              <SelectTrigger>
+   422→                <SelectValue placeholder="All Countries" />
+   423→              </SelectTrigger>
+   424→              <SelectContent>
+   425→                <SelectItem value="all">All Countries</SelectItem>
+   426→                {filterableCountries.map((c) => (
+   427→                  <SelectItem key={c.countryCode} value={c.countryCode}>
+   428→                    {c.countryName} ({c.countryCode})
+   429→                  </SelectItem>
+   430→                ))}
+   431→              </SelectContent>
+   432→            </Select>
+   433→            <Select value={kycFilter} onValueChange={setKycFilter}>
+   434→              <SelectTrigger>
+   435→                <SelectValue placeholder="All KYC" />
+   436→              </SelectTrigger>
+   437→              <SelectContent>
+   438→                <SelectItem value="all">All KYC</SelectItem>
+   439→                <SelectItem value="pending">Pending</SelectItem>
+   440→                <SelectItem value="in_review">In Review</SelectItem>
+   441→                <SelectItem value="approved">Approved</SelectItem>
+   442→                <SelectItem value="rejected">Rejected</SelectItem>
+   443→                <SelectItem value="escalated">Escalated</SelectItem>
+   444→              </SelectContent>
+   445→            </Select>
+   446→            <Select value={statusFilter} onValueChange={setStatusFilter}>
+   447→              <SelectTrigger>
+   448→                <SelectValue placeholder="All Status" />
+   449→              </SelectTrigger>
+   450→              <SelectContent>
+   451→                <SelectItem value="all">All Status</SelectItem>
+   452→                <SelectItem value="pending_kyc">Pending KYC</SelectItem>
+   453→                <SelectItem value="active">Active</SelectItem>
+   454→                <SelectItem value="restricted">Restricted</SelectItem>
+   455→                <SelectItem value="suspended">Suspended</SelectItem>
+   456→                <SelectItem value="closed">Closed</SelectItem>
+   457→              </SelectContent>
+   458→            </Select>
+   459→          </div>
+   460→        </CardContent>
+   461→      </Card>
+   462→
+   463→      {/* Consumers table */}
+   464→      <Card>
+   465→        <CardContent className="p-0">
+   466→          {filtered.length === 0 ? (
+   467→            <EmptyState
+   468→              icon={UsersIcon}
+   469→              title="No consumers found"
+   470→              description="Try adjusting the filters or search query."
+   471→            />
+   472→          ) : (
+   473→            <ScrollTable>
+   474→              <TableHeader>
+   475→                <TableRow>
+   476→                  <TableHead className="text-[11px]">Code</TableHead>
+   477→                  <TableHead className="text-[11px]">Name</TableHead>
+   478→                  <TableHead className="text-[11px]">Email</TableHead>
+   479→                  <TableHead className="text-[11px]">Phone</TableHead>
+   480→                  <TableHead className="text-[11px]">Country</TableHead>
+   481→                  <TableHead className="text-[11px]">KYC</TableHead>
+   482→                  <TableHead className="text-[11px]">Status</TableHead>
+   483→                  <TableHead className="text-[11px] text-right">Balance</TableHead>
+   484→                  <TableHead className="text-[11px] text-center">Cards</TableHead>
+   485→                  <TableHead className="text-[11px] text-center">Txns</TableHead>
+   486→                  <TableHead className="text-[11px]">Updated</TableHead>
+   487→                  <TableHead className="text-[11px] text-right">Actions</TableHead>
+   488→                </TableRow>
+   489→              </TableHeader>
+   490→              <TableBody>
+   491→                {filtered.map((c) => (
+   492→                  <TableRow
+   493→                    key={c.id}
+   494→                    className="cursor-pointer hover:bg-muted/50"
+   495→                    onClick={() => setSelectedConsumer(c)}
+   496→                  >
+   497→                    <TableCell className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
+   498→                      {c.consumerCode}
+   499→                    </TableCell>
+   500→                    <TableCell className="font-medium text-[12px]">
+   501→                      {c.firstName} {c.lastName}
+   502→                    </TableCell>
+   503→                    <TableCell className="text-[11px] text-muted-foreground">{c.email}</TableCell>
+   504→                    <TableCell className="text-[11px] text-muted-foreground">{c.phone}</TableCell>
+   505→                    <TableCell className="text-[11px]">
+   506→                      <span className="inline-flex items-center gap-1">
+   507→                        <Globe2 className="size-3 text-muted-foreground" />
+   508→                        {c.countryCode}
+   509→                      </span>
+   510→                    </TableCell>
+   511→                    <TableCell>{kycBadge(c.kycStatus)}</TableCell>
+   512→                    <TableCell>{consumerStatusBadge(c.status)}</TableCell>
+   513→                    <TableCell className="text-right text-[11px] tabular-nums">
+   514→                      {formatCurrency(c.walletBalance, c.currency)}
+   515→                    </TableCell>
+   516→                    <TableCell className="text-center text-[11px] tabular-nums">
+   517→                      <Badge variant="secondary" className="text-[10px]">{formatNumber(c.transactionCount)}</Badge>
+   518→                    </TableCell>
+   519→                    <TableCell className="text-center text-[11px] tabular-nums">
+   520→                      <Badge variant="secondary" className="text-[10px]">{formatNumber(c.transactionCount)}</Badge>
+   521→                    </TableCell>
+   522→                    <TableCell className="text-[11px] text-muted-foreground">
+   523→                      {timeAgo(c.updatedAt)}
+   524→                    </TableCell>
+   525→                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+   526→                      <DropdownMenu>
+   527→                        <DropdownMenuTrigger asChild>
+   528→                          <Button variant="ghost" size="icon" className="size-7">
+   529→                            <MoreHorizontal className="size-4" />
+   530→                          </Button>
+   531→                        </DropdownMenuTrigger>
+   532→                        <DropdownMenuContent align="end">
+   533→                          <DropdownMenuLabel>Actions</DropdownMenuLabel>
+   534→                          <DropdownMenuItem onClick={() => setSelectedConsumer(c)}>
+   535→                            <Eye className="size-4 mr-2" /> View profile
+   536→                          </DropdownMenuItem>
+   537→                          {c.status !== "restricted" && c.status !== "suspended" && (
+   538→                            <DropdownMenuItem onClick={() => setConfirmAction({ consumer: c, action: "restrict" })}>
+   539→                              <Pause className="size-4 mr-2" /> Restrict
+   540→                            </DropdownMenuItem>
+   541→                          )}
+   542→                          {c.status !== "suspended" && (
+   543→                            <DropdownMenuItem onClick={() => setConfirmAction({ consumer: c, action: "suspend" })}>
+   544→                              <Ban className="size-4 mr-2" /> Suspend
+   545→                            </DropdownMenuItem>
+   546→                          )}
+   547→                          {(c.status === "restricted" || c.status === "suspended") && (
+   548→                            <DropdownMenuItem onClick={() => setConfirmAction({ consumer: c, action: "reactivate" })}>
+   549→                              <RotateCcw className="size-4 mr-2" /> Reactivate
+   550→                            </DropdownMenuItem>
+   551→                          )}
+   552→                          <DropdownMenuSeparator />
+   553→                          <DropdownMenuItem onClick={() => setSelectedConsumer(c)}>
+   554→                            <Info className="size-4 mr-2" /> Full profile
+   555→                          </DropdownMenuItem>
+   556→                        </DropdownMenuContent>
+   557→                      </DropdownMenu>
+   558→                    </TableCell>
+   559→                  </TableRow>
+   560→                ))}
+   561→              </TableBody>
+   562→            </ScrollTable>
+   563→          )}
+   564→        </CardContent>
+   565→      </Card>
+   566→
+   567→      {/* Detail Sheet */}
+   568→      <ConsumerProfileSheet
+   569→        consumer={selectedConsumer}
+   570→        open={!!selectedConsumer}
+   571→        onOpenChange={(o) => !o && setSelectedConsumer(null)}
+   572→        countries={countries}
+   573→        countryName={countryName}
+   574→        onAction={applyConsumerAction}
+   575→        staff={staff}
+   576→      />
+   577→
+   578→      {/* Confirm action dialog */}
+   579→      <AlertDialog open={!!confirmAction} onOpenChange={(o) => !o && setConfirmAction(null)}>
+   580→        <AlertDialogContent>
+   581→          <AlertDialogHeader>
+   582→            <AlertDialogTitle>
+   583→              {confirmAction?.action === "restrict" && "Restrict consumer"}
+   584→              {confirmAction?.action === "suspend" && "Suspend consumer"}
+   585→              {confirmAction?.action === "reactivate" && "Reactivate consumer"}
+   586→            </AlertDialogTitle>
+   587→            <AlertDialogDescription>
+   588→              {confirmAction && (
+   589→                <>
+   590→                  You are about to <span className="font-medium">{confirmAction.action}</span>{" "}
+   591→                  <span className="font-medium">
+   592→                    {confirmAction.consumer.firstName} {confirmAction.consumer.lastName}
+   593→                  </span>{" "}
+   594→                  ({confirmAction.consumer.consumerCode}). This action will be recorded in the audit log.
+   595→                </>
+   596→              )}
+   597→            </AlertDialogDescription>
+   598→          </AlertDialogHeader>
+   599→          <AlertDialogFooter>
+   600→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   601→            <AlertDialogAction
+   602→              className={cn(
+   603→                confirmAction?.action === "suspend"
+   604→                  ? "bg-red-600 hover:bg-red-700"
+   605→                  : confirmAction?.action === "restrict"
+   606→                    ? "bg-orange-600 hover:bg-orange-700"
+   607→                    : "bg-emerald-600 hover:bg-emerald-700",
+   608→              )}
+   609→              onClick={() => {
+   610→                if (confirmAction) applyConsumerAction(confirmAction.consumer, confirmAction.action);
+   611→                setConfirmAction(null);
+   612→              }}
+   613→            >
+   614→              Confirm
+   615→            </AlertDialogAction>
+   616→          </AlertDialogFooter>
+   617→        </AlertDialogContent>
+   618→      </AlertDialog>
+   619→    </ViewContainer>
+   620→  );
+   621→}
+   622→
+   623→/* =================== Consumer Profile Sheet with 10 tabs ================== */
+   624→
+   625→function ConsumerProfileSheet({
+   626→  consumer,
+   627→  open,
+   628→  onOpenChange,
+   629→  countries,
+   630→  countryName,
+   631→  onAction,
+   632→  staff,
+   633→}: {
+   634→  consumer: Consumer | null;
+   635→  open: boolean;
+   636→  onOpenChange: (o: boolean) => void;
+   637→  countries: CountryConfig[];
+   638→  countryName: (code: string) => string;
+   639→  onAction: (c: Consumer, a: "restrict" | "suspend" | "reactivate") => Promise<void>;
+   640→  staff: ReturnType<typeof useAuth>["staff"];
+   641→}) {
+   642→  const [tab, setTab] = useState("overview");
+   643→
+   644→  // Live subscriptions for all 10 tabs (so tab count badges update)
+   645→  const [cards, setCards] = useState<CardRecord[]>([]);
+   646→  const [wallets, setWallets] = useState<WalletRecord[]>([]);
+   647→  const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
+   648→  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+   649→  const [kycCases, setKycCases] = useState<KycCaseRecord[]>([]);
+   650→  const [tickets, setTickets] = useState<TicketRecord[]>([]);
+   651→  const [disputes, setDisputes] = useState<DisputeRecord[]>([]);
+   652→  const [fraudAlerts, setFraudAlerts] = useState<FraudRecord[]>([]);
+   653→  const [auditLogs, setAuditLogs] = useState<AuditRecord[]>([]);
+   654→
+   655→  useEffect(() => adminData.subscribeCards(setCards), []);
+   656→  useEffect(() => adminData.subscribeWallets(setWallets), []);
+   657→  useEffect(() => adminData.subscribeTransactions(setTransactions), []);
+   658→  useEffect(() => adminData.subscribeDocuments(setDocuments), []);
+   659→  useEffect(() => adminData.subscribeKyc(setKycCases), []);
+   660→  useEffect(() => adminData.subscribeTickets(setTickets), []);
+   661→  useEffect(() => adminData.subscribeDisputes(setDisputes), []);
+   662→  useEffect(() => adminData.subscribeFraud(setFraudAlerts), []);
+   663→  useEffect(() => adminData.subscribeAudit(setAuditLogs), []);
+   664→
+   665→  // Reset to overview whenever a different consumer opens (lazy init via key on sheet)
+   666→  const [openedConsumerId, setOpenedConsumerId] = useState<string | null>(null);
+   667→  if (open && consumer && consumer.id !== openedConsumerId) {
+   668→    setOpenedConsumerId(consumer.id);
+   669→    setTab("overview");
+   670→  }
+   671→  if (!open && openedConsumerId !== null) {
+   672→    setOpenedConsumerId(null);
+   673→  }
+   674→
+   675→  if (!consumer) return null;
+   676→
+   677→  const fullName = `${consumer.firstName} ${consumer.lastName}`;
+   678→  const consumerCards = cards.filter((c) => c.userId === consumer.id);
+   679→  const consumerWallets = wallets.filter((w) => w.userId === consumer.id);
+   680→  const consumerTxns = transactions.filter((t) => t.userId === consumer.id);
+   681→  const consumerDocs = documents.filter((d) => d.entityId === consumer.id);
+   682→  const consumerKyc = kycCases.filter(
+   683→    (k) => k.id === consumer.kycCaseId || k.customerName === fullName,
+   684→  );
+   685→  const consumerTickets = tickets.filter((t) => t.requesterName === fullName);
+   686→  const consumerDisputes = disputes.filter((d) => d.customerName === fullName);
+   687→  const consumerFraud = fraudAlerts.filter(
+   688→    (f) => f.entityName === fullName || f.entityName === consumer.consumerCode,
+   689→  );
+   690→  const consumerAudit = auditLogs.filter(
+   691→    (a) => a.entityId === consumer.id || a.entityId === consumer.consumerCode,
+   692→  );
+   693→
+   694→  const totalBalance = consumerWallets.reduce((s, w) => s + w.balance, 0);
+   695→  const totalWalletCurrency = consumerWallets[0]?.currency ?? consumer.currency;
+   696→  const openTickets = consumerTickets.filter(
+   697→    (t) => t.status === "open" || t.status === "in_progress" || t.status === "waiting",
+   698→  ).length;
+   699→  const openDisputes = consumerDisputes.filter(
+   700→    (d) => d.status !== "won" && d.status !== "lost" && d.status !== "expired",
+   701→  ).length;
+   702→
+   703→  const initials =
+   704→    (consumer.firstName[0] ?? "") + (consumer.lastName[0] ?? "");
+   705→
+   706→  return (
+   707→    <Sheet open={open} onOpenChange={onOpenChange}>
+   708→      <SheetContent
+   709→        side="right"
+   710→        className="sm:max-w-4xl w-full p-0 overflow-y-auto flex flex-col"
+   711→      >
+   712→        <SheetHeader className="border-b bg-emerald-50/40 dark:bg-emerald-900/10 px-6 py-4 space-y-0">
+   713→          <div className="flex items-start gap-4">
+   714→            <div className="size-14 rounded-full bg-emerald-600 text-white flex items-center justify-center text-lg font-semibold shrink-0">
+   715→              {initials.toUpperCase()}
+   716→            </div>
+   717→            <div className="min-w-0 flex-1">
+   718→              <div className="flex flex-wrap items-center gap-2">
+   719→                <SheetTitle className="text-lg">
+   720→                  {fullName}
+   721→                </SheetTitle>
+   722→                {kycBadge(consumer.kycStatus)}
+   723→                {consumerStatusBadge(consumer.status)}
+   724→                <Badge variant="outline" className="text-[10px]">
+   725→                  {KYC_TIER_STYLES[consumer.kycTier].label}
+   726→                </Badge>
+   727→              </div>
+   728→              <SheetDescription className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px]">
+   729→                <span className="font-mono text-emerald-700 dark:text-emerald-400">
+   730→                  {consumer.consumerCode}
+   731→                </span>
+   732→                <span className="inline-flex items-center gap-1">
+   733→                  <Globe2 className="size-3" />
+   734→                  {consumer.countryCode} — {countryName(consumer.countryCode)}
+   735→                </span>
+   736→                <span className="inline-flex items-center gap-1">
+   737→                  <Mail className="size-3" />
+   738→                  {consumer.email}
+   739→                </span>
+   740→                <span className="inline-flex items-center gap-1">
+   741→                  <Phone className="size-3" />
+   742→                  {consumer.phone}
+   743→                </span>
+   744→              </SheetDescription>
+   745→            </div>
+   746→            <div className="flex items-center gap-1 shrink-0">
+   747→              <Button
+   748→                size="sm"
+   749→                variant="outline"
+   750→                className="h-7 text-[11px]"
+   751→                onClick={() => onAction(consumer, "restrict")}
+   752→                disabled={consumer.status === "restricted" || consumer.status === "suspended"}
+   753→              >
+   754→                <Pause className="size-3.5 mr-1" /> Restrict
+   755→              </Button>
+   756→              <Button
+   757→                size="sm"
+   758→                variant="outline"
+   759→                className="h-7 text-[11px]"
+   760→                onClick={() => onAction(consumer, "suspend")}
+   761→                disabled={consumer.status === "suspended"}
+   762→              >
+   763→                <Ban className="size-3.5 mr-1" /> Suspend
+   764→              </Button>
+   765→              <Button
+   766→                size="sm"
+   767→                variant="outline"
+   768→                className="h-7 text-[11px] text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+   769→                onClick={() => onAction(consumer, "reactivate")}
+   770→                disabled={consumer.status === "active"}
+   771→              >
+   772→                <RotateCcw className="size-3.5 mr-1" /> Reactivate
+   773→              </Button>
+   774→            </div>
+   775→          </div>
+   776→
+   777→          {/* Quick stats row */}
+   778→          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3">
+   779→            <QuickStat icon={CreditCard} label="Cards" value={consumerCards.length} />
+   780→            <QuickStat icon={WalletIcon} label="Wallets" value={consumerWallets.length} />
+   781→            <QuickStat
+   782→              icon={WalletIcon}
+   783→              label="Balance"
+   784→              value={formatCurrency(totalBalance, totalWalletCurrency)}
+   785→              textSize="sm"
+   786→            />
+   787→            <QuickStat icon={Receipt} label="Txns" value={consumerTxns.length} />
+   788→            <QuickStat icon={LifeBuoy} label="Open Tickets" value={openTickets} tone="warning" />
+   789→            <QuickStat icon={Scale} label="Open Disputes" value={openDisputes} tone="danger" />
+   790→          </div>
+   791→        </SheetHeader>
+   792→
+   793→        <Tabs value={tab} onValueChange={setTab} className="flex-1 flex flex-col overflow-hidden">
+   794→          <TabsList className="justify-start h-auto flex-wrap rounded-none border-b bg-transparent p-0">
+   795→            <ProfileTab value="overview" label="Overview" />
+   796→            <ProfileTab value="cards" label="Cards" count={consumerCards.length} />
+   797→            <ProfileTab value="wallets" label="Wallets" count={consumerWallets.length} />
+   798→            <ProfileTab value="transactions" label="Transactions" count={consumerTxns.length} />
+   799→            <ProfileTab value="documents" label="Documents" count={consumerDocs.length} />
+   800→            <ProfileTab value="kyc" label="KYC Cases" count={consumerKyc.length} />
+   801→            <ProfileTab value="tickets" label="Support" count={consumerTickets.length} />
+   802→            <ProfileTab value="disputes" label="Disputes" count={consumerDisputes.length} />
+   803→            <ProfileTab value="risk" label="Risk & Alerts" count={consumerFraud.length} />
+   804→            <ProfileTab value="audit" label="Activity" count={consumerAudit.length} />
+   805→          </TabsList>
+   806→
+   807→          <div className="flex-1 overflow-y-auto px-4 py-4">
+   808→            {/* 1. Overview */}
+   809→            <TabsContent value="overview" className="mt-0">
+   810→              <OverviewTab consumer={consumer} countryName={countryName} countries={countries} />
+   811→            </TabsContent>
+   812→
+   813→            {/* 2. Cards */}
+   814→            <TabsContent value="cards" className="mt-0">
+   815→              <CardsTab cards={consumerCards} staff={staff} consumerCode={consumer.consumerCode} />
+   816→            </TabsContent>
+   817→
+   818→            {/* 3. Wallets */}
+   819→            <TabsContent value="wallets" className="mt-0">
+   820→              <WalletsTab wallets={consumerWallets} staff={staff} consumerCode={consumer.consumerCode} />
+   821→            </TabsContent>
+   822→
+   823→            {/* 4. Transactions */}
+   824→            <TabsContent value="transactions" className="mt-0">
+   825→              <TransactionsTab txns={consumerTxns} staff={staff} consumer={consumer} />
+   826→            </TabsContent>
+   827→
+   828→            {/* 5. Documents */}
+   829→            <TabsContent value="documents" className="mt-0">
+   830→              <DocumentsTab docs={consumerDocs} staff={staff} consumer={consumer} />
+   831→            </TabsContent>
+   832→
+   833→            {/* 6. KYC Cases */}
+   834→            <TabsContent value="kyc" className="mt-0">
+   835→              <KycTab cases={consumerKyc} staff={staff} consumer={consumer} />
+   836→            </TabsContent>
+   837→
+   838→            {/* 7. Support Tickets */}
+   839→            <TabsContent value="tickets" className="mt-0">
+   840→              <TicketsTab tickets={consumerTickets} staff={staff} consumer={consumer} />
+   841→            </TabsContent>
+   842→
+   843→            {/* 8. Disputes */}
+   844→            <TabsContent value="disputes" className="mt-0">
+   845→              <DisputesTab disputes={consumerDisputes} staff={staff} consumer={consumer} />
+   846→            </TabsContent>
+   847→
+   848→            {/* 9. Risk & Alerts */}
+   849→            <TabsContent value="risk" className="mt-0">
+   850→              <RiskTab alerts={consumerFraud} staff={staff} consumer={consumer} />
+   851→            </TabsContent>
+   852→
+   853→            {/* 10. Activity & Audit */}
+   854→            <TabsContent value="audit" className="mt-0">
+   855→              <AuditTab logs={consumerAudit} />
+   856→            </TabsContent>
+   857→          </div>
+   858→        </Tabs>
+   859→      </SheetContent>
+   860→    </Sheet>
+   861→  );
+   862→}
+   863→
+   864→/* ----------------------------- Shared bits ------------------------------ */
+   865→
+   866→function ProfileTab({
+   867→  value,
+   868→  label,
+   869→  count,
+   870→}: {
+   871→  value: string;
+   872→  label: string;
+   873→  count?: number;
+   874→}) {
+   875→  return (
+   876→    <TabsTrigger
+   877→      value={value}
+   878→      className="rounded-none border-b-2 border-transparent data-[state=active]:border-emerald-600 data-[state=active]:bg-transparent data-[state=active]:shadow-none px-3 py-2 text-[11px] font-medium"
+   879→    >
+   880→      {label}
+   881→      {count !== undefined && (
+   882→        <Badge
+   883→          variant="secondary"
+   884→          className={cn(
+   885→            "ml-1.5 text-[9px] h-4 px-1.5 tabular-nums",
+   886→            count > 0
+   887→              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+   888→              : "bg-muted text-muted-foreground",
+   889→          )}
+   890→        >
+   891→          {count}
+   892→        </Badge>
+   893→      )}
+   894→    </TabsTrigger>
+   895→  );
+   896→}
+   897→
+   898→function QuickStat({
+   899→  icon: Icon,
+   900→  label,
+   901→  value,
+   902→  tone,
+   903→  textSize = "base",
+   904→}: {
+   905→  icon: React.ComponentType<{ className?: string }>;
+   906→  label: string;
+   907→  value: string | number;
+   908→  tone?: "warning" | "danger" | "default";
+   909→  textSize?: "sm" | "base";
+   910→}) {
+   911→  const toneClass =
+   912→    tone === "warning"
+   913→      ? "text-amber-700 dark:text-amber-400"
+   914→      : tone === "danger"
+   915→        ? "text-red-700 dark:text-red-400"
+   916→        : "text-slate-900 dark:text-slate-100";
+   917→  return (
+   918→    <div className="rounded-md border bg-white dark:bg-slate-900 p-2">
+   919→      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+   920→        <Icon className="size-3 text-emerald-600" />
+   921→        {label}
+   922→      </div>
+   923→      <div
+   924→        className={cn(
+   925→          "font-semibold tabular-nums mt-0.5",
+   926→          textSize === "sm" ? "text-sm" : "text-base",
+   927→          toneClass,
+   928→        )}
+   929→      >
+   930→        {value}
+   931→      </div>
+   932→    </div>
+   933→  );
+   934→}
+   935→
+   936→function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+   937→  return (
+   938→    <div className="flex items-center justify-between gap-3 px-3 py-2 border-b last:border-0">
+   939→      <span className="text-xs text-muted-foreground">{label}</span>
+   940→      <span className="text-sm text-right">{value}</span>
+   941→    </div>
+   942→  );
+   943→}
+   944→
+   945→function SectionLabel({
+   946→  icon: Icon,
+   947→  children,
+   948→}: {
+   949→  icon: React.ComponentType<{ className?: string }>;
+   950→  children: React.ReactNode;
+   951→}) {
+   952→  return (
+   953→    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1.5">
+   954→      <Icon className="size-3.5 text-emerald-600" />
+   955→      {children}
+   956→    </div>
+   957→  );
+   958→}
+   959→
+   960→function ScrollTable({ children }: { children: React.ReactNode }) {
+   961→  return (
+   962→    <div
+   963→      className={
+   964→        "max-h-60 overflow-auto rounded-md border " +
+   965→        "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+   966→        "[&::-webkit-scrollbar-thumb]:rounded-full " +
+   967→        "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+   968→        "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+   969→      }
+   970→    >
+   971→      <table className="w-full caption-bottom text-sm">{children}</table>
+   972→    </div>
+   973→  );
+   974→}
+   975→
+   976→function RowActionsCell({
+   977→  children,
+   978→}: {
+   979→  children: React.ReactNode;
+   980→}) {
+   981→  return (
+   982→    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+   983→      <div className="flex items-center justify-end gap-1">{children}</div>
+   984→    </TableCell>
+   985→  );
+   986→}
+   987→
+   988→function IconBtn({
+   989→  icon: Icon,
+   990→  label,
+   991→  tone = "default",
+   992→  onClick,
+   993→  disabled,
+   994→}: {
+   995→  icon: React.ComponentType<{ className?: string }>;
+   996→  label: string;
+   997→  tone?: "default" | "success" | "warning" | "danger" | "info";
+   998→  onClick: () => void;
+   999→  disabled?: boolean;
+  1000→}) {
+  1001→  const toneClass = {
+  1002→    default: "text-muted-foreground hover:bg-muted",
+  1003→    success: "text-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40",
+  1004→    warning: "text-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40",
+  1005→    danger: "text-red-700 hover:bg-red-100 dark:hover:bg-red-900/40",
+  1006→    info: "text-sky-700 hover:bg-sky-100 dark:hover:bg-sky-900/40",
+  1007→  }[tone];
+  1008→  return (
+  1009→    <Button
+  1010→      variant="ghost"
+  1011→      size="icon"
+  1012→      className={cn("size-7", toneClass)}
+  1013→      onClick={onClick}
+  1014→      disabled={disabled}
+  1015→      title={label}
+  1016→    >
+  1017→      <Icon className="size-3.5" />
+  1018→    </Button>
+  1019→  );
+  1020→}
+  1021→
+  1022→/* -------------------------------- Tab 1: Overview ------------------------ */
+  1023→
+  1024→function OverviewTab({
+  1025→  consumer,
+  1026→  countryName,
+  1027→  countries,
+  1028→}: {
+  1029→  consumer: Consumer;
+  1030→  countryName: (code: string) => string;
+  1031→  countries: CountryConfig[];
+  1032→}) {
+  1033→  const country = countries.find((c) => c.countryCode === consumer.countryCode);
+  1034→  return (
+  1035→    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  1036→      <Card>
+  1037→        <CardContent className="p-4">
+  1038→          <SectionLabel icon={UsersIcon}>Personal Details</SectionLabel>
+  1039→          <DetailRow label="Full name" value={`${consumer.firstName} ${consumer.lastName}`} />
+  1040→          <DetailRow label="Date of birth" value={consumer.dateOfBirth} />
+  1041→          <DetailRow label="Nationality" value={consumer.nationality} />
+  1042→          <DetailRow label="Consumer code" value={<span className="font-mono text-emerald-700 dark:text-emerald-400">{consumer.consumerCode}</span>} />
+  1043→          <DetailRow label="Firebase UID" value={<span className="font-mono text-[11px] text-muted-foreground">fb_uid_{consumer.id.slice(0, 12)}</span>} />
+  1044→          <DetailRow label="Member since" value={formatDateTime(consumer.createdAt)} />
+  1045→        </CardContent>
+  1046→      </Card>
+  1047→
+  1048→      <Card>
+  1049→        <CardContent className="p-4">
+  1050→          <SectionLabel icon={Mail}>Contact</SectionLabel>
+  1051→          <DetailRow
+  1052→            label="Email"
+  1053→            value={
+  1054→              <span className="inline-flex items-center gap-1.5">
+  1055→                <Mail className="size-3 text-muted-foreground" />
+  1056→                {consumer.email}
+  1057→              </span>
+  1058→            }
+  1059→          />
+  1060→          <DetailRow
+  1061→            label="Phone"
+  1062→            value={
+  1063→              <span className="inline-flex items-center gap-1.5">
+  1064→                <Phone className="size-3 text-muted-foreground" />
+  1065→                {consumer.phone}
+  1066→              </span>
+  1067→            }
+  1068→          />
+  1069→          <DetailRow
+  1070→            label="Country"
+  1071→            value={
+  1072→              <span className="inline-flex items-center gap-1.5">
+  1073→                <MapPin className="size-3 text-muted-foreground" />
+  1074→                {consumer.countryCode} — {countryName(consumer.countryCode)}
+  1075→              </span>
+  1076→            }
+  1077→          />
+  1078→          <DetailRow label="Timezone" value={country?.timezone ?? "—"} />
+  1079→          <DetailRow label="Currency" value={consumer.currency} />
+  1080→        </CardContent>
+  1081→      </Card>
+  1082→
+  1083→      <Card>
+  1084→        <CardContent className="p-4">
+  1085→          <SectionLabel icon={ShieldCheck}>KYC Summary</SectionLabel>
+  1086→          <DetailRow label="KYC status" value={kycBadge(consumer.kycStatus)} />
+  1087→          <DetailRow label="KYC tier" value={<Badge variant="outline" className={KYC_TIER_STYLES[consumer.kycTier].className}>{KYC_TIER_STYLES[consumer.kycTier].label}</Badge>} />
+  1088→          <DetailRow
+  1089→            label="Risk score"
+  1090→            value={
+  1091→              <span className={cn("inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold", RISK_TONE(consumer.riskScore))}>
+  1092→                <ShieldAlert className="size-3" />
+  1093→                {consumer.riskScore}/100
+  1094→              </span>
+  1095→            }
+  1096→          />
+  1097→          <DetailRow label="KYC Case ID" value={consumer.kycCaseId ?? <span className="text-muted-foreground">—</span>} />
+  1098→        </CardContent>
+  1099→      </Card>
+  1100→
+  1101→      <Card>
+  1102→        <CardContent className="p-4">
+  1103→          <SectionLabel icon={Globe2}>Platforms Used</SectionLabel>
+  1104→          {consumer.platforms.length === 0 ? (
+  1105→            <p className="text-xs text-muted-foreground px-3 py-2">No platforms linked.</p>
+  1106→          ) : (
+  1107→            <div className="flex flex-wrap gap-1.5 px-3 py-2">
+  1108→              {consumer.platforms.map((p) => (
+  1109→                <Badge key={p} variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
+  1110→                  {PLATFORM_LABELS[p].label}
+  1111→                </Badge>
+  1112→              ))}
+  1113→            </div>
+  1114→          )}
+  1115→        </CardContent>
+  1116→      </Card>
+  1117→
+  1118→      <Card>
+  1119→        <CardContent className="p-4">
+  1120→          <SectionLabel icon={WalletIcon}>Wallet Summary</SectionLabel>
+  1121→          <DetailRow label="Wallet balance" value={<span className="font-semibold tabular-nums">{formatCurrency(consumer.walletBalance, consumer.currency)}</span>} />
+  1122→          <DetailRow label="Currency" value={consumer.currency} />
+  1123→          <DetailRow label="Last updated" value={timeAgo(consumer.updatedAt)} />
+  1124→        </CardContent>
+  1125→      </Card>
+  1126→
+  1127→      <Card>
+  1128→        <CardContent className="p-4">
+  1129→          <SectionLabel icon={Receipt}>Transaction Stats</SectionLabel>
+  1130→          <DetailRow label="Lifetime volume" value={<span className="font-semibold tabular-nums">{formatCurrency(consumer.lifetimeVolume, consumer.currency)}</span>} />
+  1131→          <DetailRow label="Monthly volume" value={<span className="font-semibold tabular-nums">{formatCurrency(consumer.monthlyVolume, consumer.currency)}</span>} />
+  1132→          <DetailRow label="Transaction count" value={formatNumber(consumer.transactionCount)} />
+  1133→        </CardContent>
+  1134→      </Card>
+  1135→
+  1136→      <Card className="md:col-span-2">
+  1137→        <CardContent className="p-4">
+  1138→          <SectionLabel icon={Info}>Explore the profile</SectionLabel>
+  1139→          <p className="text-xs text-muted-foreground px-3 py-2">
+  1140→            Click the other tabs above to see full details for cards, wallets, transactions, documents,
+  1141→            KYC cases, support tickets, disputes, risk alerts and the complete activity audit trail —
+  1142→            everything connected to this consumer lives here.
+  1143→          </p>
+  1144→        </CardContent>
+  1145→      </Card>
+  1146→    </div>
+  1147→  );
+  1148→}
+  1149→
+  1150→/* --------------------------------- Tab 2: Cards ------------------------- */
+  1151→
+  1152→function CardsTab({
+  1153→  cards,
+  1154→  staff,
+  1155→  consumerCode,
+  1156→}: {
+  1157→  cards: CardRecord[];
+  1158→  staff: ReturnType<typeof useAuth>["staff"];
+  1159→  consumerCode: string;
+  1160→}) {
+  1161→  async function toggleFreeze(card: CardRecord) {
+  1162→    if (!staff) return;
+  1163→    const next = !card.frozen;
+  1164→    await adminData.updateCard(card.id, {
+  1165→      frozen: next,
+  1166→      status: next ? "frozen" : "active",
+  1167→      updatedAt: Date.now(),
+  1168→    });
+  1169→    logAudit(
+  1170→      {
+  1171→        staffId: staff.id,
+  1172→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1173→        department: staff.departmentId,
+  1174→        role: staff.roleId,
+  1175→      },
+  1176→      next ? "card.freeze" : "card.unfreeze",
+  1177→      "card",
+  1178→      card.id,
+  1179→      {
+  1180→        countryCode: card.countryCode,
+  1181→        beforeValue: card.frozen ? "frozen" : "active",
+  1182→        afterValue: next ? "frozen" : "active",
+  1183→        reason: `${next ? "Freeze" : "Unfreeze"} card •••• ${card.last4} (${consumerCode})`,
+  1184→      },
+  1185→    );
+  1186→    toast.success(`${next ? "Frozen" : "Unfrozen"} card •••• ${card.last4}`);
+  1187→  }
+  1188→
+  1189→  return (
+  1190→    <div className="space-y-3">
+  1191→      <div className="flex items-center justify-between">
+  1192→        <SectionLabel icon={CreditCard}>Issued Cards ({cards.length})</SectionLabel>
+  1193→        <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300">
+  1194→          <Lock className="size-3 mr-1" /> Admin never sees full PAN, CVV or PIN
+  1195→        </Badge>
+  1196→      </div>
+  1197→      {cards.length === 0 ? (
+  1198→        <EmptyState icon={CreditCard} title="No cards issued" description="This consumer has not been issued any cards yet." />
+  1199→      ) : (
+  1200→        <ScrollTable>
+  1201→          <TableHeader>
+  1202→            <TableRow>
+  1203→              <TableHead className="text-[11px]">Card ID</TableHead>
+  1204→              <TableHead className="text-[11px]">Type</TableHead>
+  1205→              <TableHead className="text-[11px]">Scheme</TableHead>
+  1206→              <TableHead className="text-[11px]">Last 4</TableHead>
+  1207→              <TableHead className="text-[11px]">Status</TableHead>
+  1208→              <TableHead className="text-[11px]">Currency</TableHead>
+  1209→              <TableHead className="text-[11px] text-center">Frozen</TableHead>
+  1210→              <TableHead className="text-[11px] text-center">Tokenized</TableHead>
+  1211→              <TableHead className="text-[11px]">Created</TableHead>
+  1212→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1213→            </TableRow>
+  1214→          </TableHeader>
+  1215→          <TableBody>
+  1216→            {cards.map((c) => (
+  1217→              <TableRow key={c.id}>
+  1218→                <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{c.cardId}</TableCell>
+  1219→                <TableCell className="text-[11px] capitalize">{c.type}</TableCell>
+  1220→                <TableCell className="text-[11px] uppercase">{c.scheme}</TableCell>
+  1221→                <TableCell className="font-mono text-[11px]">•••• {c.last4}</TableCell>
+  1222→                <TableCell>
+  1223→                  <Badge variant="secondary" className={cn("text-[10px]", CARD_STATUS_STYLES[c.status].className)}>
+  1224→                    {CARD_STATUS_STYLES[c.status].label}
+  1225→                  </Badge>
+  1226→                </TableCell>
+  1227→                <TableCell className="text-[11px]">{c.currency}</TableCell>
+  1228→                <TableCell className="text-center">
+  1229→                  {c.frozen ? <Snowflake className="size-3.5 text-sky-600 mx-auto" /> : <span className="text-muted-foreground">—</span>}
+  1230→                </TableCell>
+  1231→                <TableCell className="text-center">
+  1232→                  {c.tokenized ? <BadgeCheck className="size-3.5 text-emerald-600 mx-auto" /> : <span className="text-muted-foreground">—</span>}
+  1233→                </TableCell>
+  1234→                <TableCell className="text-[11px] text-muted-foreground">{formatDateTime(c.createdAt)}</TableCell>
+  1235→                <RowActionsCell>
+  1236→                  <IconBtn
+  1237→                    icon={c.frozen ? PlayCircle : Snowflake}
+  1238→                    label={c.frozen ? "Unfreeze" : "Freeze"}
+  1239→                    tone={c.frozen ? "success" : "info"}
+  1240→                    onClick={() => toggleFreeze(c)}
+  1241→                  />
+  1242→                  <IconBtn icon={Eye} label="View details" onClick={() => toast.info(`Card •••• ${c.last4} • ${c.scheme.toUpperCase()} • ${c.provider}`)} />
+  1243→                </RowActionsCell>
+  1244→              </TableRow>
+  1245→            ))}
+  1246→          </TableBody>
+  1247→        </ScrollTable>
+  1248→      )}
+  1249→    </div>
+  1250→  );
+  1251→}
+  1252→
+  1253→/* -------------------------------- Tab 3: Wallets ------------------------ */
+  1254→
+  1255→function WalletsTab({
+  1256→  wallets,
+  1257→  staff,
+  1258→  consumerCode,
+  1259→}: {
+  1260→  wallets: WalletRecord[];
+  1261→  staff: ReturnType<typeof useAuth>["staff"];
+  1262→  consumerCode: string;
+  1263→}) {
+  1264→  async function toggleFreeze(w: WalletRecord) {
+  1265→    if (!staff) return;
+  1266→    const next = w.status === "frozen" ? "active" : "frozen";
+  1267→    await adminData.updateWallet(w.id, { status: next, updatedAt: Date.now() });
+  1268→    logAudit(
+  1269→      {
+  1270→        staffId: staff.id,
+  1271→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1272→        department: staff.departmentId,
+  1273→        role: staff.roleId,
+  1274→      },
+  1275→      next === "frozen" ? "wallet.freeze" : "wallet.unfreeze",
+  1276→      "wallet",
+  1277→      w.id,
+  1278→      {
+  1279→        countryCode: w.countryCode,
+  1280→        beforeValue: w.status,
+  1281→        afterValue: next,
+  1282→        reason: `${next === "frozen" ? "Freeze" : "Unfreeze"} wallet ${w.walletId} (${consumerCode})`,
+  1283→      },
+  1284→    );
+  1285→    toast.success(`${next === "frozen" ? "Frozen" : "Unfrozen"} wallet ${w.walletId}`);
+  1286→  }
+  1287→
+  1288→  return (
+  1289→    <div className="space-y-3">
+  1290→      <div className="flex items-center justify-between">
+  1291→        <SectionLabel icon={WalletIcon}>Wallets ({wallets.length})</SectionLabel>
+  1292→        <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300">
+  1293→          <Info className="size-3 mr-1" /> Manual balance adjustment requires dual approval
+  1294→        </Badge>
+  1295→      </div>
+  1296→      {wallets.length === 0 ? (
+  1297→        <EmptyState icon={WalletIcon} title="No wallets" description="This consumer has no wallets provisioned." />
+  1298→      ) : (
+  1299→        <ScrollTable>
+  1300→          <TableHeader>
+  1301→            <TableRow>
+  1302→              <TableHead className="text-[11px]">Wallet ID</TableHead>
+  1303→              <TableHead className="text-[11px]">Currency</TableHead>
+  1304→              <TableHead className="text-[11px] text-right">Balance</TableHead>
+  1305→              <TableHead className="text-[11px] text-right">Available</TableHead>
+  1306→              <TableHead className="text-[11px] text-right">Held</TableHead>
+  1307→              <TableHead className="text-[11px]">Status</TableHead>
+  1308→              <TableHead className="text-[11px] text-center">Linked Cards</TableHead>
+  1309→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1310→            </TableRow>
+  1311→          </TableHeader>
+  1312→          <TableBody>
+  1313→            {wallets.map((w) => (
+  1314→              <TableRow key={w.id}>
+  1315→                <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{w.walletId}</TableCell>
+  1316→                <TableCell className="text-[11px]">{w.currency}</TableCell>
+  1317→                <TableCell className="text-right text-[11px] tabular-nums font-medium">{formatCurrency(w.balance, w.currency)}</TableCell>
+  1318→                <TableCell className="text-right text-[11px] tabular-nums text-emerald-700 dark:text-emerald-400">{formatCurrency(w.availableBalance, w.currency)}</TableCell>
+  1319→                <TableCell className="text-right text-[11px] tabular-nums text-amber-700 dark:text-amber-400">{formatCurrency(w.heldBalance, w.currency)}</TableCell>
+  1320→                <TableCell>
+  1321→                  <Badge variant="secondary" className={cn("text-[10px]", WALLET_STATUS_STYLES[w.status].className)}>
+  1322→                    {WALLET_STATUS_STYLES[w.status].label}
+  1323→                  </Badge>
+  1324→                </TableCell>
+  1325→                <TableCell className="text-center text-[11px]">
+  1326→                  <Badge variant="secondary" className="text-[10px]">{w.linkedCardIds.length}</Badge>
+  1327→                </TableCell>
+  1328→                <RowActionsCell>
+  1329→                  <IconBtn
+  1330→                    icon={w.status === "frozen" ? PlayCircle : Snowflake}
+  1331→                    label={w.status === "frozen" ? "Unfreeze" : "Freeze"}
+  1332→                    tone={w.status === "frozen" ? "success" : "info"}
+  1333→                    onClick={() => toggleFreeze(w)}
+  1334→                  />
+  1335→                </RowActionsCell>
+  1336→              </TableRow>
+  1337→            ))}
+  1338→          </TableBody>
+  1339→        </ScrollTable>
+  1340→      )}
+  1341→    </div>
+  1342→  );
+  1343→}
+  1344→
+  1345→/* ------------------------------ Tab 4: Transactions --------------------- */
+  1346→
+  1347→function TransactionsTab({
+  1348→  txns,
+  1349→  staff,
+  1350→  consumer,
+  1351→}: {
+  1352→  txns: TransactionRecord[];
+  1353→  staff: ReturnType<typeof useAuth>["staff"];
+  1354→  consumer: Consumer;
+  1355→}) {
+  1356→  function openDispute(t: TransactionRecord) {
+  1357→    if (!staff) return;
+  1358→    logAudit(
+  1359→      {
+  1360→        staffId: staff.id,
+  1361→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1362→        department: staff.departmentId,
+  1363→        role: staff.roleId,
+  1364→      },
+  1365→      "transaction.dispute",
+  1366→      "transaction",
+  1367→      t.id,
+  1368→      {
+  1369→        countryCode: t.countryCode,
+  1370→        afterValue: "dispute_opened",
+  1371→        reason: `Open dispute on ${t.reference} for ${consumer.consumerCode}`,
+  1372→      },
+  1373→    );
+  1374→    toast.success(`Dispute opened for ${t.reference}`);
+  1375→  }
+  1376→
+  1377→  function escalate(t: TransactionRecord) {
+  1378→    if (!staff) return;
+  1379→    logAudit(
+  1380→      {
+  1381→        staffId: staff.id,
+  1382→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1383→        department: staff.departmentId,
+  1384→        role: staff.roleId,
+  1385→      },
+  1386→      "transaction.escalate",
+  1387→      "transaction",
+  1388→      t.id,
+  1389→      {
+  1390→        countryCode: t.countryCode,
+  1391→        afterValue: "escalated",
+  1392→        reason: `Escalate ${t.reference} for ${consumer.consumerCode}`,
+  1393→      },
+  1394→    );
+  1395→    toast.success(`Transaction ${t.reference} escalated`);
+  1396→  }
+  1397→
+  1398→  return (
+  1399→    <div className="space-y-3">
+  1400→      <SectionLabel icon={Receipt}>Transactions ({txns.length})</SectionLabel>
+  1401→      {txns.length === 0 ? (
+  1402→        <EmptyState icon={Receipt} title="No transactions" description="This consumer has no transactions yet." />
+  1403→      ) : (
+  1404→        <ScrollTable>
+  1405→          <TableHeader>
+  1406→            <TableRow>
+  1407→              <TableHead className="text-[11px]">Reference</TableHead>
+  1408→              <TableHead className="text-[11px] text-right">Amount</TableHead>
+  1409→              <TableHead className="text-[11px]">Type</TableHead>
+  1410→              <TableHead className="text-[11px]">Status</TableHead>
+  1411→              <TableHead className="text-[11px]">Method</TableHead>
+  1412→              <TableHead className="text-[11px]">Card</TableHead>
+  1413→              <TableHead className="text-[11px] text-center">Risk</TableHead>
+  1414→              <TableHead className="text-[11px]">Created</TableHead>
+  1415→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1416→            </TableRow>
+  1417→          </TableHeader>
+  1418→          <TableBody>
+  1419→            {txns.map((t) => (
+  1420→              <TableRow key={t.id}>
+  1421→                <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{t.reference}</TableCell>
+  1422→                <TableCell className="text-right text-[11px] tabular-nums font-medium">{formatCurrency(t.amount, t.currency)}</TableCell>
+  1423→                <TableCell className="text-[11px] capitalize">{t.type.replace(/_/g, " ")}</TableCell>
+  1424→                <TableCell>
+  1425→                  <Badge variant="secondary" className={cn("text-[10px]", TX_STATUS_STYLES[t.status].className)}>
+  1426→                    {TX_STATUS_STYLES[t.status].label}
+  1427→                  </Badge>
+  1428→                </TableCell>
+  1429→                <TableCell className="text-[11px]">{t.paymentMethod}</TableCell>
+  1430→                <TableCell className="font-mono text-[10px]">{t.cardLast4 ? `•••• ${t.cardLast4}` : "—"}</TableCell>
+  1431→                <TableCell className="text-center">
+  1432→                  <span className={cn("inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold", RISK_TONE(t.riskScore))}>
+  1433→                    {t.riskScore}
+  1434→                  </span>
+  1435→                </TableCell>
+  1436→                <TableCell className="text-[11px] text-muted-foreground">{formatDateTime(t.createdAt)}</TableCell>
+  1437→                <RowActionsCell>
+  1438→                  <IconBtn icon={Receipt} label="View receipt" onClick={() => toast.info(`Receipt ${t.reference} — ${formatCurrency(t.amount, t.currency)}`)} />
+  1439→                  <IconBtn icon={Scale} label="Open dispute" tone="warning" onClick={() => openDispute(t)} />
+  1440→                  <IconBtn icon={AlertTriangle} label="Escalate" tone="danger" onClick={() => escalate(t)} />
+  1441→                  <IconBtn icon={FileText} label="Add note" onClick={() => toast.success(`Note added to ${t.reference}`)} />
+  1442→                </RowActionsCell>
+  1443→              </TableRow>
+  1444→            ))}
+  1445→          </TableBody>
+  1446→        </ScrollTable>
+  1447→      )}
+  1448→    </div>
+  1449→  );
+  1450→}
+  1451→
+  1452→/* ------------------------------- Tab 5: Documents ----------------------- */
+  1453→
+  1454→function DocumentsTab({
+  1455→  docs,
+  1456→  staff,
+  1457→  consumer,
+  1458→}: {
+  1459→  docs: DocumentRecord[];
+  1460→  staff: ReturnType<typeof useAuth>["staff"];
+  1461→  consumer: Consumer;
+  1462→}) {
+  1463→  async function setStatus(d: DocumentRecord, status: DocumentRecord["status"], action: string, label: string) {
+  1464→    if (!staff) return;
+  1465→    await adminData.updateDocument(d.id, {
+  1466→      status,
+  1467→      reviewedBy: `${staff.firstName} ${staff.lastName}`,
+  1468→      reviewedAt: Date.now(),
+  1469→    });
+  1470→    logAudit(
+  1471→      {
+  1472→        staffId: staff.id,
+  1473→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1474→        department: staff.departmentId,
+  1475→        role: staff.roleId,
+  1476→      },
+  1477→      action,
+  1478→      "document",
+  1479→      d.id,
+  1480→      {
+  1481→        countryCode: d.countryCode,
+  1482→        beforeValue: d.status,
+  1483→        afterValue: status,
+  1484→        reason: `${label} document ${d.fileName} for ${consumer.consumerCode}`,
+  1485→      },
+  1486→    );
+  1487→    toast.success(`${label} document ${d.fileName}`);
+  1488→  }
+  1489→
+  1490→  return (
+  1491→    <div className="space-y-3">
+  1492→      <SectionLabel icon={FileText}>Documents ({docs.length})</SectionLabel>
+  1493→      {docs.length === 0 ? (
+  1494→        <EmptyState icon={FileText} title="No documents" description="This consumer has not uploaded any documents." />
+  1495→      ) : (
+  1496→        <ScrollTable>
+  1497→          <TableHeader>
+  1498→            <TableRow>
+  1499→              <TableHead className="text-[11px]">Type</TableHead>
+  1500→              <TableHead className="text-[11px]">File Name</TableHead>
+  1501→              <TableHead className="text-[11px]">Status</TableHead>
+  1502→              <TableHead className="text-[11px]">Uploaded</TableHead>
+  1503→              <TableHead className="text-[11px]">Reviewed By</TableHead>
+  1504→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1505→            </TableRow>
+  1506→          </TableHeader>
+  1507→          <TableBody>
+  1508→            {docs.map((d) => (
+  1509→              <TableRow key={d.id}>
+  1510→                <TableCell className="text-[11px]">{DOC_TYPE_LABELS[d.documentType]}</TableCell>
+  1511→                <TableCell className="font-mono text-[10px]">{d.fileName}</TableCell>
+  1512→                <TableCell>
+  1513→                  <Badge variant="secondary" className={cn("text-[10px]", DOC_STATUS_STYLES[d.status].className)}>
+  1514→                    {DOC_STATUS_STYLES[d.status].label}
+  1515→                  </Badge>
+  1516→                </TableCell>
+  1517→                <TableCell className="text-[11px] text-muted-foreground">{formatDateTime(d.uploadedAt)}</TableCell>
+  1518→                <TableCell className="text-[11px]">{d.reviewedBy ?? "—"}</TableCell>
+  1519→                <RowActionsCell>
+  1520→                  <IconBtn icon={CheckCircle2} label="Approve" tone="success" onClick={() => setStatus(d, "approved", "document.approve", "Approved")} disabled={d.status === "approved"} />
+  1521→                  <IconBtn icon={XCircle} label="Reject" tone="danger" onClick={() => setStatus(d, "rejected", "document.reject", "Rejected")} disabled={d.status === "rejected"} />
+  1522→                  <IconBtn icon={RotateCcw} label="Request replacement" tone="warning" onClick={() => setStatus(d, "replacement_requested", "document.request_replacement", "Requested replacement for")} disabled={d.status === "replacement_requested"} />
+  1523→                </RowActionsCell>
+  1524→              </TableRow>
+  1525→            ))}
+  1526→          </TableBody>
+  1527→        </ScrollTable>
+  1528→      )}
+  1529→    </div>
+  1530→  );
+  1531→}
+  1532→
+  1533→/* -------------------------------- Tab 6: KYC Cases ---------------------- */
+  1534→
+  1535→function KycTab({
+  1536→  cases,
+  1537→  staff,
+  1538→  consumer,
+  1539→}: {
+  1540→  cases: KycCaseRecord[];
+  1541→  staff: ReturnType<typeof useAuth>["staff"];
+  1542→  consumer: Consumer;
+  1543→}) {
+  1544→  async function approve(k: KycCaseRecord) {
+  1545→    if (!staff) return;
+  1546→    await adminData.updateKyc(k.id, {
+  1547→      status: "approved",
+  1548→      assignedReviewer: `${staff.firstName} ${staff.lastName}`,
+  1549→    });
+  1550→    await adminData.updateConsumer(consumer.id, {
+  1551→      kycStatus: "approved",
+  1552→      status: "active",
+  1553→      updatedAt: Date.now(),
+  1554→    });
+  1555→    logAudit(
+  1556→      {
+  1557→        staffId: staff.id,
+  1558→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1559→        department: staff.departmentId,
+  1560→        role: staff.roleId,
+  1561→      },
+  1562→      "kyc.approve",
+  1563→      "kyc_case",
+  1564→      k.id,
+  1565→      {
+  1566→        countryCode: k.countryCode,
+  1567→        beforeValue: k.status,
+  1568→        afterValue: "approved",
+  1569→        reason: `Approve KYC case ${k.id} for ${consumer.consumerCode}`,
+  1570→      },
+  1571→    );
+  1572→    toast.success(`KYC case ${k.id} approved — consumer activated`);
+  1573→  }
+  1574→
+  1575→  async function reject(k: KycCaseRecord) {
+  1576→    if (!staff) return;
+  1577→    await adminData.updateKyc(k.id, {
+  1578→      status: "rejected",
+  1579→      assignedReviewer: `${staff.firstName} ${staff.lastName}`,
+  1580→    });
+  1581→    logAudit(
+  1582→      {
+  1583→        staffId: staff.id,
+  1584→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1585→        department: staff.departmentId,
+  1586→        role: staff.roleId,
+  1587→      },
+  1588→      "kyc.reject",
+  1589→      "kyc_case",
+  1590→      k.id,
+  1591→      {
+  1592→        countryCode: k.countryCode,
+  1593→        beforeValue: k.status,
+  1594→        afterValue: "rejected",
+  1595→        reason: `Reject KYC case ${k.id} for ${consumer.consumerCode}`,
+  1596→      },
+  1597→    );
+  1598→    toast.success(`KYC case ${k.id} rejected`);
+  1599→  }
+  1600→
+  1601→  async function escalate(k: KycCaseRecord) {
+  1602→    if (!staff) return;
+  1603→    await adminData.updateKyc(k.id, { status: "escalated" });
+  1604→    logAudit(
+  1605→      {
+  1606→        staffId: staff.id,
+  1607→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1608→        department: staff.departmentId,
+  1609→        role: staff.roleId,
+  1610→      },
+  1611→      "kyc.escalate",
+  1612→      "kyc_case",
+  1613→      k.id,
+  1614→      {
+  1615→        countryCode: k.countryCode,
+  1616→        beforeValue: k.status,
+  1617→        afterValue: "escalated",
+  1618→        reason: `Escalate KYC case ${k.id} for ${consumer.consumerCode}`,
+  1619→      },
+  1620→    );
+  1621→    toast.success(`KYC case ${k.id} escalated`);
+  1622→  }
+  1623→
+  1624→  return (
+  1625→    <div className="space-y-3">
+  1626→      <SectionLabel icon={ShieldCheck}>KYC Cases ({cases.length})</SectionLabel>
+  1627→      {cases.length === 0 ? (
+  1628→        <EmptyState icon={ShieldCheck} title="No KYC cases" description="No KYC cases are linked to this consumer." />
+  1629→      ) : (
+  1630→        <ScrollTable>
+  1631→          <TableHeader>
+  1632→            <TableRow>
+  1633→              <TableHead className="text-[11px]">Case ID</TableHead>
+  1634→              <TableHead className="text-[11px]">Country</TableHead>
+  1635→              <TableHead className="text-[11px]">Nationality</TableHead>
+  1636→              <TableHead className="text-[11px] text-center">Risk</TableHead>
+  1637→              <TableHead className="text-[11px]">Submitted</TableHead>
+  1638→              <TableHead className="text-[11px]">Status</TableHead>
+  1639→              <TableHead className="text-[11px]">Reviewer</TableHead>
+  1640→              <TableHead className="text-[11px]">SLA</TableHead>
+  1641→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1642→            </TableRow>
+  1643→          </TableHeader>
+  1644→          <TableBody>
+  1645→            {cases.map((k) => {
+  1646→              const sla = slaLabel(k.slaDeadline);
+  1647→              return (
+  1648→                <TableRow key={k.id}>
+  1649→                  <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{k.id}</TableCell>
+  1650→                  <TableCell className="text-[11px]">{k.countryCode}</TableCell>
+  1651→                  <TableCell className="text-[11px]">{k.nationality}</TableCell>
+  1652→                  <TableCell className="text-center">
+  1653→                    <span className={cn("inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold", RISK_TONE(k.riskScore))}>
+  1654→                      {k.riskScore}
+  1655→                    </span>
+  1656→                  </TableCell>
+  1657→                  <TableCell className="text-[11px] text-muted-foreground">{formatDateTime(k.submittedAt)}</TableCell>
+  1658→                  <TableCell>{kycBadge(k.status)}</TableCell>
+  1659→                  <TableCell className="text-[11px]">{k.assignedReviewer ?? "—"}</TableCell>
+  1660→                  <TableCell>
+  1661→                    <Badge variant="outline" className={cn("text-[10px]", sla.className)}>{sla.label}</Badge>
+  1662→                  </TableCell>
+  1663→                  <RowActionsCell>
+  1664→                    <IconBtn icon={CheckCircle2} label="Approve" tone="success" onClick={() => approve(k)} disabled={k.status === "approved"} />
+  1665→                    <IconBtn icon={XCircle} label="Reject" tone="danger" onClick={() => reject(k)} disabled={k.status === "rejected"} />
+  1666→                    <IconBtn icon={AlertTriangle} label="Escalate" tone="warning" onClick={() => escalate(k)} disabled={k.status === "escalated"} />
+  1667→                  </RowActionsCell>
+  1668→                </TableRow>
+  1669→              );
+  1670→            })}
+  1671→          </TableBody>
+  1672→        </ScrollTable>
+  1673→      )}
+  1674→    </div>
+  1675→  );
+  1676→}
+  1677→
+  1678→/* ------------------------------ Tab 7: Support Tickets ------------------ */
+  1679→
+  1680→function TicketsTab({
+  1681→  tickets,
+  1682→  staff,
+  1683→  consumer,
+  1684→}: {
+  1685→  tickets: TicketRecord[];
+  1686→  staff: ReturnType<typeof useAuth>["staff"];
+  1687→  consumer: Consumer;
+  1688→}) {
+  1689→  async function update(t: TicketRecord, patch: Partial<TicketRecord>, action: string, label: string) {
+  1690→    if (!staff) return;
+  1691→    await adminData.updateTicket(t.id, { ...patch, updatedAt: Date.now() });
+  1692→    logAudit(
+  1693→      {
+  1694→        staffId: staff.id,
+  1695→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1696→        department: staff.departmentId,
+  1697→        role: staff.roleId,
+  1698→      },
+  1699→      action,
+  1700→      "ticket",
+  1701→      t.id,
+  1702→      {
+  1703→        countryCode: t.countryCode,
+  1704→        reason: `${label} on ticket ${t.id} for ${consumer.consumerCode}`,
+  1705→      },
+  1706→    );
+  1707→    toast.success(`${label} — ticket ${t.id}`);
+  1708→  }
+  1709→
+  1710→  return (
+  1711→    <div className="space-y-3">
+  1712→      <SectionLabel icon={LifeBuoy}>Support Tickets ({tickets.length})</SectionLabel>
+  1713→      {tickets.length === 0 ? (
+  1714→        <EmptyState icon={LifeBuoy} title="No support tickets" description="This consumer has not raised any support tickets." />
+  1715→      ) : (
+  1716→        <ScrollTable>
+  1717→          <TableHeader>
+  1718→            <TableRow>
+  1719→              <TableHead className="text-[11px]">Ticket ID</TableHead>
+  1720→              <TableHead className="text-[11px]">Country</TableHead>
+  1721→              <TableHead className="text-[11px]">Type</TableHead>
+  1722→              <TableHead className="text-[11px]">Subject</TableHead>
+  1723→              <TableHead className="text-[11px]">Priority</TableHead>
+  1724→              <TableHead className="text-[11px]">Status</TableHead>
+  1725→              <TableHead className="text-[11px]">Created</TableHead>
+  1726→              <TableHead className="text-[11px]">SLA</TableHead>
+  1727→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1728→            </TableRow>
+  1729→          </TableHeader>
+  1730→          <TableBody>
+  1731→            {tickets.map((t) => {
+  1732→              const sla = slaLabel(t.slaDeadline);
+  1733→              return (
+  1734→                <TableRow key={t.id}>
+  1735→                  <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{t.id}</TableCell>
+  1736→                  <TableCell className="text-[11px]">{t.countryCode}</TableCell>
+  1737→                  <TableCell className="text-[11px] capitalize">{t.type}</TableCell>
+  1738→                  <TableCell className="text-[11px] max-w-[200px] truncate" title={t.subject}>{t.subject}</TableCell>
+  1739→                  <TableCell>
+  1740→                    <Badge variant="secondary" className={cn("text-[10px]", PRIORITY_STYLES[t.priority].className)}>
+  1741→                      {PRIORITY_STYLES[t.priority].label}
+  1742→                    </Badge>
+  1743→                  </TableCell>
+  1744→                  <TableCell>
+  1745→                    <Badge variant="secondary" className={cn("text-[10px]", TICKET_STATUS_STYLES[t.status].className)}>
+  1746→                      {TICKET_STATUS_STYLES[t.status].label}
+  1747→                    </Badge>
+  1748→                  </TableCell>
+  1749→                  <TableCell className="text-[11px] text-muted-foreground">{formatDateTime(t.createdAt)}</TableCell>
+  1750→                  <TableCell>
+  1751→                    <Badge variant="outline" className={cn("text-[10px]", sla.className)}>{sla.label}</Badge>
+  1752→                  </TableCell>
+  1753→                  <RowActionsCell>
+  1754→                    <IconBtn icon={Reply} label="Reply" tone="info" onClick={() => toast.success(`Reply sent on ticket ${t.id}`)} />
+  1755→                    <IconBtn
+  1756→                      icon={UserCheck}
+  1757→                      label="Assign to me"
+  1758→                      tone="success"
+  1759→                      onClick={() =>
+  1760→                        staff &&
+  1761→                        update(t, { assignedTo: `${staff.firstName} ${staff.lastName}`, status: "in_progress" }, "ticket.assign", "Assigned to you")
+  1762→                      }
+  1763→                    />
+  1764→                    <IconBtn icon={XCircle} label="Close" tone="danger" onClick={() => update(t, { status: "closed" }, "ticket.close", "Closed")} disabled={t.status === "closed"} />
+  1765→                  </RowActionsCell>
+  1766→                </TableRow>
+  1767→              );
+  1768→            })}
+  1769→          </TableBody>
+  1770→        </ScrollTable>
+  1771→      )}
+  1772→    </div>
+  1773→  );
+  1774→}
+  1775→
+  1776→/* -------------------------------- Tab 8: Disputes ----------------------- */
+  1777→
+  1778→function DisputesTab({
+  1779→  disputes,
+  1780→  staff,
+  1781→  consumer,
+  1782→}: {
+  1783→  disputes: DisputeRecord[];
+  1784→  staff: ReturnType<typeof useAuth>["staff"];
+  1785→  consumer: Consumer;
+  1786→}) {
+  1787→  async function updateStatus(d: DisputeRecord, status: DisputeRecord["status"]) {
+  1788→    if (!staff) return;
+  1789→    await adminData.updateDispute(d.id, { status });
+  1790→    logAudit(
+  1791→      {
+  1792→        staffId: staff.id,
+  1793→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1794→        department: staff.departmentId,
+  1795→        role: staff.roleId,
+  1796→      },
+  1797→      "dispute.update_status",
+  1798→      "dispute",
+  1799→      d.id,
+  1800→      {
+  1801→        countryCode: d.countryCode,
+  1802→        beforeValue: d.status,
+  1803→        afterValue: status,
+  1804→        reason: `Update dispute ${d.id} status to ${status} for ${consumer.consumerCode}`,
+  1805→      },
+  1806→    );
+  1807→    toast.success(`Dispute ${d.id} status updated to ${DISPUTE_STATUS_STYLES[status].label}`);
+  1808→  }
+  1809→
+  1810→  return (
+  1811→    <div className="space-y-3">
+  1812→      <SectionLabel icon={Scale}>Disputes ({disputes.length})</SectionLabel>
+  1813→      {disputes.length === 0 ? (
+  1814→        <EmptyState icon={Scale} title="No disputes" description="No disputes have been raised against this consumer." />
+  1815→      ) : (
+  1816→        <ScrollTable>
+  1817→          <TableHeader>
+  1818→            <TableRow>
+  1819→              <TableHead className="text-[11px]">Dispute ID</TableHead>
+  1820→              <TableHead className="text-[11px]">Merchant</TableHead>
+  1821→              <TableHead className="text-[11px] text-right">Amount</TableHead>
+  1822→              <TableHead className="text-[11px]">Reason</TableHead>
+  1823→              <TableHead className="text-[11px]">Status</TableHead>
+  1824→              <TableHead className="text-[11px]">Deadline</TableHead>
+  1825→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1826→            </TableRow>
+  1827→          </TableHeader>
+  1828→          <TableBody>
+  1829→            {disputes.map((d) => {
+  1830→              const sla = slaLabel(d.deadline);
+  1831→              return (
+  1832→                <TableRow key={d.id}>
+  1833→                  <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{d.id}</TableCell>
+  1834→                  <TableCell className="text-[11px]">{d.merchantName}</TableCell>
+  1835→                  <TableCell className="text-right text-[11px] tabular-nums font-medium">{formatCurrency(d.amount, d.currency)}</TableCell>
+  1836→                  <TableCell className="text-[11px] max-w-[200px] truncate" title={d.reason}>{d.reason}</TableCell>
+  1837→                  <TableCell>
+  1838→                    <Badge variant="secondary" className={cn("text-[10px]", DISPUTE_STATUS_STYLES[d.status].className)}>
+  1839→                      {DISPUTE_STATUS_STYLES[d.status].label}
+  1840→                    </Badge>
+  1841→                  </TableCell>
+  1842→                  <TableCell>
+  1843→                    <Badge variant="outline" className={cn("text-[10px]", sla.className)}>
+  1844→                      {formatDateTime(d.deadline)}
+  1845→                    </Badge>
+  1846→                  </TableCell>
+  1847→                  <RowActionsCell>
+  1848→                    <IconBtn icon={Eye} label="View details" onClick={() => toast.info(`Dispute ${d.id} • ${d.reason}`)} />
+  1849→                    <DropdownMenu>
+  1850→                      <DropdownMenuTrigger asChild>
+  1851→                        <Button variant="ghost" size="icon" className="size-7">
+  1852→                          <MoreHorizontal className="size-3.5" />
+  1853→                        </Button>
+  1854→                      </DropdownMenuTrigger>
+  1855→                      <DropdownMenuContent align="end">
+  1856→                        <DropdownMenuLabel>Update status</DropdownMenuLabel>
+  1857→                        {(["new", "awaiting_evidence", "evidence_submitted", "under_review", "won", "lost", "expired"] as DisputeRecord["status"][]).map((s) => (
+  1858→                          <DropdownMenuItem
+  1859→                            key={s}
+  1860→                            onClick={() => updateStatus(d, s)}
+  1861→                            disabled={d.status === s}
+  1862→                          >
+  1863→                            {DISPUTE_STATUS_STYLES[s].label}
+  1864→                          </DropdownMenuItem>
+  1865→                        ))}
+  1866→                      </DropdownMenuContent>
+  1867→                    </DropdownMenu>
+  1868→                  </RowActionsCell>
+  1869→                </TableRow>
+  1870→              );
+  1871→            })}
+  1872→          </TableBody>
+  1873→        </ScrollTable>
+  1874→      )}
+  1875→    </div>
+  1876→  );
+  1877→}
+  1878→
+  1879→/* ------------------------------- Tab 9: Risk & Alerts ------------------- */
+  1880→
+  1881→function RiskTab({
+  1882→  alerts,
+  1883→  staff,
+  1884→  consumer,
+  1885→}: {
+  1886→  alerts: FraudRecord[];
+  1887→  staff: ReturnType<typeof useAuth>["staff"];
+  1888→  consumer: Consumer;
+  1889→}) {
+  1890→  async function closeFalsePositive(f: FraudRecord) {
+  1891→    if (!staff) return;
+  1892→    await adminData.updateFraud(f.id, { status: "closed" });
+  1893→    logAudit(
+  1894→      {
+  1895→        staffId: staff.id,
+  1896→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1897→        department: staff.departmentId,
+  1898→        role: staff.roleId,
+  1899→      },
+  1900→      "fraud.close",
+  1901→      "fraud_alert",
+  1902→      f.id,
+  1903→      {
+  1904→        countryCode: f.countryCode,
+  1905→        beforeValue: f.status,
+  1906→        afterValue: "closed",
+  1907→        reason: `Close false-positive alert ${f.id} for ${consumer.consumerCode}`,
+  1908→      },
+  1909→    );
+  1910→    toast.success(`Alert ${f.id} closed (false positive)`);
+  1911→  }
+  1912→
+  1913→  async function escalate(f: FraudRecord) {
+  1914→    if (!staff) return;
+  1915→    await adminData.updateFraud(f.id, { status: "escalated" });
+  1916→    logAudit(
+  1917→      {
+  1918→        staffId: staff.id,
+  1919→        staffName: `${staff.firstName} ${staff.lastName}`,
+  1920→        department: staff.departmentId,
+  1921→        role: staff.roleId,
+  1922→      },
+  1923→      "fraud.escalate",
+  1924→      "fraud_alert",
+  1925→      f.id,
+  1926→      {
+  1927→        countryCode: f.countryCode,
+  1928→        beforeValue: f.status,
+  1929→        afterValue: "escalated",
+  1930→        reason: `Escalate alert ${f.id} for ${consumer.consumerCode}`,
+  1931→      },
+  1932→    );
+  1933→    toast.success(`Alert ${f.id} escalated`);
+  1934→  }
+  1935→
+  1936→  return (
+  1937→    <div className="space-y-3">
+  1938→      <SectionLabel icon={ShieldAlert}>Risk & Fraud Alerts ({alerts.length})</SectionLabel>
+  1939→      {alerts.length === 0 ? (
+  1940→        <EmptyState icon={ShieldCheck} title="No risk alerts" description="This consumer has no open risk or fraud alerts. Clean record." />
+  1941→      ) : (
+  1942→        <ScrollTable>
+  1943→          <TableHeader>
+  1944→            <TableRow>
+  1945→              <TableHead className="text-[11px]">Alert ID</TableHead>
+  1946→              <TableHead className="text-[11px]">Trigger</TableHead>
+  1947→              <TableHead className="text-[11px]">Severity</TableHead>
+  1948→              <TableHead className="text-[11px] text-right">Amount</TableHead>
+  1949→              <TableHead className="text-[11px]">Device</TableHead>
+  1950→              <TableHead className="text-[11px]">Created</TableHead>
+  1951→              <TableHead className="text-[11px]">Status</TableHead>
+  1952→              <TableHead className="text-[11px] text-right">Actions</TableHead>
+  1953→            </TableRow>
+  1954→          </TableHeader>
+  1955→          <TableBody>
+  1956→            {alerts.map((f) => (
+  1957→              <TableRow key={f.id}>
+  1958→                <TableCell className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">{f.id}</TableCell>
+  1959→                <TableCell className="text-[11px] max-w-[180px] truncate" title={f.trigger}>{f.trigger}</TableCell>
+  1960→                <TableCell>
+  1961→                  <Badge variant="secondary" className={cn("text-[10px]", SEVERITY_STYLES[f.severity].className)}>
+  1962→                    {SEVERITY_STYLES[f.severity].label}
+  1963→                  </Badge>
+  1964→                </TableCell>
+  1965→                <TableCell className="text-right text-[11px] tabular-nums">{formatCurrency(f.transactionAmount, "USD")}</TableCell>
+  1966→                <TableCell className="text-[11px]">{f.device}</TableCell>
+  1967→                <TableCell className="text-[11px] text-muted-foreground">{formatDateTime(f.createdAt)}</TableCell>
+  1968→                <TableCell>
+  1969→                  <Badge variant="secondary" className={cn("text-[10px]", FRAUD_STATUS_STYLES[f.status].className)}>
+  1970→                    {FRAUD_STATUS_STYLES[f.status].label}
+  1971→                  </Badge>
+  1972→                </TableCell>
+  1973→                <RowActionsCell>
+  1974→                  <IconBtn icon={CheckCircle2} label="Close (false positive)" tone="success" onClick={() => closeFalsePositive(f)} disabled={f.status === "closed"} />
+  1975→                  <IconBtn icon={AlertTriangle} label="Escalate" tone="danger" onClick={() => escalate(f)} disabled={f.status === "escalated"} />
+  1976→                </RowActionsCell>
+  1977→              </TableRow>
+  1978→            ))}
+  1979→          </TableBody>
+  1980→        </ScrollTable>
+  1981→      )}
+  1982→    </div>
+  1983→  );
+  1984→}
+  1985→
+  1986→/* ------------------------------ Tab 10: Activity & Audit ---------------- */
+  1987→
+  1988→function AuditTab({ logs }: { logs: AuditRecord[] }) {
+  1989→  return (
+  1990→    <div className="space-y-3">
+  1991→      <SectionLabel icon={Activity}>Activity & Audit Trail ({logs.length})</SectionLabel>
+  1992→      {logs.length === 0 ? (
+  1993→        <EmptyState icon={Activity} title="No activity recorded" description="No audit log entries reference this consumer yet." />
+  1994→      ) : (
+  1995→        <ScrollTable>
+  1996→          <TableHeader>
+  1997→            <TableRow>
+  1998→              <TableHead className="text-[11px]">Timestamp</TableHead>
+  1999→              <TableHead className="text-[11px]">Action</TableHead>
+  2000→              <TableHead className="text-[11px]">Entity</TableHead>
+
+[showing lines 1-2000 of 2066; use offset=2001 with limit to continue reading]

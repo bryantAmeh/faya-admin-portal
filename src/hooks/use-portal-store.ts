@@ -8,7 +8,9 @@ import { create } from "zustand";
 export type PortalView =
   | "dashboard"
   | "users"
+  | "user_detail"
   | "merchants"
+  | "merchant_detail"
   | "staff"
   | "departments"
   | "countries"
@@ -27,12 +29,16 @@ interface PortalState {
   selectedCountryCode: string | null;
   selectedStaffId: string | null;
   selectedCaseId: string | null;
+  selectedUserId: string | null;
+  selectedMerchantId: string | null;
   sidebarCollapsed: boolean;
 
   setView: (view: PortalView) => void;
   selectCountry: (code: string | null) => void;
   selectStaff: (id: string | null) => void;
   selectCase: (id: string | null) => void;
+  selectUser: (id: string | null) => void;
+  selectMerchant: (id: string | null) => void;
   toggleSidebar: () => void;
   reset: () => void;
 }
@@ -42,12 +48,16 @@ export const usePortalStore = create<PortalState>((set) => ({
   selectedCountryCode: null,
   selectedStaffId: null,
   selectedCaseId: null,
+  selectedUserId: null,
+  selectedMerchantId: null,
   sidebarCollapsed: false,
 
   setView: (view) => set({ view }),
   selectCountry: (code) => set({ selectedCountryCode: code }),
   selectStaff: (id) => set({ selectedStaffId: id }),
   selectCase: (id) => set({ selectedCaseId: id }),
+  selectUser: (id) => set({ selectedUserId: id }),
+  selectMerchant: (id) => set({ selectedMerchantId: id }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   reset: () =>
     set({
@@ -55,5 +65,7 @@ export const usePortalStore = create<PortalState>((set) => ({
       selectedCountryCode: null,
       selectedStaffId: null,
       selectedCaseId: null,
+      selectedUserId: null,
+      selectedMerchantId: null,
     }),
 }));

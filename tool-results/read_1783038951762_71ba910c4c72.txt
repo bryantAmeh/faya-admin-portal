@@ -1,0 +1,1043 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Country Detail view (spec §5.2 – §5.7)
+     5→ *
+     6→ * Shows the dashboard metrics for one country, plus tabs to browse and edit
+     7→ * the five rule sets: KYC, KYB, Device, Settlement, Risk, plus a read-only
+     8→ * Merchants & Consumers summary tab.
+     9→ *
+    10→ * Key feature: a prominent "Platform Scope" banner makes it clear that all
+    11→ * rules set on this page cut across ALL enabled platforms. Super Admins can
+    12→ * enable/disable platforms via a dialog with 6 switches.
+    13→ */
+    14→import { useMemo, useState } from "react";
+    15→import {
+    16→  ArrowLeft,
+    17→  Globe2,
+    18→  Users,
+    19→  Building2,
+    20→  ShieldCheck,
+    21→  AlertTriangle,
+    22→  Smartphone,
+    23→  Wallet,
+    24→  Scale,
+    25→  Headphones,
+    26→  Clock,
+    27→  Check,
+    28→  X,
+    29→  Pencil,
+    30→  Save,
+    31→  Info,
+    32→  Layers,
+    33→  Store,
+    34→  UserCircle,
+    35→} from "lucide-react";
+    36→import { toast } from "sonner";
+    37→
+    38→import { ViewHeader, ViewContainer, StatCard, EmptyState } from "@/components/portal/view-helpers";
+    39→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    40→import { Badge } from "@/components/ui/badge";
+    41→import { Button } from "@/components/ui/button";
+    42→import { Textarea } from "@/components/ui/textarea";
+    43→import { Label } from "@/components/ui/label";
+    44→import { Separator } from "@/components/ui/separator";
+    45→import { Switch } from "@/components/ui/switch";
+    46→import {
+    47→  Tabs,
+    48→  TabsContent,
+    49→  TabsList,
+    50→  TabsTrigger,
+    51→} from "@/components/ui/tabs";
+    52→import {
+    53→  Dialog,
+    54→  DialogContent,
+    55→  DialogDescription,
+    56→  DialogFooter,
+    57→  DialogHeader,
+    58→  DialogTitle,
+    59→} from "@/components/ui/dialog";
+    60→import {
+    61→  Select,
+    62→  SelectContent,
+    63→  SelectItem,
+    64→  SelectTrigger,
+    65→  SelectValue,
+    66→} from "@/components/ui/select";
+    67→import {
+    68→  AlertDialog,
+    69→  AlertDialogAction,
+    70→  AlertDialogCancel,
+    71→  AlertDialogContent,
+    72→  AlertDialogDescription,
+    73→  AlertDialogFooter,
+    74→  AlertDialogHeader,
+    75→  AlertDialogTitle,
+    76→} from "@/components/ui/alert-dialog";
+    77→import {
+    78→  Tooltip,
+    79→  TooltipContent,
+    80→  TooltipProvider,
+    81→  TooltipTrigger,
+    82→} from "@/components/ui/tooltip";
+    83→import {
+    84→  Table,
+    85→  TableBody,
+    86→  TableCell,
+    87→  TableHead,
+    88→  TableHeader,
+    89→  TableRow,
+    90→} from "@/components/ui/table";
+    91→
+    92→import { usePortalStore } from "@/hooks/use-portal-store";
+    93→import { useAuth } from "@/hooks/use-auth";
+    94→import { adminData, logAudit } from "@/lib/admin-data";
+    95→import { formatCompact, formatCurrency, formatNumber, statusBadge } from "@/lib/formatters";
+    96→import {
+    97→  PLATFORM_LABELS,
+    98→  type CountryConfig,
+    99→  type CountryStatus,
+   100→  type PlatformConfig,
+   101→  type PlatformKey,
+   102→  type Merchant,
+   103→  type Consumer,
+   104→} from "@/lib/types";
+   105→
+   106→interface CountryDetailViewProps {
+   107→  countries: CountryConfig[];
+   108→  merchants: Merchant[];
+   109→  consumers: Consumer[];
+   110→}
+   111→
+   112→type RuleKey = "kycRules" | "kybRules" | "deviceRules" | "settlementRules" | "riskRules";
+   113→
+   114→const TAB_META: { key: RuleKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+   115→  { key: "kycRules", label: "KYC Rules", icon: ShieldCheck },
+   116→  { key: "kybRules", label: "KYB Rules", icon: Building2 },
+   117→  { key: "deviceRules", label: "Device Rules", icon: Smartphone },
+   118→  { key: "settlementRules", label: "Settlement Rules", icon: Wallet },
+   119→  { key: "riskRules", label: "Risk Rules", icon: AlertTriangle },
+   120→];
+   121→
+   122→const PLATFORM_ORDER: PlatformKey[] = [
+   123→  "consumerApp",
+   124→  "merchantApp",
+   125→  "physicalTerminal",
+   126→  "phonePos",
+   127→  "nfcClosedLoop",
+   128→  "onlineCheckout",
+   129→];
+   130→
+   131→const ALL_COUNTRY_STATUSES: CountryStatus[] = [
+   132→  "draft",
+   133→  "internal_testing",
+   134→  "pilot",
+   135→  "live",
+   136→  "restricted",
+   137→  "suspended",
+   138→  "closed",
+   139→];
+   140→
+   141→export function CountryDetailView({ countries, merchants, consumers }: CountryDetailViewProps) {
+   142→  const { staff } = useAuth();
+   143→  const { selectedCountryCode, setView } = usePortalStore();
+   144→  const isSuperAdmin = staff?.departmentId === "dept_super_admin";
+   145→
+   146→  const country = useMemo(
+   147→    () => countries.find((c) => c.countryCode === selectedCountryCode) ?? null,
+   148→    [countries, selectedCountryCode],
+   149→  );
+   150→
+   151→  // Filter merchants/consumers to this country
+   152→  const countryMerchants = useMemo(() => {
+   153→    if (!country) return [];
+   154→    return merchants.filter((m) => m.countryCode === country.countryCode);
+   155→  }, [merchants, country]);
+   156→
+   157→  const countryConsumers = useMemo(() => {
+   158→    if (!country) return [];
+   159→    return consumers.filter((c) => c.countryCode === country.countryCode);
+   160→  }, [consumers, country]);
+   161→
+   162→  if (!country) {
+   163→    return (
+   164→      <>
+   165→        <ViewHeader title="Country detail" description="No country selected" icon={Globe2} />
+   166→        <ViewContainer>
+   167→          <Card>
+   168→            <CardContent className="p-0">
+   169→              <EmptyState
+   170→                icon={Globe2}
+   171→                title="Country not found"
+   172→                description="The selected country no longer exists. Pick another from the country list."
+   173→              />
+   174→            </CardContent>
+   175→          </Card>
+   176→          <div className="flex justify-center">
+   177→            <Button variant="outline" onClick={() => setView("countries")}>
+   178→              <ArrowLeft className="size-4 mr-1" /> Back to countries
+   179→            </Button>
+   180→          </div>
+   181→        </ViewContainer>
+   182→      </>
+   183→    );
+   184→  }
+   185→
+   186→  const badge = statusBadge("country", country.status);
+   187→  const launchBadge = statusBadge("country", country.launchStatus as CountryStatus);
+   188→  const enabledPlatforms = PLATFORM_ORDER.filter((key) => country.platforms?.[key] === true);
+   189→  const realMerchantCount = countryMerchants.length;
+   190→  const realConsumerCount = countryConsumers.length;
+   191→
+   192→  return (
+   193→    <>
+   194→      <ViewHeader
+   195→        title={`${country.countryName} (${country.countryCode})`}
+   196→        description={`${country.currency} · ${country.regulator} · ${country.timezone}`}
+   197→        icon={Globe2}
+   198→        actions={
+   199→          <Button variant="outline" size="sm" onClick={() => setView("countries")}>
+   200→            <ArrowLeft className="size-4 mr-1" /> Back
+   201→          </Button>
+   202→        }
+   203→      />
+   204→      <ViewContainer>
+   205→        {/* Header card */}
+   206→        <Card>
+   207→          <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
+   208→            <div className="flex items-center gap-3">
+   209→              <div className="size-12 rounded-lg bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center">
+   210→                <Globe2 className="size-6" />
+   211→              </div>
+   212→              <div>
+   213→                <div className="flex items-center gap-2">
+   214→                  <span className="text-xl font-bold">{country.countryName}</span>
+   215→                  <span className="text-sm text-muted-foreground">({country.countryCode})</span>
+   216→                </div>
+   217→                <div className="text-xs text-muted-foreground mt-0.5">
+   218→                  {country.currency} · {country.regulator} · {country.timezone}
+   219→                </div>
+   220→              </div>
+   221→            </div>
+   222→            <div className="flex flex-wrap items-center gap-2">
+   223→              <Badge variant="secondary" className={badge.className}>
+   224→                Status: {badge.label}
+   225→              </Badge>
+   226→              <Badge variant="outline">Launch: {launchBadge.label}</Badge>
+   227→              {isSuperAdmin && <StatusChanger country={country} />}
+   228→            </div>
+   229→          </CardContent>
+   230→        </Card>
+   231→
+   232→        {/* Platform Scope banner — PROMINENT */}
+   233→        <Card className="border-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 dark:border-emerald-800">
+   234→          <CardContent className="p-4">
+   235→            <div className="flex items-start gap-3 flex-wrap">
+   236→              <div className="size-10 rounded-lg bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 flex items-center justify-center shrink-0">
+   237→                <Info className="size-5" />
+   238→              </div>
+   239→              <div className="min-w-0 flex-1">
+   240→                <div className="flex items-center gap-2 flex-wrap">
+   241→                  <h3 className="text-sm font-semibold text-emerald-900 dark:text-emerald-100 flex items-center gap-1.5">
+   242→                    <Layers className="size-4" /> Platform Scope
+   243→                  </h3>
+   244→                  <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
+   245→                    {enabledPlatforms.length} active
+   246→                  </Badge>
+   247→                </div>
+   248→                <p className="text-xs text-emerald-800 dark:text-emerald-200 mt-1 max-w-2xl">
+   249→                  <span className="font-semibold">All rules set on this page cut across ALL enabled platforms.</span>{" "}
+   250→                  KYC, KYB, device, settlement and risk rules apply uniformly — there is no per-platform override.
+   251→                </p>
+   252→
+   253→                <div className="flex flex-wrap gap-1.5 mt-3">
+   254→                  {PLATFORM_ORDER.map((key) => {
+   255→                    const enabled = country.platforms?.[key] === true;
+   256→                    const label = PLATFORM_LABELS[key].label;
+   257→                    return (
+   258→                      <TooltipProvider key={key} delayDuration={150}>
+   259→                        <Tooltip>
+   260→                          <TooltipTrigger asChild>
+   261→                            <span
+   262→                              className={
+   263→                                enabled
+   264→                                  ? "inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white dark:bg-emerald-900/40 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:text-emerald-200"
+   265→                                  : "inline-flex items-center gap-1 rounded-md border border-muted bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground line-through"
+   266→                              }
+   267→                            >
+   268→                              {enabled ? <Check className="size-3" /> : <X className="size-3" />}
+   269→                              {label}
+   270→                            </span>
+   271→                          </TooltipTrigger>
+   272→                          <TooltipContent side="top" className="max-w-xs">
+   273→                            <div className="text-[11px] font-semibold">{PLATFORM_LABELS[key].label}</div>
+   274→                            <div className="text-[11px] text-muted-foreground mt-0.5">{PLATFORM_LABELS[key].description}</div>
+   275→                            <div className="text-[11px] mt-1 font-medium">
+   276→                              {enabled ? "Enabled — rules apply" : "Disabled"}
+   277→                            </div>
+   278→                          </TooltipContent>
+   279→                        </Tooltip>
+   280→                      </TooltipProvider>
+   281→                    );
+   282→                  })}
+   283→                </div>
+   284→              </div>
+   285→              {isSuperAdmin && (
+   286→                <div className="shrink-0">
+   287→                  <EditPlatformsButton country={country} />
+   288→                </div>
+   289→              )}
+   290→            </div>
+   291→          </CardContent>
+   292→        </Card>
+   293→
+   294→        {/* Country dashboard KPIs */}
+   295→        <div>
+   296→          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+   297→            Country Dashboard
+   298→          </h2>
+   299→          <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+   300→            <StatCard
+   301→              label="Active Customers"
+   302→              value={formatCompact(realConsumerCount)}
+   303→              hint={`${formatNumber(country.activeCustomers)} (recorded)`}
+   304→              icon={Users}
+   305→              tone="info"
+   306→            />
+   307→            <StatCard
+   308→              label="Active Merchants"
+   309→              value={formatCompact(realMerchantCount)}
+   310→              hint={`${formatNumber(country.activeMerchants)} (recorded)`}
+   311→              icon={Building2}
+   312→            />
+   313→            <StatCard label="Pending KYC" value={country.pendingKyc} icon={ShieldCheck} tone={country.pendingKyc > 0 ? "warning" : "default"} />
+   314→            <StatCard label="Pending KYB" value={country.pendingKyb} icon={Building2} tone={country.pendingKyb > 0 ? "warning" : "default"} />
+   315→            <StatCard label="High-Risk Alerts" value={country.highRiskAlerts} icon={AlertTriangle} tone={country.highRiskAlerts > 0 ? "danger" : "default"} />
+   316→          </div>
+   317→          <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-5 mt-3">
+   318→            <StatCard label="Active Terminals" value={formatNumber(country.activeTerminals)} icon={Smartphone} />
+   319→            <StatCard label="Active Phone POS" value={formatNumber(country.activePhonePos)} icon={Smartphone} />
+   320→            <StatCard label="Today Tx Volume" value={formatCurrency(country.todayTxVolume, country.currency)} icon={Wallet} tone="info" />
+   321→            <StatCard label="Today Approved" value={formatCompact(country.todayApproved)} icon={Check} tone="success" />
+   322→            <StatCard label="Today Declined" value={formatCompact(country.todayDeclined)} icon={X} tone={country.todayDeclined > 0 ? "danger" : "default"} />
+   323→          </div>
+   324→          <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-5 mt-3">
+   325→            <StatCard label="Pending Settlements" value={country.pendingSettlements} icon={Clock} tone={country.pendingSettlements > 0 ? "warning" : "default"} />
+   326→            <StatCard label="Held Settlements" value={country.heldSettlements} icon={AlertTriangle} tone={country.heldSettlements > 0 ? "danger" : "default"} />
+   327→            <StatCard label="Open Disputes" value={country.openDisputes} icon={Scale} tone={country.openDisputes > 0 ? "warning" : "default"} />
+   328→            <StatCard label="Open Tickets" value={country.openTickets} icon={Headphones} tone={country.openTickets > 0 ? "warning" : "default"} />
+   329→            <StatCard label="Compliance Alerts" value={country.complianceAlerts} icon={AlertTriangle} tone={country.complianceAlerts > 0 ? "danger" : "default"} />
+   330→          </div>
+   331→        </div>
+   332→
+   333→        <Separator />
+   334→
+   335→        {/* Configuration tabs */}
+   336→        <div>
+   337→          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+   338→            Configuration
+   339→          </h2>
+   340→          <Tabs defaultValue="kycRules" className="w-full">
+   341→            <TabsList className="flex flex-wrap h-auto">
+   342→              {TAB_META.map((t) => (
+   343→                <TabsTrigger key={t.key} value={t.key} className="gap-1">
+   344→                  <t.icon className="size-3.5" />
+   345→                  {t.label}
+   346→                </TabsTrigger>
+   347→              ))}
+   348→              <TabsTrigger value="entities" className="gap-1">
+   349→                <Store className="size-3.5" />
+   350→                Merchants &amp; Consumers
+   351→              </TabsTrigger>
+   352→            </TabsList>
+   353→            {TAB_META.map((t) => (
+   354→              <TabsContent key={t.key} value={t.key}>
+   355→                <RulesTab
+   356→                  country={country}
+   357→                  ruleKey={t.key}
+   358→                  canEdit={isSuperAdmin}
+   359→                />
+   360→              </TabsContent>
+   361→            ))}
+   362→            <TabsContent value="entities">
+   363→              <EntitiesTab
+   364→                country={country}
+   365→                merchants={countryMerchants}
+   366→                consumers={countryConsumers}
+   367→              />
+   368→            </TabsContent>
+   369→          </Tabs>
+   370→        </div>
+   371→      </ViewContainer>
+   372→    </>
+   373→  );
+   374→}
+   375→
+   376→/* --------------------------- Platform Scope edit -------------------------- */
+   377→
+   378→function EditPlatformsButton({ country }: { country: CountryConfig }) {
+   379→  const [open, setOpen] = useState(false);
+   380→  return (
+   381→    <>
+   382→      <Button
+   383→        variant="outline"
+   384→        size="sm"
+   385→        onClick={() => setOpen(true)}
+   386→        className="border-emerald-400 text-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+   387→      >
+   388→        <Pencil className="size-3.5 mr-1" /> Edit Platforms
+   389→      </Button>
+   390→      <EditPlatformsDialog
+   391→        open={open}
+   392→        onOpenChange={setOpen}
+   393→        country={country}
+   394→      />
+   395→    </>
+   396→  );
+   397→}
+   398→
+   399→function EditPlatformsDialog({
+   400→  open,
+   401→  onOpenChange,
+   402→  country,
+   403→}: {
+   404→  open: boolean;
+   405→  onOpenChange: (open: boolean) => void;
+   406→  country: CountryConfig;
+   407→}) {
+   408→  const { staff } = useAuth();
+   409→  const current: PlatformConfig = country.platforms ?? ({} as PlatformConfig);
+   410→  const [draft, setDraft] = useState<PlatformConfig>(current);
+   411→  const [saving, setSaving] = useState(false);
+   412→
+   413→  // Reset draft whenever the dialog opens
+   414→  const handleOpenChange = (next: boolean) => {
+   415→    if (next) {
+   416→      setDraft({ ...current });
+   417→    }
+   418→    onOpenChange(next);
+   419→  };
+   420→
+   421→  const toggle = (key: PlatformKey, value: boolean) => {
+   422→    setDraft((prev) => ({ ...prev, [key]: value }));
+   423→  };
+   424→
+   425→  const enabledCount = PLATFORM_ORDER.filter((k) => draft[k] === true).length;
+   426→
+   427→  const handleSave = async () => {
+   428→    if (enabledCount === 0) {
+   429→      toast.error("At least one platform must be enabled for a country.");
+   430→      return;
+   431→    }
+   432→    setSaving(true);
+   433→    try {
+   434→      const before = JSON.stringify(current);
+   435→      const after = JSON.stringify(draft);
+   436→      await adminData.updateCountry(country.id, {
+   437→        platforms: draft,
+   438→        updatedAt: Date.now(),
+   439→      });
+   440→      if (staff) {
+   441→        logAudit(
+   442→          {
+   443→            staffId: staff.id,
+   444→            staffName: `${staff.firstName} ${staff.lastName}`,
+   445→            department: staff.departmentId,
+   446→            role: staff.roleId,
+   447→          },
+   448→          "country.change_platforms",
+   449→          "country",
+   450→          country.id,
+   451→          {
+   452→            countryCode: country.countryCode,
+   453→            beforeValue: before,
+   454→            afterValue: after,
+   455→          },
+   456→        );
+   457→      }
+   458→      toast.success(`Platforms updated for ${country.countryName}.`, {
+   459→        description: `${enabledCount} platform${enabledCount === 1 ? "" : "s"} now active.`,
+   460→      });
+   461→      onOpenChange(false);
+   462→    } catch (e) {
+   463→      toast.error("Failed to update platforms", {
+   464→        description: e instanceof Error ? e.message : String(e),
+   465→      });
+   466→    } finally {
+   467→      setSaving(false);
+   468→    }
+   469→  };
+   470→
+   471→  return (
+   472→    <Dialog open={open} onOpenChange={handleOpenChange}>
+   473→      <DialogContent className="sm:max-w-lg">
+   474→        <DialogHeader>
+   475→          <DialogTitle>Edit platform scope — {country.countryName}</DialogTitle>
+   476→          <DialogDescription>
+   477→            Toggle which Faya platforms are enabled for this country. All rules set on this page
+   478→            (KYC, KYB, device, settlement, risk) apply uniformly across every enabled platform.
+   479→          </DialogDescription>
+   480→        </DialogHeader>
+   481→
+   482→        <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto pr-1">
+   483→          {PLATFORM_ORDER.map((key) => {
+   484→            const meta = PLATFORM_LABELS[key];
+   485→            const enabled = draft[key] === true;
+   486→            return (
+   487→              <div
+   488→                key={key}
+   489→                className="flex items-start justify-between gap-3 rounded-md border p-3"
+   490→              >
+   491→                <div className="min-w-0">
+   492→                  <div className="text-sm font-medium flex items-center gap-2">
+   493→                    {meta.label}
+   494→                    {enabled ? (
+   495→                      <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 hover:bg-emerald-100">
+   496→                        Enabled
+   497→                      </Badge>
+   498→                    ) : (
+   499→                      <Badge variant="outline" className="text-muted-foreground">
+   500→                        Disabled
+   501→                      </Badge>
+   502→                    )}
+   503→                  </div>
+   504→                  <div className="text-xs text-muted-foreground mt-0.5">{meta.description}</div>
+   505→                </div>
+   506→                <Switch
+   507→                  checked={enabled}
+   508→                  onCheckedChange={(v) => toggle(key, v)}
+   509→                  aria-label={`Toggle ${meta.label}`}
+   510→                  className="data-[state=checked]:bg-emerald-600"
+   511→                />
+   512→              </div>
+   513→            );
+   514→          })}
+   515→        </div>
+   516→
+   517→        <DialogFooter>
+   518→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+   519→            Cancel
+   520→          </Button>
+   521→          <Button
+   522→            onClick={handleSave}
+   523→            disabled={saving || enabledCount === 0}
+   524→            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   525→          >
+   526→            <Save className="size-4 mr-1" />
+   527→            {saving ? "Saving…" : `Save (${enabledCount} active)`}
+   528→          </Button>
+   529→        </DialogFooter>
+   530→      </DialogContent>
+   531→    </Dialog>
+   532→  );
+   533→}
+   534→
+   535→/* ------------------------------- Rules tab ------------------------------- */
+   536→
+   537→function RulesTab({
+   538→  country,
+   539→  ruleKey,
+   540→  canEdit,
+   541→}: {
+   542→  country: CountryConfig;
+   543→  ruleKey: RuleKey;
+   544→  canEdit: boolean;
+   545→}) {
+   546→  const rules = (country[ruleKey] ?? {}) as Record<string, unknown>;
+   547→  const [editOpen, setEditOpen] = useState(false);
+   548→
+   549→  const entries = Object.entries(rules);
+   550→  const tabMeta = TAB_META.find((t) => t.key === ruleKey)!;
+   551→
+   552→  return (
+   553→    <Card>
+   554→      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+   555→        <CardTitle className="text-sm flex items-center gap-2">
+   556→          <tabMeta.icon className="size-4 text-emerald-600" />
+   557→          {tabMeta.label}
+   558→        </CardTitle>
+   559→        {canEdit && (
+   560→          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+   561→            <Pencil className="size-3.5 mr-1" /> Edit Rules
+   562→          </Button>
+   563→        )}
+   564→      </CardHeader>
+   565→      <CardContent>
+   566→        {entries.length === 0 ? (
+   567→          <EmptyState
+   568→            icon={tabMeta.icon}
+   569→            title="No rules configured yet"
+   570→            description={canEdit ? "Click Edit Rules to define this rule set as JSON." : "An admin has not configured this rule set yet."}
+   571→          />
+   572→        ) : (
+   573→          <div className="border rounded-md max-h-[28rem] overflow-y-auto">
+   574→            <Table>
+   575→              <TableHeader>
+   576→                <TableRow>
+   577→                  <TableHead className="w-[40%]">Key</TableHead>
+   578→                  <TableHead>Value</TableHead>
+   579→                </TableRow>
+   580→              </TableHeader>
+   581→              <TableBody>
+   582→                {entries.map(([k, v]) => (
+   583→                  <TableRow key={k}>
+   584→                    <TableCell className="font-medium align-top">{k}</TableCell>
+   585→                    <TableCell className="text-muted-foreground">{formatRuleValue(v)}</TableCell>
+   586→                  </TableRow>
+   587→                ))}
+   588→              </TableBody>
+   589→            </Table>
+   590→          </div>
+   591→        )}
+   592→      </CardContent>
+   593→
+   594→      {canEdit && (
+   595→        <EditRulesDialog
+   596→          open={editOpen}
+   597→          onOpenChange={setEditOpen}
+   598→          country={country}
+   599→          ruleKey={ruleKey}
+   600→          label={tabMeta.label}
+   601→        />
+   602→      )}
+   603→    </Card>
+   604→  );
+   605→}
+   606→
+   607→/** Render a rule value in a human-friendly way. */
+   608→function formatRuleValue(value: unknown): string {
+   609→  if (value === null || value === undefined) return "—";
+   610→  if (typeof value === "boolean") return value ? "Required" : "Not required";
+   611→  if (Array.isArray(value)) {
+   612→    if (value.length === 0) return "None";
+   613→    return value.map((v) => formatRuleValue(v)).join(", ");
+   614→  }
+   615→  if (typeof value === "object") {
+   616→    try {
+   617→      return JSON.stringify(value);
+   618→    } catch {
+   619→      return String(value);
+   620→    }
+   621→  }
+   622→  return String(value);
+   623→}
+   624→
+   625→/* --------------------------- Edit Rules dialog --------------------------- */
+   626→
+   627→function EditRulesDialog({
+   628→  open,
+   629→  onOpenChange,
+   630→  country,
+   631→  ruleKey,
+   632→  label,
+   633→}: {
+   634→  open: boolean;
+   635→  onOpenChange: (open: boolean) => void;
+   636→  country: CountryConfig;
+   637→  ruleKey: RuleKey;
+   638→  label: string;
+   639→}) {
+   640→  const { staff } = useAuth();
+   641→  const current = (country[ruleKey] ?? {}) as Record<string, unknown>;
+   642→  const [text, setText] = useState<string>(JSON.stringify(current, null, 2));
+   643→  const [saving, setSaving] = useState(false);
+   644→
+   645→  // Reset text whenever the dialog opens
+   646→  const handleOpenChange = (next: boolean) => {
+   647→    if (next) {
+   648→      setText(JSON.stringify(current, null, 2));
+   649→    }
+   650→    onOpenChange(next);
+   651→  };
+   652→
+   653→  const handleSave = async () => {
+   654→    let parsed: unknown;
+   655→    try {
+   656→      parsed = JSON.parse(text);
+   657→    } catch (e) {
+   658→      toast.error("Invalid JSON", { description: e instanceof Error ? e.message : String(e) });
+   659→      return;
+   660→    }
+   661→    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+   662→      toast.error("Rules must be a JSON object (key/value pairs).");
+   663→      return;
+   664→    }
+   665→
+   666→    setSaving(true);
+   667→    try {
+   668→      const before = JSON.stringify(current);
+   669→      const after = JSON.stringify(parsed);
+   670→      await adminData.updateCountry(country.id, { [ruleKey]: parsed, updatedAt: Date.now() } as Partial<CountryConfig>);
+   671→      if (staff) {
+   672→        logAudit(
+   673→          {
+   674→            staffId: staff.id,
+   675→            staffName: `${staff.firstName} ${staff.lastName}`,
+   676→            department: staff.departmentId,
+   677→            role: staff.roleId,
+   678→          },
+   679→          `country.change_${ruleKey}`,
+   680→          "country",
+   681→          country.id,
+   682→          {
+   683→            countryCode: country.countryCode,
+   684→            beforeValue: before,
+   685→            afterValue: after,
+   686→          },
+   687→        );
+   688→      }
+   689→      toast.success(`${label} updated for ${country.countryName}.`);
+   690→      onOpenChange(false);
+   691→    } catch (e) {
+   692→      toast.error("Failed to save rules", { description: e instanceof Error ? e.message : String(e) });
+   693→    } finally {
+   694→      setSaving(false);
+   695→    }
+   696→  };
+   697→
+   698→  return (
+   699→    <Dialog open={open} onOpenChange={handleOpenChange}>
+   700→      <DialogContent className="sm:max-w-2xl">
+   701→        <DialogHeader>
+   702→          <DialogTitle>Edit {label}</DialogTitle>
+   703→          <DialogDescription>
+   704→            Edit the rule set for {country.countryName} ({country.countryCode}) as JSON. Save will validate that the value is a JSON object.
+   705→          </DialogDescription>
+   706→        </DialogHeader>
+   707→
+   708→        <div className="space-y-2">
+   709→          <Label htmlFor={`rules-${ruleKey}`}>JSON</Label>
+   710→          <Textarea
+   711→            id={`rules-${ruleKey}`}
+   712→            value={text}
+   713→            onChange={(e) => setText(e.target.value)}
+   714→            className="font-mono text-xs min-h-[18rem] max-h-[28rem]"
+   715→            spellCheck={false}
+   716→          />
+   717→          <p className="text-[11px] text-muted-foreground">
+   718→            Tip: arrays should be lists of strings/numbers; booleans render as &quot;Required&quot;/&quot;Not required&quot; in the table.
+   719→          </p>
+   720→        </div>
+   721→
+   722→        <DialogFooter>
+   723→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+   724→            Cancel
+   725→          </Button>
+   726→          <Button onClick={handleSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+   727→            <Save className="size-4 mr-1" /> {saving ? "Saving…" : "Save rules"}
+   728→          </Button>
+   729→        </DialogFooter>
+   730→      </DialogContent>
+   731→    </Dialog>
+   732→  );
+   733→}
+   734→
+   735→/* ---------------------- Merchants & Consumers tab ------------------------ */
+   736→
+   737→function EntitiesTab({
+   738→  country,
+   739→  merchants,
+   740→  consumers,
+   741→}: {
+   742→  country: CountryConfig;
+   743→  merchants: Merchant[];
+   744→  consumers: Consumer[];
+   745→}) {
+   746→  return (
+   747→    <div className="space-y-3">
+   748→      <div className="grid gap-3 lg:grid-cols-2">
+   749→        <MerchantsSummaryCard country={country} merchants={merchants} />
+   750→        <ConsumersSummaryCard country={country} consumers={consumers} />
+   751→      </div>
+   752→    </div>
+   753→  );
+   754→}
+   755→
+   756→function MerchantsSummaryCard({
+   757→  country,
+   758→  merchants,
+   759→}: {
+   760→  country: CountryConfig;
+   761→  merchants: Merchant[];
+   762→}) {
+   763→  return (
+   764→    <Card>
+   765→      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+   766→        <CardTitle className="text-sm flex items-center gap-2">
+   767→          <Store className="size-4 text-emerald-600" />
+   768→          Merchants on {country.countryName}
+   769→        </CardTitle>
+   770→        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 hover:bg-emerald-100">
+   771→          {merchants.length} total
+   772→        </Badge>
+   773→      </CardHeader>
+   774→      <CardContent>
+   775→        {merchants.length === 0 ? (
+   776→          <EmptyState
+   777→            icon={Store}
+   778→            title="No merchants registered"
+   779→            description="Merchants in this country will appear here once they sign up via the Merchant App."
+   780→          />
+   781→        ) : (
+   782→          <ul className="space-y-2 max-h-96 overflow-y-auto pr-1">
+   783→            {merchants.map((m) => {
+   784→              const statusBd = statusBadge("risk", m.riskCategory);
+   785→              const kybBd = statusBadge("kyb", m.kybStatus);
+   786→              const merchantStatusStyle = MERCHANT_STATUS_STYLES[m.status] ?? {
+   787→                label: m.status,
+   788→                className: "bg-gray-100 text-gray-800",
+   789→              };
+   790→              return (
+   791→                <li
+   792→                  key={m.id}
+   793→                  className="flex items-start gap-3 py-2 border-b last:border-0"
+   794→                >
+   795→                  <div className="size-8 rounded-md bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+   796→                    <Building2 className="size-4" />
+   797→                  </div>
+   798→                  <div className="min-w-0 flex-1">
+   799→                    <div className="flex items-center gap-2 flex-wrap">
+   800→                      <span className="text-sm font-medium truncate">{m.tradingName}</span>
+   801→                      <Badge variant="secondary" className={`text-[10px] ${merchantStatusStyle.className}`}>
+   802→                        {merchantStatusStyle.label}
+   803→                      </Badge>
+   804→                    </div>
+   805→                    <div className="text-xs text-muted-foreground mt-0.5 truncate">
+   806→                      {m.merchantCode} · {m.businessType} · {m.city}
+   807→                    </div>
+   808→                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+   809→                      <Badge variant="outline" className={`text-[10px] ${kybBd.className}`}>
+   810→                        KYB: {kybBd.label}
+   811→                      </Badge>
+   812→                      <Badge variant="outline" className={`text-[10px] ${statusBd.className}`}>
+   813→                        Risk: {statusBd.label}
+   814→                      </Badge>
+   815→                      {m.platforms.length > 0 && (
+   816→                        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+   817→                          {m.platforms.length} platform{m.platforms.length === 1 ? "" : "s"}
+   818→                        </Badge>
+   819→                      )}
+   820→                    </div>
+   821→                  </div>
+   822→                </li>
+   823→              );
+   824→            })}
+   825→          </ul>
+   826→        )}
+   827→        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 p-2.5 flex items-start gap-2">
+   828→          <Info className="size-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+   829→          <p className="text-[11px] text-amber-800 dark:text-amber-200">
+   830→            Merchants use the separate <span className="font-medium">Merchant App</span>. Manage their KYB and
+   831→            restrictions via the <span className="font-medium">Compliance</span> and <span className="font-medium">Risk</span> views.
+   832→          </p>
+   833→        </div>
+   834→      </CardContent>
+   835→    </Card>
+   836→  );
+   837→}
+   838→
+   839→function ConsumersSummaryCard({
+   840→  country,
+   841→  consumers,
+   842→}: {
+   843→  country: CountryConfig;
+   844→  consumers: Consumer[];
+   845→}) {
+   846→  return (
+   847→    <Card>
+   848→      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+   849→        <CardTitle className="text-sm flex items-center gap-2">
+   850→          <UserCircle className="size-4 text-emerald-600" />
+   851→          Consumers on {country.countryName}
+   852→        </CardTitle>
+   853→        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 hover:bg-emerald-100">
+   854→          {consumers.length} total
+   855→        </Badge>
+   856→      </CardHeader>
+   857→      <CardContent>
+   858→        {consumers.length === 0 ? (
+   859→          <EmptyState
+   860→            icon={UserCircle}
+   861→            title="No consumers registered"
+   862→            description="Consumers in this country will appear here once they sign up via the Consumer App."
+   863→          />
+   864→        ) : (
+   865→          <ul className="space-y-2 max-h-96 overflow-y-auto pr-1">
+   866→            {consumers.map((c) => {
+   867→              const kycBd = statusBadge("kyc", c.kycStatus);
+   868→              const consumerStatusStyle = CONSUMER_STATUS_STYLES[c.status] ?? {
+   869→                label: c.status,
+   870→                className: "bg-gray-100 text-gray-800",
+   871→              };
+   872→              const riskTone =
+   873→                c.riskScore >= 80
+   874→                  ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+   875→                  : c.riskScore >= 50
+   876→                    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+   877→                    : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300";
+   878→              return (
+   879→                <li
+   880→                  key={c.id}
+   881→                  className="flex items-start gap-3 py-2 border-b last:border-0"
+   882→                >
+   883→                  <div className="size-8 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+   884→                    <Users className="size-4" />
+   885→                  </div>
+   886→                  <div className="min-w-0 flex-1">
+   887→                    <div className="flex items-center gap-2 flex-wrap">
+   888→                      <span className="text-sm font-medium truncate">
+   889→                        {c.firstName} {c.lastName}
+   890→                      </span>
+   891→                      <Badge variant="secondary" className={`text-[10px] ${consumerStatusStyle.className}`}>
+   892→                        {consumerStatusStyle.label}
+   893→                      </Badge>
+   894→                    </div>
+   895→                    <div className="text-xs text-muted-foreground mt-0.5 truncate">
+   896→                      {c.consumerCode} · {c.nationality} · {c.email}
+   897→                    </div>
+   898→                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+   899→                      <Badge variant="outline" className={`text-[10px] ${kycBd.className}`}>
+   900→                        KYC: {kycBd.label}
+   901→                      </Badge>
+   902→                      <Badge variant="outline" className={`text-[10px] ${riskTone}`}>
+   903→                        Risk: {c.riskScore}
+   904→                      </Badge>
+   905→                      <Badge variant="outline" className="text-[10px] text-muted-foreground">
+   906→                        {c.kycTier.replace("_", " ").toUpperCase()}
+   907→                      </Badge>
+   908→                    </div>
+   909→                  </div>
+   910→                </li>
+   911→              );
+   912→            })}
+   913→          </ul>
+   914→        )}
+   915→        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 p-2.5 flex items-start gap-2">
+   916→          <Info className="size-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+   917→          <p className="text-[11px] text-amber-800 dark:text-amber-200">
+   918→            Consumers use the separate <span className="font-medium">Consumer App</span>. Manage their KYC and
+   919→            restrictions via the <span className="font-medium">Compliance</span> and <span className="font-medium">Risk</span> views.
+   920→          </p>
+   921→        </div>
+   922→      </CardContent>
+   923→    </Card>
+   924→  );
+   925→}
+   926→
+   927→/* ----------------------------- Status changer ---------------------------- */
+   928→
+   929→function StatusChanger({ country }: { country: CountryConfig }) {
+   930→  const { staff } = useAuth();
+   931→  const [pending, setPending] = useState<CountryStatus | null>(null);
+   932→  const [saving, setSaving] = useState(false);
+   933→
+   934→  const handleConfirm = async () => {
+   935→    if (!pending || pending === country.status) {
+   936→      setPending(null);
+   937→      return;
+   938→    }
+   939→    setSaving(true);
+   940→    try {
+   941→      const before = country.status;
+   942→      await adminData.updateCountry(country.id, { status: pending, updatedAt: Date.now() });
+   943→      if (staff) {
+   944→        logAudit(
+   945→          {
+   946→            staffId: staff.id,
+   947→            staffName: `${staff.firstName} ${staff.lastName}`,
+   948→            department: staff.departmentId,
+   949→            role: staff.roleId,
+   950→          },
+   951→          "country.change_status",
+   952→          "country",
+   953→          country.id,
+   954→          {
+   955→            countryCode: country.countryCode,
+   956→            beforeValue: before,
+   957→            afterValue: pending,
+   958→          },
+   959→        );
+   960→      }
+   961→      toast.success(`${country.countryName} status changed to ${statusBadge("country", pending).label}.`);
+   962→      setPending(null);
+   963→    } catch (e) {
+   964→      toast.error("Failed to change status", { description: e instanceof Error ? e.message : String(e) });
+   965→    } finally {
+   966→      setSaving(false);
+   967→    }
+   968→  };
+   969→
+   970→  return (
+   971→    <>
+   972→      <Select
+   973→        value={country.status}
+   974→        onValueChange={(v) => {
+   975→          const next = v as CountryStatus;
+   976→          if (next === country.status) return;
+   977→          setPending(next);
+   978→        }}
+   979→        disabled={saving}
+   980→      >
+   981→        <SelectTrigger className="h-8 w-[180px] text-xs" aria-label="Change country status">
+   982→          <SelectValue />
+   983→        </SelectTrigger>
+   984→        <SelectContent>
+   985→          {ALL_COUNTRY_STATUSES.map((s) => (
+   986→            <SelectItem key={s} value={s}>
+   987→              {statusBadge("country", s).label}
+   988→            </SelectItem>
+   989→          ))}
+   990→        </SelectContent>
+   991→      </Select>
+   992→
+   993→      <AlertDialog open={pending !== null} onOpenChange={(o) => { if (!o) setPending(null); }}>
+   994→        <AlertDialogContent>
+   995→          <AlertDialogHeader>
+   996→            <AlertDialogTitle>Change country status?</AlertDialogTitle>
+   997→            <AlertDialogDescription>
+   998→              {pending && (
+   999→                <>
+  1000→                  This will change <span className="font-medium">{country.countryName}</span> ({country.countryCode})
+  1001→                  {" "}from <span className="font-medium">{statusBadge("country", country.status).label}</span>
+  1002→                  {" "}to <span className="font-medium">{statusBadge("country", pending).label}</span>. This action will be recorded in the audit log.
+  1003→                </>
+  1004→              )}
+  1005→            </AlertDialogDescription>
+  1006→          </AlertDialogHeader>
+  1007→          <AlertDialogFooter>
+  1008→            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+  1009→            <AlertDialogAction
+  1010→              onClick={(e) => {
+  1011→                e.preventDefault();
+  1012→                void handleConfirm();
+  1013→              }}
+  1014→              disabled={saving}
+  1015→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1016→            >
+  1017→              {saving ? "Saving…" : "Confirm change"}
+  1018→            </AlertDialogAction>
+  1019→          </AlertDialogFooter>
+  1020→        </AlertDialogContent>
+  1021→      </AlertDialog>
+  1022→    </>
+  1023→  );
+  1024→}
+  1025→
+  1026→/* -------------------- Inline status style tables ------------------------- */
+  1027→
+  1028→const MERCHANT_STATUS_STYLES: Record<string, { label: string; className: string }> = {
+  1029→  onboarding: { label: "Onboarding", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  1030→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  1031→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  1032→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  1033→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+  1034→};
+  1035→
+  1036→const CONSUMER_STATUS_STYLES: Record<string, { label: string; className: string }> = {
+  1037→  pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  1038→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  1039→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  1040→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+  1041→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+  1042→};
+  1043→

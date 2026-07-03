@@ -190,7 +190,9 @@ export function PortalShell({
                   {items.map((item) => {
                     const Icon = item.icon;
                     const active = view === item.view ||
-                      (item.view === "countries" && view === "country_detail");
+                      (item.view === "countries" && view === "country_detail") ||
+                      (item.view === "users" && view === "user_detail") ||
+                      (item.view === "merchants" && view === "merchant_detail");
                     const badge =
                       item.view === "approvals"
                         ? pendingApprovalsCount

@@ -1,0 +1,698 @@
+  2300→                    className="h-7 text-[11px]"
+  2301→                    onClick={() => viewDetails(s)}
+  2302→                  >
+  2303→                    <Eye className="size-3 mr-1" /> Details
+  2304→                  </Button>
+  2305→                </div>
+  2306→              </TableCell>
+  2307→            </TableRow>
+  2308→          );
+  2309→        })}
+  2310→      </TableBody>
+  2311→    </ScrollTable>
+  2312→  );
+  2313→}
+  2314→
+  2315→/* ============================ TAB: Disputes ============================ */
+  2316→
+  2317→function DisputesTab({ items }: { items: Dispute[] }) {
+  2318→  const { staff } = useAuth();
+  2319→
+  2320→  function actor() {
+  2321→    if (!staff) return null;
+  2322→    return {
+  2323→      staffId: staff.id,
+  2324→      staffName: `${staff.firstName} ${staff.lastName}`,
+  2325→      department: staff.departmentId,
+  2326→      role: staff.roleId,
+  2327→    };
+  2328→  }
+  2329→
+  2330→  function requestEvidence(d: Dispute) {
+  2331→    const a = actor();
+  2332→    if (!a) return;
+  2333→    adminData.updateDispute(d.id, { status: "awaiting_evidence" });
+  2334→    logAudit(a, "dispute.request_evidence", "dispute", d.id, {
+  2335→      countryCode: d.countryCode,
+  2336→      beforeValue: d.status,
+  2337→      afterValue: "awaiting_evidence",
+  2338→    });
+  2339→    toast.success(`Evidence requested: ${d.id}`, {
+  2340→      description: `${d.customerName} · ${formatCurrency(d.amount, d.currency)}`,
+  2341→    });
+  2342→  }
+  2343→
+  2344→  function updateStatus(d: Dispute) {
+  2345→    const a = actor();
+  2346→    if (!a) return;
+  2347→    const nextStatus: Dispute["status"] =
+  2348→      d.status === "new"
+  2349→        ? "awaiting_evidence"
+  2350→        : d.status === "awaiting_evidence"
+  2351→          ? "under_review"
+  2352→          : d.status === "evidence_submitted"
+  2353→            ? "under_review"
+  2354→            : d.status === "under_review"
+  2355→              ? "won"
+  2356→              : d.status;
+  2357→    adminData.updateDispute(d.id, { status: nextStatus });
+  2358→    logAudit(a, "dispute.update_status", "dispute", d.id, {
+  2359→      countryCode: d.countryCode,
+  2360→      beforeValue: d.status,
+  2361→      afterValue: nextStatus,
+  2362→    });
+  2363→    toast.success(`Dispute updated: ${d.id}`, {
+  2364→      description: `${d.status} → ${nextStatus.replace(/_/g, " ")}`,
+  2365→    });
+  2366→  }
+  2367→
+  2368→  if (items.length === 0) return <TabEmptyState icon={Scale} label="disputes" />;
+  2369→
+  2370→  return (
+  2371→    <ScrollTable>
+  2372→      <TableHeader className="sticky top-0 z-10 bg-card">
+  2373→        <TableRow>
+  2374→          <TableHead className="pl-3">Dispute ID</TableHead>
+  2375→          <TableHead className="hidden md:table-cell">Customer</TableHead>
+  2376→          <TableHead className="text-right">Amount</TableHead>
+  2377→          <TableHead className="hidden md:table-cell">Reason</TableHead>
+  2378→          <TableHead>Status</TableHead>
+  2379→          <TableHead className="hidden lg:table-cell">Deadline</TableHead>
+  2380→          <TableHead className="text-right pr-3">Actions</TableHead>
+  2381→        </TableRow>
+  2382→      </TableHeader>
+  2383→      <TableBody>
+  2384→        {items.map((d) => {
+  2385→          const style = DISPUTE_STATUS_STYLES[d.status];
+  2386→          const breached = d.deadline < Date.now();
+  2387→          return (
+  2388→            <TableRow key={d.id}>
+  2389→              <TableCell className="pl-3 font-mono text-[11px]">{d.id}</TableCell>
+  2390→              <TableCell className="hidden md:table-cell text-xs">{d.customerName}</TableCell>
+  2391→              <TableCell className="text-right font-mono text-xs tabular-nums">
+  2392→                {formatCurrency(d.amount, d.currency)}
+  2393→              </TableCell>
+  2394→              <TableCell className="hidden md:table-cell text-[11px] max-w-[160px] truncate">
+  2395→                {d.reason}
+  2396→              </TableCell>
+  2397→              <TableCell>
+  2398→                <Badge variant="secondary" className={cn("text-[10px]", style.className)}>
+  2399→                  {style.label}
+  2400→                </Badge>
+  2401→              </TableCell>
+  2402→              <TableCell className="hidden lg:table-cell text-[11px]">
+  2403→                <span className={cn(breached && "text-red-600 dark:text-red-400 font-medium")}>
+  2404→                  {formatDate(d.deadline)}
+  2405→                </span>
+  2406→              </TableCell>
+  2407→              <TableCell className="text-right pr-3">
+  2408→                <div className="inline-flex gap-1">
+  2409→                  {(d.status === "new" || d.status === "under_review") && (
+  2410→                    <Button
+  2411→                      size="sm"
+  2412→                      variant="outline"
+  2413→                      className="h-7 text-[11px]"
+  2414→                      onClick={() => requestEvidence(d)}
+  2415→                    >
+  2416→                      <FileText className="size-3 mr-1" /> Request evidence
+  2417→                    </Button>
+  2418→                  )}
+  2419→                  <Button
+  2420→                    size="sm"
+  2421→                    variant="ghost"
+  2422→                    className="h-7 text-[11px]"
+  2423→                    onClick={() => updateStatus(d)}
+  2424→                  >
+  2425→                    <ArrowRightCircle className="size-3 mr-1" /> Advance
+  2426→                  </Button>
+  2427→                </div>
+  2428→              </TableCell>
+  2429→            </TableRow>
+  2430→          );
+  2431→        })}
+  2432→      </TableBody>
+  2433→    </ScrollTable>
+  2434→  );
+  2435→}
+  2436→
+  2437→/* ============================ TAB: Documents ============================ */
+  2438→
+  2439→function DocumentsTab({ items }: { items: UserDocument[] }) {
+  2440→  const { staff } = useAuth();
+  2441→
+  2442→  function actor() {
+  2443→    if (!staff) return null;
+  2444→    return {
+  2445→      staffId: staff.id,
+  2446→      staffName: `${staff.firstName} ${staff.lastName}`,
+  2447→      department: staff.departmentId,
+  2448→      role: staff.roleId,
+  2449→    };
+  2450→  }
+  2451→
+  2452→  function approve(d: UserDocument) {
+  2453→    const a = actor();
+  2454→    if (!a) return;
+  2455→    adminData.updateDocument(d.id, {
+  2456→      status: "approved",
+  2457→      reviewedBy: a.staffId,
+  2458→      reviewedAt: Date.now(),
+  2459→    });
+  2460→    logAudit(a, "document.approve", "document", d.id, {
+  2461→      countryCode: d.countryCode,
+  2462→      beforeValue: d.status,
+  2463→      afterValue: "approved",
+  2464→    });
+  2465→    toast.success(`Document approved: ${d.fileName}`, {
+  2466→      description: `${d.documentType.replace(/_/g, " ")}`,
+  2467→    });
+  2468→  }
+  2469→
+  2470→  function reject(d: UserDocument) {
+  2471→    const a = actor();
+  2472→    if (!a) return;
+  2473→    adminData.updateDocument(d.id, {
+  2474→      status: "rejected",
+  2475→      reviewedBy: a.staffId,
+  2476→      reviewedAt: Date.now(),
+  2477→    });
+  2478→    logAudit(a, "document.reject", "document", d.id, {
+  2479→      countryCode: d.countryCode,
+  2480→      beforeValue: d.status,
+  2481→      afterValue: "rejected",
+  2482→    });
+  2483→    toast.success(`Document rejected: ${d.fileName}`, {
+  2484→      description: `${d.documentType.replace(/_/g, " ")}`,
+  2485→    });
+  2486→  }
+  2487→
+  2488→  function requestReplacement(d: UserDocument) {
+  2489→    const a = actor();
+  2490→    if (!a) return;
+  2491→    adminData.updateDocument(d.id, {
+  2492→      status: "replacement_requested",
+  2493→      reviewedBy: a.staffId,
+  2494→      reviewedAt: Date.now(),
+  2495→    });
+  2496→    logAudit(a, "document.request_replacement", "document", d.id, {
+  2497→      countryCode: d.countryCode,
+  2498→      beforeValue: d.status,
+  2499→      afterValue: "replacement_requested",
+  2500→    });
+  2501→    toast.success(`Replacement requested: ${d.fileName}`, {
+  2502→      description: "Merchant will be asked to upload a new copy.",
+  2503→    });
+  2504→  }
+  2505→
+  2506→  if (items.length === 0) return <TabEmptyState icon={FolderOpen} label="documents" />;
+  2507→
+  2508→  return (
+  2509→    <ScrollTable>
+  2510→      <TableHeader className="sticky top-0 z-10 bg-card">
+  2511→        <TableRow>
+  2512→          <TableHead className="pl-3">Type</TableHead>
+  2513→          <TableHead>File Name</TableHead>
+  2514→          <TableHead>Status</TableHead>
+  2515→          <TableHead className="hidden md:table-cell">Uploaded</TableHead>
+  2516→          <TableHead className="hidden lg:table-cell">Reviewed By</TableHead>
+  2517→          <TableHead className="text-right pr-3">Actions</TableHead>
+  2518→        </TableRow>
+  2519→      </TableHeader>
+  2520→      <TableBody>
+  2521→        {items.map((d) => {
+  2522→          const style = DOCUMENT_STATUS_STYLES[d.status];
+  2523→          return (
+  2524→            <TableRow key={d.id}>
+  2525→              <TableCell className="pl-3 text-[11px] capitalize">
+  2526→                {d.documentType.replace(/_/g, " ")}
+  2527→              </TableCell>
+  2528→              <TableCell className="text-xs font-mono">{d.fileName}</TableCell>
+  2529→              <TableCell>
+  2530→                <Badge variant="secondary" className={cn("text-[10px]", style.className)}>
+  2531→                  {style.label}
+  2532→                </Badge>
+  2533→              </TableCell>
+  2534→              <TableCell className="hidden md:table-cell text-[11px] text-muted-foreground">
+  2535→                {timeAgo(d.uploadedAt)}
+  2536→              </TableCell>
+  2537→              <TableCell className="hidden lg:table-cell text-[11px] font-mono">
+  2538→                {d.reviewedBy ?? "—"}
+  2539→              </TableCell>
+  2540→              <TableCell className="text-right pr-3">
+  2541→                <div className="inline-flex gap-1">
+  2542→                  {d.status === "pending" && (
+  2543→                    <>
+  2544→                      <Button
+  2545→                        size="sm"
+  2546→                        variant="outline"
+  2547→                        className="h-7 text-[11px] border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
+  2548→                        onClick={() => approve(d)}
+  2549→                      >
+  2550→                        <CheckCircle2 className="size-3 mr-1" /> Approve
+  2551→                      </Button>
+  2552→                      <Button
+  2553→                        size="sm"
+  2554→                        variant="outline"
+  2555→                        className="h-7 text-[11px] border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/20"
+  2556→                        onClick={() => reject(d)}
+  2557→                      >
+  2558→                        <XCircle className="size-3 mr-1" /> Reject
+  2559→                      </Button>
+  2560→                    </>
+  2561→                  )}
+  2562→                  {d.status !== "replacement_requested" && (
+  2563→                    <Button
+  2564→                      size="sm"
+  2565→                      variant="ghost"
+  2566→                      className="h-7 text-[11px]"
+  2567→                      onClick={() => requestReplacement(d)}
+  2568→                    >
+  2569→                      <RefreshCw className="size-3 mr-1" /> Replace
+  2570→                    </Button>
+  2571→                  )}
+  2572→                </div>
+  2573→              </TableCell>
+  2574→            </TableRow>
+  2575→          );
+  2576→        })}
+  2577→      </TableBody>
+  2578→    </ScrollTable>
+  2579→  );
+  2580→}
+  2581→
+  2582→/* ============================ TAB: KYB Cases ============================ */
+  2583→
+  2584→function KybCasesTab({
+  2585→  items,
+  2586→  merchant,
+  2587→}: {
+  2588→  items: KybCase[];
+  2589→  merchant: Merchant;
+  2590→}) {
+  2591→  const { staff } = useAuth();
+  2592→
+  2593→  function actor() {
+  2594→    if (!staff) return null;
+  2595→    return {
+  2596→      staffId: staff.id,
+  2597→      staffName: `${staff.firstName} ${staff.lastName}`,
+  2598→      department: staff.departmentId,
+  2599→      role: staff.roleId,
+  2600→    };
+  2601→  }
+  2602→
+  2603→  function approve(k: KybCase) {
+  2604→    const a = actor();
+  2605→    if (!a) return;
+  2606→    adminData.updateKyb(k.id, {
+  2607→      status: "approved",
+  2608→      assignedReviewer: a.staffId,
+  2609→    });
+  2610→    // Also lift the merchant into approved/active
+  2611→    adminData.updateMerchant(merchant.id, {
+  2612→      kybStatus: "approved",
+  2613→      status: "active",
+  2614→      kybCaseId: k.id,
+  2615→      updatedAt: Date.now(),
+  2616→    });
+  2617→    logAudit(a, "kyb.approve", "kyb_case", k.id, {
+  2618→      countryCode: k.countryCode,
+  2619→      beforeValue: k.status,
+  2620→      afterValue: "approved",
+  2621→    });
+  2622→    toast.success(`KYB case approved: ${k.id}`, {
+  2623→      description: `${merchant.tradingName} → KYB approved, status active.`,
+  2624→    });
+  2625→  }
+  2626→
+  2627→  function reject(k: KybCase) {
+  2628→    const a = actor();
+  2629→    if (!a) return;
+  2630→    adminData.updateKyb(k.id, {
+  2631→      status: "rejected",
+  2632→      assignedReviewer: a.staffId,
+  2633→    });
+  2634→    adminData.updateMerchant(merchant.id, {
+  2635→      kybStatus: "rejected",
+  2636→      status: "restricted",
+  2637→      kybCaseId: k.id,
+  2638→      updatedAt: Date.now(),
+  2639→    });
+  2640→    logAudit(a, "kyb.reject", "kyb_case", k.id, {
+  2641→      countryCode: k.countryCode,
+  2642→      beforeValue: k.status,
+  2643→      afterValue: "rejected",
+  2644→    });
+  2645→    toast.success(`KYB case rejected: ${k.id}`, {
+  2646→      description: `${merchant.tradingName} → KYB rejected, status restricted.`,
+  2647→    });
+  2648→  }
+  2649→
+  2650→  function escalate(k: KybCase) {
+  2651→    const a = actor();
+  2652→    if (!a) return;
+  2653→    adminData.updateKyb(k.id, {
+  2654→      status: "escalated",
+  2655→      assignedReviewer: a.staffId,
+  2656→    });
+  2657→    adminData.updateMerchant(merchant.id, {
+  2658→      kybStatus: "escalated",
+  2659→      updatedAt: Date.now(),
+  2660→    });
+  2661→    logAudit(a, "kyb.escalate", "kyb_case", k.id, {
+  2662→      countryCode: k.countryCode,
+  2663→      beforeValue: k.status,
+  2664→      afterValue: "escalated",
+  2665→    });
+  2666→    toast.success(`KYB case escalated: ${k.id}`, {
+  2667→      description: "Senior reviewer will pick this up next.",
+  2668→    });
+  2669→  }
+  2670→
+  2671→  if (items.length === 0) return <TabEmptyState icon={ShieldCheck} label="KYB cases" />;
+  2672→
+  2673→  return (
+  2674→    <ScrollTable>
+  2675→      <TableHeader className="sticky top-0 z-10 bg-card">
+  2676→        <TableRow>
+  2677→          <TableHead className="pl-3">Case ID</TableHead>
+  2678→          <TableHead className="hidden md:table-cell">Country</TableHead>
+  2679→          <TableHead className="hidden md:table-cell">Business Type</TableHead>
+  2680→          <TableHead>Risk</TableHead>
+  2681→          <TableHead className="hidden md:table-cell">Submitted</TableHead>
+  2682→          <TableHead>Status</TableHead>
+  2683→          <TableHead className="hidden lg:table-cell">Reviewer</TableHead>
+  2684→          <TableHead className="hidden lg:table-cell">SLA</TableHead>
+  2685→          <TableHead className="text-right pr-3">Actions</TableHead>
+  2686→        </TableRow>
+  2687→      </TableHeader>
+  2688→      <TableBody>
+  2689→        {items.map((k) => {
+  2690→          const v = statusBadge("kyb", k.status);
+  2691→          const r = RISK_TONE(k.riskCategory);
+  2692→          return (
+  2693→            <TableRow key={k.id}>
+  2694→              <TableCell className="pl-3 font-mono text-[11px]">{k.id}</TableCell>
+  2695→              <TableCell className="hidden md:table-cell text-[11px] font-mono">
+  2696→                {k.countryCode}
+  2697→              </TableCell>
+  2698→              <TableCell className="hidden md:table-cell text-[11px] capitalize">
+  2699→                {k.businessType.replace(/_/g, " ")}
+  2700→              </TableCell>
+  2701→              <TableCell>
+  2702→                <Badge variant="secondary" className={cn("text-[10px] capitalize", r.className)}>
+  2703→                  {r.label}
+  2704→                </Badge>
+  2705→              </TableCell>
+  2706→              <TableCell className="hidden md:table-cell text-[11px] text-muted-foreground">
+  2707→                {timeAgo(k.submittedAt)}
+  2708→              </TableCell>
+  2709→              <TableCell>
+  2710→                <Badge variant="secondary" className={cn("text-[10px]", v.className)}>
+  2711→                  {v.label}
+  2712→                </Badge>
+  2713→              </TableCell>
+  2714→              <TableCell className="hidden lg:table-cell text-[11px] font-mono">
+  2715→                {k.assignedReviewer ?? "—"}
+  2716→              </TableCell>
+  2717→              <TableCell className="hidden lg:table-cell">
+  2718→                <SlaPill deadline={k.slaDeadline} />
+  2719→              </TableCell>
+  2720→              <TableCell className="text-right pr-3">
+  2721→                <div className="inline-flex gap-1">
+  2722→                  {k.status !== "approved" && (
+  2723→                    <Button
+  2724→                      size="sm"
+  2725→                      variant="outline"
+  2726→                      className="h-7 text-[11px] border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
+  2727→                      onClick={() => approve(k)}
+  2728→                    >
+  2729→                      <CheckCircle2 className="size-3 mr-1" /> Approve
+  2730→                    </Button>
+  2731→                  )}
+  2732→                  {k.status !== "rejected" && (
+  2733→                    <Button
+  2734→                      size="sm"
+  2735→                      variant="outline"
+  2736→                      className="h-7 text-[11px] border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/20"
+  2737→                      onClick={() => reject(k)}
+  2738→                    >
+  2739→                      <XCircle className="size-3 mr-1" /> Reject
+  2740→                    </Button>
+  2741→                  )}
+  2742→                  {k.status !== "escalated" && k.status !== "approved" && (
+  2743→                    <Button
+  2744→                      size="sm"
+  2745→                      variant="ghost"
+  2746→                      className="h-7 text-[11px]"
+  2747→                      onClick={() => escalate(k)}
+  2748→                    >
+  2749→                      <ArrowRightCircle className="size-3 mr-1" /> Escalate
+  2750→                    </Button>
+  2751→                  )}
+  2752→                </div>
+  2753→              </TableCell>
+  2754→            </TableRow>
+  2755→          );
+  2756→        })}
+  2757→      </TableBody>
+  2758→    </ScrollTable>
+  2759→  );
+  2760→}
+  2761→
+  2762→/* ============================ TAB: Support Tickets ============================ */
+  2763→
+  2764→function SupportTicketsTab({ items }: { items: SupportTicket[] }) {
+  2765→  const { staff } = useAuth();
+  2766→
+  2767→  function actor() {
+  2768→    if (!staff) return null;
+  2769→    return {
+  2770→      staffId: staff.id,
+  2771→      staffName: `${staff.firstName} ${staff.lastName}`,
+  2772→      department: staff.departmentId,
+  2773→      role: staff.roleId,
+  2774→    };
+  2775→  }
+  2776→
+  2777→  function reply(t: SupportTicket) {
+  2778→    const a = actor();
+  2779→    if (!a) return;
+  2780→    adminData.updateTicket(t.id, {
+  2781→      status: "waiting",
+  2782→      updatedAt: Date.now(),
+  2783→    });
+  2784→    logAudit(a, "ticket.reply", "support_ticket", t.id, {
+  2785→      countryCode: t.countryCode,
+  2786→      beforeValue: t.status,
+  2787→      afterValue: "waiting",
+  2788→    });
+  2789→    toast.success(`Reply sent on ticket ${t.id}`, {
+  2790→      description: `Status → waiting · awaiting customer response.`,
+  2791→    });
+  2792→  }
+  2793→
+  2794→  function assign(t: SupportTicket) {
+  2795→    const a = actor();
+  2796→    if (!a) return;
+  2797→    adminData.updateTicket(t.id, {
+  2798→      assignedTo: a.staffId,
+  2799→      status: t.status === "open" ? "in_progress" : t.status,
+  2800→      updatedAt: Date.now(),
+  2801→    });
+  2802→    logAudit(a, "ticket.assign", "support_ticket", t.id, {
+  2803→      countryCode: t.countryCode,
+  2804→      beforeValue: t.assignedTo ?? "unassigned",
+  2805→      afterValue: a.staffId,
+  2806→    });
+  2807→    toast.success(`Ticket ${t.id} assigned to you`, {
+  2808→      description: t.subject,
+  2809→    });
+  2810→  }
+  2811→
+  2812→  function close(t: SupportTicket) {
+  2813→    const a = actor();
+  2814→    if (!a) return;
+  2815→    adminData.updateTicket(t.id, {
+  2816→      status: "closed",
+  2817→      updatedAt: Date.now(),
+  2818→    });
+  2819→    logAudit(a, "ticket.close", "support_ticket", t.id, {
+  2820→      countryCode: t.countryCode,
+  2821→      beforeValue: t.status,
+  2822→      afterValue: "closed",
+  2823→    });
+  2824→    toast.success(`Ticket closed: ${t.id}`, { description: t.subject });
+  2825→  }
+  2826→
+  2827→  if (items.length === 0) return <TabEmptyState icon={MessageSquare} label="support tickets" />;
+  2828→
+  2829→  return (
+  2830→    <ScrollTable>
+  2831→      <TableHeader className="sticky top-0 z-10 bg-card">
+  2832→        <TableRow>
+  2833→          <TableHead className="pl-3">Ticket ID</TableHead>
+  2834→          <TableHead className="hidden md:table-cell">Country</TableHead>
+  2835→          <TableHead className="hidden md:table-cell">Type</TableHead>
+  2836→          <TableHead>Subject</TableHead>
+  2837→          <TableHead>Priority</TableHead>
+  2838→          <TableHead>Status</TableHead>
+  2839→          <TableHead className="hidden md:table-cell">Created</TableHead>
+  2840→          <TableHead className="hidden lg:table-cell">SLA</TableHead>
+  2841→          <TableHead className="text-right pr-3">Actions</TableHead>
+  2842→        </TableRow>
+  2843→      </TableHeader>
+  2844→      <TableBody>
+  2845→        {items.map((t) => {
+  2846→          const sStyle = TICKET_STATUS_STYLES[t.status];
+  2847→          const pStyle = TICKET_PRIORITY_STYLES[t.priority];
+  2848→          return (
+  2849→            <TableRow key={t.id}>
+  2850→              <TableCell className="pl-3 font-mono text-[11px]">{t.id}</TableCell>
+  2851→              <TableCell className="hidden md:table-cell text-[11px] font-mono">{t.countryCode}</TableCell>
+  2852→              <TableCell className="hidden md:table-cell text-[11px] capitalize">{t.type}</TableCell>
+  2853→              <TableCell className="text-xs max-w-[180px] truncate">{t.subject}</TableCell>
+  2854→              <TableCell>
+  2855→                <Badge variant="secondary" className={cn("text-[10px] capitalize", pStyle.className)}>
+  2856→                  {pStyle.label}
+  2857→                </Badge>
+  2858→              </TableCell>
+  2859→              <TableCell>
+  2860→                <Badge variant="secondary" className={cn("text-[10px]", sStyle.className)}>
+  2861→                  {sStyle.label}
+  2862→                </Badge>
+  2863→              </TableCell>
+  2864→              <TableCell className="hidden md:table-cell text-[11px] text-muted-foreground">
+  2865→                {timeAgo(t.createdAt)}
+  2866→              </TableCell>
+  2867→              <TableCell className="hidden lg:table-cell">
+  2868→                <SlaPill deadline={t.slaDeadline} />
+  2869→              </TableCell>
+  2870→              <TableCell className="text-right pr-3">
+  2871→                <div className="inline-flex gap-1">
+  2872→                  {t.status !== "closed" && t.status !== "resolved" && (
+  2873→                    <>
+  2874→                      <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => reply(t)}>
+  2875→                        <Send className="size-3 mr-1" /> Reply
+  2876→                      </Button>
+  2877→                      <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => assign(t)}>
+  2878→                        <UserCheck className="size-3 mr-1" /> Assign
+  2879→                      </Button>
+  2880→                      <Button
+  2881→                        size="sm"
+  2882→                        variant="ghost"
+  2883→                        className="h-7 text-[11px] text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/20"
+  2884→                        onClick={() => close(t)}
+  2885→                      >
+  2886→                        <XCircle className="size-3 mr-1" /> Close
+  2887→                      </Button>
+  2888→                    </>
+  2889→                  )}
+  2890→                </div>
+  2891→              </TableCell>
+  2892→            </TableRow>
+  2893→          );
+  2894→        })}
+  2895→      </TableBody>
+  2896→    </ScrollTable>
+  2897→  );
+  2898→}
+  2899→
+  2900→/* ============================ TAB: Risk & Alerts ============================ */
+  2901→
+  2902→function RiskAlertsTab({ items }: { items: FraudAlert[] }) {
+  2903→  if (items.length === 0) return <TabEmptyState icon={ShieldAlert} label="fraud alerts" />;
+  2904→
+  2905→  return (
+  2906→    <ScrollTable>
+  2907→      <TableHeader className="sticky top-0 z-10 bg-card">
+  2908→        <TableRow>
+  2909→          <TableHead className="pl-3">Alert ID</TableHead>
+  2910→          <TableHead>Trigger</TableHead>
+  2911→          <TableHead>Severity</TableHead>
+  2912→          <TableHead className="text-right">Amount</TableHead>
+  2913→          <TableHead className="hidden md:table-cell">Device</TableHead>
+  2914→          <TableHead className="hidden md:table-cell">Created</TableHead>
+  2915→          <TableHead>Status</TableHead>
+  2916→        </TableRow>
+  2917→      </TableHeader>
+  2918→      <TableBody>
+  2919→        {items.map((a) => {
+  2920→          const sStyle = FRAUD_STATUS_STYLES[a.status];
+  2921→          const r = RISK_TONE(a.severity);
+  2922→          return (
+  2923→            <TableRow key={a.id}>
+  2924→              <TableCell className="pl-3 font-mono text-[11px]">{a.id}</TableCell>
+  2925→              <TableCell className="text-xs">{a.trigger}</TableCell>
+  2926→              <TableCell>
+  2927→                <Badge variant="secondary" className={cn("text-[10px] capitalize", r.className)}>
+  2928→                  {r.label}
+  2929→                </Badge>
+  2930→              </TableCell>
+  2931→              <TableCell className="text-right font-mono text-xs tabular-nums">
+  2932→                {formatCurrency(a.transactionAmount, "USD")}
+  2933→              </TableCell>
+  2934→              <TableCell className="hidden md:table-cell text-[11px] font-mono">{a.device}</TableCell>
+  2935→              <TableCell className="hidden md:table-cell text-[11px] text-muted-foreground">
+  2936→                {timeAgo(a.createdAt)}
+  2937→              </TableCell>
+  2938→              <TableCell>
+  2939→                <Badge variant="secondary" className={cn("text-[10px] capitalize", sStyle.className)}>
+  2940→                  {sStyle.label}
+  2941→                </Badge>
+  2942→              </TableCell>
+  2943→            </TableRow>
+  2944→          );
+  2945→        })}
+  2946→      </TableBody>
+  2947→    </ScrollTable>
+  2948→  );
+  2949→}
+  2950→
+  2951→/* ============================ TAB: Activity & Audit ============================ */
+  2952→
+  2953→function AuditLogsTab({ items }: { items: AuditLog[] }) {
+  2954→  if (items.length === 0) return <TabEmptyState icon={Activity} label="audit logs" />;
+  2955→
+  2956→  return (
+  2957→    <ScrollTable>
+  2958→      <TableHeader className="sticky top-0 z-10 bg-card">
+  2959→        <TableRow>
+  2960→          <TableHead className="pl-3">Timestamp</TableHead>
+  2961→          <TableHead>Action</TableHead>
+  2962→          <TableHead className="hidden md:table-cell">Entity</TableHead>
+  2963→          <TableHead className="hidden lg:table-cell">Reason</TableHead>
+  2964→          <TableHead className="hidden md:table-cell">IP</TableHead>
+  2965→        </TableRow>
+  2966→      </TableHeader>
+  2967→      <TableBody>
+  2968→        {items.map((l) => (
+  2969→          <TableRow key={l.id}>
+  2970→            <TableCell className="pl-3 text-[11px] text-muted-foreground whitespace-nowrap">
+  2971→              {formatDateTime(l.createdAt)}
+  2972→            </TableCell>
+  2973→            <TableCell>
+  2974→              <div className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
+  2975→                {l.action}
+  2976→              </div>
+  2977→              <div className="text-[10px] text-muted-foreground">
+  2978→                by {l.staffName}
+  2979→              </div>
+  2980→            </TableCell>
+  2981→            <TableCell className="hidden md:table-cell text-[11px]">
+  2982→              <span className="font-mono">{l.entityType}</span>
+  2983→              <div className="text-[10px] text-muted-foreground font-mono">{l.entityId}</div>
+  2984→            </TableCell>
+  2985→            <TableCell className="hidden lg:table-cell text-[11px] max-w-[220px] truncate text-muted-foreground">
+  2986→              {l.reason ?? "—"}
+  2987→            </TableCell>
+  2988→            <TableCell className="hidden md:table-cell text-[11px] font-mono text-muted-foreground">
+  2989→              {l.ipAddress}
+  2990→            </TableCell>
+  2991→          </TableRow>
+  2992→        ))}
+  2993→      </TableBody>
+  2994→    </ScrollTable>
+  2995→  );
+  2996→}
+  2997→

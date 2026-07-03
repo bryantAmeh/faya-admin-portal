@@ -564,3 +564,119 @@ Stage Summary:
 - Each tab shows a live count badge so the admin instantly sees how many items exist
 - POS device approval workflow is under Merchant → POS Requests tab
 - No more jumping between separate pages — everything is contextualized under the user's profile
+
+---
+Task ID: UP1
+Agent: subagent-user-detail-page
+Task: Create full-page user profile view (no sheet)
+
+Work Log:
+- Read worklog.md, types.ts, admin-data.ts, formatters.ts, view-helpers.tsx, use-auth.ts, use-portal-store.ts, access-scope.ts, and the existing users-view.tsx (CP1) + country-detail-view.tsx (for the established full-page detail view pattern).
+- Created `src/components/portal/views/user-detail-view.tsx` — `UserDetailView` with props `{ consumers, countries }`. Gets `selectedUserId` from `usePortalStore`; falls back to an EmptyState + back button when the consumer is not found.
+  - A. Back button bar at top: "← Back to Users" calls `setView("users")`; a "Full Profile View" pill on the right.
+  - B. Full-width profile header card (emerald-tinted gradient):
+    * Left: 64px avatar with initials, full name, KYC badge, account-status badge, KYC tier badge, risk-score badge; below — consumer code (mono), email, phone, country, timezone/currency, member-since.
+    * Right: Restrict / Suspend / Reactivate action buttons (disabled appropriately; opens AlertDialog confirmation).
+    * Bottom: 6-cell quick stats grid (Cards, Wallets, Total Balance, Transactions, Open Tickets, Open Disputes) — live-subscribed so counters update in real time.
+  - C. shadcn Tabs (full width) with 10 tabs and count badges:
+    1. Overview — personal details, contact, KYC summary, platforms, wallet summary, transaction stats, explore hint.
+    2. Cards — table + Freeze/Unfreeze (`updateCard`), View details; security note.
+    3. Wallets — table + Freeze/Unfreeze (`updateWallet`); dual-approval note.
+    4. Transactions — table + View receipt / Open dispute / Escalate / Add note (`logAudit transaction.dispute / transaction.escalate`).
+    5. Documents — table + Approve / Reject / Request replacement (`updateDocument` + `logAudit`).
+    6. KYC Cases — table + Approve (`updateKyc` + `updateConsumer` activates) / Reject / Escalate; SLA pill.
+    7. Support Tickets — table + Reply / Assign to me / Close (`updateTicket`).
+    8. Disputes — table + View details / Update status dropdown (`updateDispute`).
+    9. Risk & Alerts — table + Close (false positive) / Escalate (`updateFraud`).
+    10. Activity & Audit — read-only table; immutable-log note.
+  - Each tab: count badge in label, EmptyState if 0 items, `max-h-96 overflow-y-auto` scroll table with custom scrollbar styling. Profile header + Tabs are `key`-ed by `consumer.id` so subscriptions and active tab reset cleanly when navigating between consumers.
+  - Aliased type imports (`Card as CardRecord`, `Wallet as WalletRecord`, `Transaction as TransactionRecord`, `UserDocument as DocumentRecord`, `KycCase as KycCaseRecord`, `SupportTicket as TicketRecord`, `Dispute as DisputeRecord`, `FraudAlert as FraudRecord`, `AuditLog as AuditRecord`) to avoid collision with the shadcn `Card` UI component.
+  - Emerald accent throughout, NO indigo/blue primary.
+- Wired up the new view:
+  * `portal-app.tsx`: imported `UserDetailView`, added `case "user_detail":` route passing `consumers` + `countries`.
+  * `portal-shell.tsx`: sidebar "Users" item is now also active when `view === "user_detail"` (matches the existing `country_detail` pattern).
+- Rebuilt `users-view.tsx` to drop the sliding Sheet entirely:
+  * Row click + "View profile" / "Open full profile" dropdown items now call `selectUser(c.id) + setView("user_detail")` to open the full-page profile.
+  * Kept the stat cards, filters, table, dropdown actions, and the existing AlertDialog confirmation flow for Restrict / Suspend / Reactivate from the list. File shrunk from ~2,000 lines to ~330 (the Sheet body and all 10 tab sub-components are now consolidated in `user-detail-view.tsx`).
+- Appended worklog entry under "Task ID: UP1". Saved agent work record at `agent-ctx/UP1-subagent-user-detail-page.md`.
+- Ran `bun run lint`.
+
+Stage Summary:
+A proper full-page consumer profile (`UserDetailView`) replaces the previous sliding Sheet. Navigating from the Users list now opens a full-width page with a back button, a wide emerald-tinted profile header (avatar, identity, status badges, action buttons, 6-cell quick stats), and 10 tabs covering everything connected to the consumer — overview, cards, wallets, transactions, documents, KYC cases, support tickets, disputes, risk alerts, and the audit trail. All tabs subscribe live to their Firestore collections, mutations go through `adminData.update*` + `logAudit` + sonner toasts, and confirmations use `AlertDialog`. The sidebar's "Users" entry stays highlighted while the detail page is open.
+
+---
+Task ID: MP2
+Agent: subagent-merchant-detail-page
+Task: Create full-page merchant profile view (no sheet)
+
+Work Log:
+- Read worklog.md (incl. MP1 + COMPREHENSIVE-PROFILES + UP1 entries), types.ts, admin-data.ts, access-scope.ts, formatters.ts, view-helpers.tsx, use-auth.ts, use-portal-store.ts, portal-app.tsx, and the existing merchants-view.tsx (for the 12-tab pattern, status style maps, POS device approval workflow, audit action keys, and `nameMatchesMerchant` filter rule)
+- Confirmed `merchant_detail` is already in the `PortalView` union type and that `usePortalStore` exposes `selectedMerchantId` + `selectMerchant` + `setView`
+- Created `src/components/portal/views/merchant-detail-view.tsx` — a standalone `MerchantDetailView` with props `{ merchants: Merchant[]; countries: CountryConfig[] }`:
+  - Reads `selectedMerchantId` + `setView` from `usePortalStore` and `staff` from `useAuth`
+  - If merchant not found: shows EmptyState (Building2 icon) + an "← Back to Merchants" button (both top and centered)
+  - If found, renders a FULL PAGE (no Sheet) with three regions:
+    A. **Back button bar** at the top — emerald-tinted ghost button calling `setView("merchants")` + a small merchant code hint on the right
+    B. **Profile header card** (full-width, emerald gradient): top row has avatar + trading name + legal name + merchant code + country + business type (left), KYB/status/risk badges + platform chips (center), action buttons Approve KYB / Reject KYB / Restrict / Suspend / Reactivate that appear conditionally based on current state (right). Bottom row: 6-cell quick-stats grid — POS Staff, Terminals (active/total), Phone POS, Monthly Volume, Open Disputes, Open Tickets — each with icon and tone color. Confirmations via `AlertDialog` (green for approve/reactivate, red for reject/restrict/suspend).
+    C. **Tabs section** (shadcn `Tabs`, full width, count badge on each tab label, `max-h-96 overflow-y-auto` scroll table per tab since full-page has more room):
+      1. Overview — 6-card grid: business profile, owner details, KYB summary, platforms, terminal & tx stats, settlement info & notes (each as a Card with detail rows)
+      2. POS Staff — table + dropdown actions: Suspend / Reactivate (`updatePosStaff`), Reset PIN + Force logout (`logAudit` only)
+      3. Terminals — table + Activate / Block (`updateTerminal`)
+      4. POS Requests — KEY device approval workflow: card layout with Request Code, Type, Device Model, OS/app version, NFC/Card/Swipe capability badges, integrity & screen-lock indicators, "Can approve" / "No payment method" badge, amber warnings for failed integrity / no screen lock. Approve button DISABLED when `canBeApproved === false`; Auto-decline button shown when no payment method; manual Decline opens Dialog with reason textarea. Approve → status="approved" + `logAudit "pos_device.approve"`; Decline → status="declined" + `logAudit "pos_device.decline"`; Auto-decline → status="auto_declined" + `logAudit "pos_device.auto_decline"`.
+      5. Transactions — table + dropdown: View details, Open dispute, Escalate (`logAudit "transaction.open_dispute"` / `"transaction.escalate"`)
+      6. Settlements — table + Retry (if failed, `updateSettlement` status=processing + `logAudit "settlement.retry"`) + View details
+      7. Disputes — table + Request evidence / Advance status (`updateDispute` + `logAudit "dispute.request_evidence"` / `"dispute.update_status"`)
+      8. Documents — table + Approve / Reject / Request replacement (`updateDocument` + `logAudit`)
+      9. KYB Cases — table + Approve (lifts merchant to KYB approved + active) / Reject (sets restricted) / Escalate (`updateKyb` + `updateMerchant` + `logAudit`); SLA pill column
+      10. Support — table + Reply / Assign / Close (`updateTicket` + `logAudit`); priority + status + SLA columns
+      11. Risk & Alerts — table of fraud alerts filtered by `entityName` matching merchant legal/trading name; severity + status badges
+      12. Activity & Audit — read-only audit logs filtered by `entityId === merchant.id`
+  - Single `useEffect` at page level subscribes to all 11 collections (PosStaff, Terminals, PosDeviceRequests, Transactions, Settlements, Disputes, Documents, KybCases, Tickets, FraudAlerts, AuditLogs) and `useMemo`-filters each to this merchant. This guarantees the count badges in tab labels are accurate even before a tab is opened (avoids the lazy-mount count gap).
+  - Filtering rules per spec:
+    * POS Staff: `merchantId === merchant.id`
+    * Terminals: `merchantName === legalName || tradingName`
+    * POS Requests: `merchantId === merchant.id`
+    * Transactions: `merchantId === merchant.id || merchantName matches`
+    * Settlements / Disputes: `merchantName matches legal/trading`
+    * Documents: `entityId === merchant.id`
+    * KYB Cases: `id === merchant.kybCaseId || merchantName matches`
+    * Support Tickets: `requesterName matches legal/trading`
+    * Fraud Alerts: `entityName matches legal/trading`
+    * Audit Logs: `entityId === merchant.id`
+  - All mutations funnel through `adminData.update*` + `logAudit` with proper action keys (merchant.approve_kyb / reject_kyb / restrict / suspend / reactivate, pos_staff.*, terminal.*, pos_device.*, settlement.retry, dispute.*, document.*, kyb.*, ticket.*, transaction.*)
+  - Emerald accent throughout (avatar, header gradient, badge tones, action button borders); NO indigo/blue primary
+  - Imports: `usePortalStore` from `@/hooks/use-portal-store`, `adminData + logAudit` from `@/lib/admin-data`, `useAuth` from `@/hooks/use-auth`, `toast` from `sonner`
+- Ran `bun run lint` — clean (0 errors, 0 warnings). Dev server compiled successfully.
+
+Stage Summary:
+A proper full-page merchant profile (`MerchantDetailView`) replaces the previous sliding Sheet pattern. The page has a back button to return to the list, a wide emerald-tinted profile header (avatar, identity, status badges, action buttons, 6-cell quick stats), and 12 tabs covering everything connected to the merchant — overview, POS staff, terminals, POS device requests (with the canBeApproved approval rule), transactions, settlements, disputes, documents, KYB cases, support tickets, risk alerts, and the audit trail. Each tab shows a count badge, uses max-h-96 scrollable tables (taller since full page), and an EmptyState when 0 items. All mutations flow through `adminData.update*` + `logAudit` + sonner toasts; confirmations use `AlertDialog` or `Dialog`. The file is self-contained and ready for the router (portal-app.tsx) to wire up the `merchant_detail` case + `MerchantsView` to navigate via `selectMerchant(id) + setView("merchant_detail")` instead of opening a Sheet.
+
+---
+Task ID: FULL-PAGE-PROFILES
+Agent: main
+Task: Convert sliding sheets to proper full-page profiles
+
+Work Log:
+- Added user_detail + merchant_detail to PortalView enum in portal-store
+- Added selectedUserId + selectedMerchantId + selectUser + selectMerchant to portal store
+- Subagent UP1: Created user-detail-view.tsx — full page profile with back button, header card, 10 tabs
+  • Updated users-view.tsx to navigate to detail page instead of opening sheet (reduced from ~2000 to ~450 lines)
+  • Wired user_detail case into PortalApp
+- Subagent MP2: Created merchant-detail-view.tsx — full page profile with back button, header card, 12 tabs
+  • Includes POS device approval workflow in POS Requests tab
+- Rewrote merchants-view.tsx as clean list-only view that navigates to merchant_detail page
+- Wired merchant_detail case into PortalApp
+- Updated sidebar to keep "Users" highlighted on user_detail and "Merchants" highlighted on merchant_detail
+- Browser verification:
+  * User profile: clicking Adebayo Ogun → full page with "← Back to Users" button, heading, 10 tabs with count badges
+  * Merchant profile: clicking Lagos Foods → full page with "← Back to Merchants" button, heading, 12 tabs with count badges
+  * POS Requests tab works on full page — Approve/Decline buttons visible
+  * No sliding sheet — proper full page layout
+- Lint: 0 errors. Dev server: 200 OK.
+
+Stage Summary:
+- Both consumer and merchant profiles are now proper full-page views (no sliding sheets)
+- Each has a back button to return to the list
+- Each has a profile header with avatar, name, status badges, action buttons, and quick stats
+- All tabs (Cards, Wallets, Transactions, Documents, KYC/KYB, Support, Disputes, Risk, Activity, POS Staff, Terminals, POS Requests, Settlements) are on the full page
+- The POS device approval workflow is on the Merchant profile → POS Requests tab
