@@ -487,7 +487,7 @@ function ProfileHeader({
   useEffect(() => adminData.subscribeTickets(setTickets), []);
   useEffect(() => adminData.subscribeDisputes(setDisputes), []);
 
-  const fullName = `${consumer.firstName} ${consumer.lastName}`;
+  const fullName = consumer.fullName || `${consumer.firstName || ""} ${consumer.lastName || ""}`.trim() || consumer.email;
   const consumerCards = cards.filter((c) => c.userId === consumer.id);
   const consumerWallets = wallets.filter((w) => w.userId === consumer.id);
   const consumerTxns = transactions.filter((t) => t.userId === consumer.id);
@@ -504,7 +504,7 @@ function ProfileHeader({
   ).length;
 
   const initials =
-    (consumer.firstName[0] ?? "") + (consumer.lastName[0] ?? "");
+    (consumer.firstName?.[0] ?? "") + (consumer.lastName?.[0] ?? "") || (consumer.email?.[0] ?? "U").toUpperCase();
   const country = countries.find((c) => c.countryCode === consumer.countryCode);
 
   return (
@@ -522,28 +522,28 @@ function ProfileHeader({
                 <h2 className="text-xl font-semibold tracking-tight truncate">
                   {fullName}
                 </h2>
-                {kycBadge(consumer.kycStatus)}
-                {consumerStatusBadge(consumer.status)}
+                {kycBadge(consumer.kycStatus || "pending")}
+                {consumerStatusBadge((consumer.status as string) as ConsumerStatus)}
                 <Badge
                   variant="outline"
-                  className={cn("text-[11px]", KYC_TIER_STYLES[consumer.kycTier].className)}
+                  className={cn("text-[11px]", (KYC_TIER_STYLES[consumer.kycTier as KycTier] || { className: "", label: consumer.kycTier || "N/A" }).className)}
                 >
-                  {KYC_TIER_STYLES[consumer.kycTier].label}
+                  {(KYC_TIER_STYLES[consumer.kycTier as KycTier] || { className: "", label: consumer.kycTier || "N/A" }).label}
                 </Badge>
                 <Badge
                   variant="outline"
                   className={cn(
                     "text-[11px] font-semibold",
-                    RISK_TONE(consumer.riskScore),
+                    RISK_TONE(consumer.riskScore ?? 0),
                   )}
                 >
                   <ShieldAlert className="size-3 mr-1" />
-                  Risk {consumer.riskScore}/100
+                  Risk {consumer.riskScore ?? 0}/100
                 </Badge>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span className="font-mono text-emerald-700 dark:text-emerald-400">
-                  {consumer.consumerCode}
+                  {consumer.consumerCode || "—"}
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <Mail className="size-3" />
@@ -551,21 +551,21 @@ function ProfileHeader({
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <Phone className="size-3" />
-                  {consumer.phone}
+                  {consumer.phone || "—"}
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <Globe2 className="size-3" />
-                  {consumer.countryCode} — {countryName(consumer.countryCode)}
+                  {consumer.countryCode || consumer.countryOfResidence || "—"}
                 </span>
                 {country && (
                   <span className="inline-flex items-center gap-1">
                     <MapPin className="size-3" />
-                    {country.timezone} · {consumer.currency}
+                    {country.timezone} · {consumer.currency || "NGN"}
                   </span>
                 )}
                 <span className="inline-flex items-center gap-1">
                   <Clock className="size-3" />
-                  Joined {formatDateTime(consumer.createdAt)}
+                  Joined {formatDateTime(consumer.createdAt ?? null)}
                 </span>
               </div>
             </div>
@@ -579,8 +579,8 @@ function ProfileHeader({
               className="h-8 text-xs border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-900/30"
               onClick={() => onAction("restrict")}
               disabled={
-                consumer.status === "restricted" ||
-                consumer.status === "suspended" ||
+                (consumer.status as string) === "restricted" ||
+                (consumer.status as string) === "suspended" ||
                 !staff
               }
             >
@@ -591,7 +591,7 @@ function ProfileHeader({
               variant="outline"
               className="h-8 text-xs border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/30"
               onClick={() => onAction("suspend")}
-              disabled={consumer.status === "suspended" || !staff}
+              disabled={(consumer.status as string) === "suspended" || !staff}
             >
               <Ban className="size-3.5 mr-1" /> Suspend
             </Button>
@@ -600,7 +600,7 @@ function ProfileHeader({
               variant="outline"
               className="h-8 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
               onClick={() => onAction("reactivate")}
-              disabled={consumer.status === "active" || !staff}
+              disabled={(consumer.status as string) === "active" || !staff}
             >
               <RotateCcw className="size-3.5 mr-1" /> Reactivate
             </Button>
@@ -672,7 +672,7 @@ function ProfileTabs({
   useEffect(() => adminData.subscribeAudit(setAuditLogs), []);
   useEffect(() => adminData.subscribeStockOrders(setStockOrders), []);
 
-  const fullName = `${consumer.firstName} ${consumer.lastName}`;
+  const fullName = consumer.fullName || `${consumer.firstName || ""} ${consumer.lastName || ""}`.trim() || consumer.email;
   const consumerCards = cards.filter((c) => c.userId === consumer.id);
   const consumerWallets = wallets.filter((w) => w.userId === consumer.id);
   const consumerTxns = transactions.filter((t) => t.userId === consumer.id);
@@ -720,7 +720,7 @@ function ProfileTabs({
         <CardsTab
           cards={consumerCards}
           staff={staff}
-          consumerCode={consumer.consumerCode}
+          consumerCode={consumer.consumerCode || "—"}
         />
       </TabsContent>
 
@@ -728,7 +728,7 @@ function ProfileTabs({
         <WalletsTab
           wallets={consumerWallets}
           staff={staff}
-          consumerCode={consumer.consumerCode}
+          consumerCode={consumer.consumerCode || "—"}
         />
       </TabsContent>
 
@@ -949,7 +949,7 @@ function OverviewTab({
             label="Consumer code"
             value={
               <span className="font-mono text-emerald-700 dark:text-emerald-400">
-                {consumer.consumerCode}
+                {consumer.consumerCode || "—"}
               </span>
             }
           />
@@ -961,7 +961,7 @@ function OverviewTab({
               </span>
             }
           />
-          <DetailRow label="Member since" value={formatDateTime(consumer.createdAt)} />
+          <DetailRow label="Member since" value={formatDateTime(consumer.createdAt ?? null)} />
         </CardContent>
       </Card>
 
@@ -982,7 +982,7 @@ function OverviewTab({
             value={
               <span className="inline-flex items-center gap-1.5">
                 <Phone className="size-3 text-muted-foreground" />
-                {consumer.phone}
+                {consumer.phone || "—"}
               </span>
             }
           />
@@ -991,27 +991,27 @@ function OverviewTab({
             value={
               <span className="inline-flex items-center gap-1.5">
                 <MapPin className="size-3 text-muted-foreground" />
-                {consumer.countryCode} — {countryName(consumer.countryCode)}
+                {consumer.countryCode || consumer.countryOfResidence || "—"}
               </span>
             }
           />
           <DetailRow label="Timezone" value={country?.timezone ?? "—"} />
-          <DetailRow label="Currency" value={consumer.currency} />
+          <DetailRow label="Currency" value={consumer.currency || "NGN"} />
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="p-4">
           <SectionLabel icon={ShieldCheck}>KYC Summary</SectionLabel>
-          <DetailRow label="KYC status" value={kycBadge(consumer.kycStatus)} />
+          <DetailRow label="KYC status" value={kycBadge(consumer.kycStatus || "pending")} />
           <DetailRow
             label="KYC tier"
             value={
               <Badge
                 variant="outline"
-                className={KYC_TIER_STYLES[consumer.kycTier].className}
+                className={(KYC_TIER_STYLES[consumer.kycTier as KycTier] || { className: "", label: consumer.kycTier || "N/A" }).className}
               >
-                {KYC_TIER_STYLES[consumer.kycTier].label}
+                {(KYC_TIER_STYLES[consumer.kycTier as KycTier] || { className: "", label: consumer.kycTier || "N/A" }).label}
               </Badge>
             }
           />
@@ -1021,11 +1021,11 @@ function OverviewTab({
               <span
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold",
-                  RISK_TONE(consumer.riskScore),
+                  RISK_TONE(consumer.riskScore ?? 0),
                 )}
               >
                 <ShieldAlert className="size-3" />
-                {consumer.riskScore}/100
+                {consumer.riskScore ?? 0}/100
               </span>
             }
           />
@@ -1041,11 +1041,11 @@ function OverviewTab({
       <Card>
         <CardContent className="p-4">
           <SectionLabel icon={Globe2}>Platforms Used</SectionLabel>
-          {consumer.platforms.length === 0 ? (
+          {(consumer.platforms || []).length === 0 ? (
             <p className="text-xs text-muted-foreground px-3 py-2">No platforms linked.</p>
           ) : (
             <div className="flex flex-wrap gap-1.5 px-3 py-2">
-              {consumer.platforms.map((p) => (
+              {(consumer.platforms || []).map((p) => (
                 <Badge
                   key={p}
                   variant="outline"
@@ -1066,12 +1066,12 @@ function OverviewTab({
             label="Wallet balance"
             value={
               <span className="font-semibold tabular-nums">
-                {formatCurrency(consumer.walletBalance, consumer.currency)}
+                {formatCurrency(consumer.walletBalance ?? 0, consumer.currency ?? "NGN")}
               </span>
             }
           />
-          <DetailRow label="Currency" value={consumer.currency} />
-          <DetailRow label="Last updated" value={timeAgo(consumer.updatedAt)} />
+          <DetailRow label="Currency" value={consumer.currency || "NGN"} />
+          <DetailRow label="Last updated" value={timeAgo(consumer.updatedAt ?? null)} />
         </CardContent>
       </Card>
 
@@ -1082,7 +1082,7 @@ function OverviewTab({
             label="Lifetime volume"
             value={
               <span className="font-semibold tabular-nums">
-                {formatCurrency(consumer.lifetimeVolume, consumer.currency)}
+                {formatCurrency(consumer.lifetimeVolume ?? 0, consumer.currency ?? "NGN")}
               </span>
             }
           />
@@ -1090,11 +1090,11 @@ function OverviewTab({
             label="Monthly volume"
             value={
               <span className="font-semibold tabular-nums">
-                {formatCurrency(consumer.monthlyVolume, consumer.currency)}
+                {formatCurrency(consumer.monthlyVolume ?? 0, consumer.currency ?? "NGN")}
               </span>
             }
           />
-          <DetailRow label="Transaction count" value={formatNumber(consumer.transactionCount)} />
+          <DetailRow label="Transaction count" value={formatNumber(consumer.transactionCount ?? 0)} />
         </CardContent>
       </Card>
 
@@ -1377,7 +1377,7 @@ function TransactionsTab({
       {
         countryCode: t.countryCode,
         afterValue: "dispute_opened",
-        reason: `Open dispute on ${t.reference} for ${consumer.consumerCode}`,
+        reason: `Open dispute on ${t.reference} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`Dispute opened for ${t.reference}`);
@@ -1398,7 +1398,7 @@ function TransactionsTab({
       {
         countryCode: t.countryCode,
         afterValue: "escalated",
-        reason: `Escalate ${t.reference} for ${consumer.consumerCode}`,
+        reason: `Escalate ${t.reference} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`Transaction ${t.reference} escalated`);
@@ -1537,7 +1537,7 @@ function DocumentsTab({
         countryCode: d.countryCode,
         beforeValue: d.status,
         afterValue: status,
-        reason: `${label} document ${d.fileName} for ${consumer.consumerCode}`,
+        reason: `${label} document ${d.fileName} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`${label} document ${d.fileName}`);
@@ -1656,7 +1656,7 @@ function KycTab({
         countryCode: k.countryCode,
         beforeValue: k.status,
         afterValue: "approved",
-        reason: `Approve KYC case ${k.id} for ${consumer.consumerCode}`,
+        reason: `Approve KYC case ${k.id} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`KYC case ${k.id} approved — consumer activated`);
@@ -1682,7 +1682,7 @@ function KycTab({
         countryCode: k.countryCode,
         beforeValue: k.status,
         afterValue: "rejected",
-        reason: `Reject KYC case ${k.id} for ${consumer.consumerCode}`,
+        reason: `Reject KYC case ${k.id} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`KYC case ${k.id} rejected`);
@@ -1705,7 +1705,7 @@ function KycTab({
         countryCode: k.countryCode,
         beforeValue: k.status,
         afterValue: "escalated",
-        reason: `Escalate KYC case ${k.id} for ${consumer.consumerCode}`,
+        reason: `Escalate KYC case ${k.id} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`KYC case ${k.id} escalated`);
@@ -1832,7 +1832,7 @@ function TicketsTab({
       t.id,
       {
         countryCode: t.countryCode,
-        reason: `${label} on ticket ${t.id} for ${consumer.consumerCode}`,
+        reason: `${label} on ticket ${t.id} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`${label} — ticket ${t.id}`);
@@ -1969,7 +1969,7 @@ function DisputesTab({
         countryCode: d.countryCode,
         beforeValue: d.status,
         afterValue: status,
-        reason: `Update dispute ${d.id} status to ${status} for ${consumer.consumerCode}`,
+        reason: `Update dispute ${d.id} status to ${status} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`Dispute ${d.id} status updated to ${DISPUTE_STATUS_STYLES[status].label}`);
@@ -2099,7 +2099,7 @@ function RiskTab({
         countryCode: f.countryCode,
         beforeValue: f.status,
         afterValue: "closed",
-        reason: `Close false-positive alert ${f.id} for ${consumer.consumerCode}`,
+        reason: `Close false-positive alert ${f.id} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`Alert ${f.id} closed (false positive)`);
@@ -2122,7 +2122,7 @@ function RiskTab({
         countryCode: f.countryCode,
         beforeValue: f.status,
         afterValue: "escalated",
-        reason: `Escalate alert ${f.id} for ${consumer.consumerCode}`,
+        reason: `Escalate alert ${f.id} for ${consumer.consumerCode || "—"}`,
       },
     );
     toast.success(`Alert ${f.id} escalated`);
@@ -2318,7 +2318,7 @@ function OrdersTab({
       countryCode: order.countryCode,
       beforeValue: order.status,
       afterValue: "shipped",
-      reason: `Ship order ${order.orderCode} for ${consumer.consumerCode}`,
+      reason: `Ship order ${order.orderCode} for ${consumer.consumerCode || "—"}`,
     });
     toast.success(`Order shipped: ${order.orderCode}`, {
       description: `${order.model} · ${order.userName}`,
@@ -2343,7 +2343,7 @@ function OrdersTab({
       countryCode: order.countryCode,
       beforeValue: order.status,
       afterValue: "delivered",
-      reason: `Deliver order ${order.orderCode} for ${consumer.consumerCode}`,
+      reason: `Deliver order ${order.orderCode} for ${consumer.consumerCode || "—"}`,
     });
     toast.success(`Order delivered: ${order.orderCode}`, {
       description: `${order.model} · ${order.userName}`,
@@ -2372,7 +2372,7 @@ function OrdersTab({
       countryCode: order.countryCode,
       beforeValue: order.status,
       afterValue: "cancelled",
-      reason: `Cancel order ${order.orderCode} for ${consumer.consumerCode}`,
+      reason: `Cancel order ${order.orderCode} for ${consumer.consumerCode || "—"}`,
     });
     toast.success(`Order cancelled: ${order.orderCode}`, {
       description: "Stock item returned to inventory.",
