@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Stock & Inventory View (Task STK1)
+     5→ *
+     6→ * Rebuilt to address user feedback:
+     7→ *   1. "There is no price"            → each item shows price prominently
+     8→ *   2. "No room to add pictures"      → each item shows its product image
+     9→ *   3. "Order only what's there"      → only in_stock items can be ordered;
+    10→ *                                         if a type has zero in_stock items,
+    11→ *                                         ordering for that type is disabled
+    12→ *   4. "Delivery fee should be incl." → Unit Price + Delivery Fee = Total
+    13→ *
+    14→ * Two tabs:
+    15→ *   • Inventory — product-card grid showing image, price, status, serial, etc.
+    16→ *   • Orders    — table of all StockOrders with delivery fee + total
+    17→ *
+    18→ * Audit action keys:
+    19→ *   stock.create / stock.mark_damaged / stock.mark_in_stock
+    20→ *   stock_order.create / stock_order.ship / stock_order.deliver / stock_order.cancel
+    21→ */
+    22→import { useEffect, useMemo, useState } from "react";
+    23→import {
+    24→  Boxes,
+    25→  Plus,
+    26→  MoreHorizontal,
+    27→  Eye,
+    28→  PackageCheck,
+    29→  AlertTriangle,
+    30→  Search,
+    31→  Filter,
+    32→  CreditCard,
+    33→  Smartphone,
+    34→  XCircle,
+    35→  Building2,
+    36→  PackageX,
+    37→  Truck,
+    38→  CheckCircle2,
+    39→  Ban,
+    40→  ImageOff,
+    41→  ShoppingCart,
+    42→  Wallet,
+    43→  Clock,
+    44→  Package,
+    45→  User,
+    46→  Receipt,
+    47→  ArrowRight,
+    48→  PlusCircle,
+    49→} from "lucide-react";
+    50→import { toast } from "sonner";
+    51→import {
+    52→  ViewHeader,
+    53→  ViewContainer,
+    54→  EmptyState,
+    55→  StatCard,
+    56→} from "@/components/portal/view-helpers";
+    57→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    58→import { Badge } from "@/components/ui/badge";
+    59→import { Button } from "@/components/ui/button";
+    60→import { Input } from "@/components/ui/input";
+    61→import { Label } from "@/components/ui/label";
+    62→import { Textarea } from "@/components/ui/textarea";
+    63→import {
+    64→  Table,
+    65→  TableBody,
+    66→  TableCell,
+    67→  TableHead,
+    68→  TableHeader,
+    69→  TableRow,
+    70→} from "@/components/ui/table";
+    71→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    72→import {
+    73→  DropdownMenu,
+    74→  DropdownMenuContent,
+    75→  DropdownMenuItem,
+    76→  DropdownMenuLabel,
+    77→  DropdownMenuSeparator,
+    78→  DropdownMenuTrigger,
+    79→} from "@/components/ui/dropdown-menu";
+    80→import {
+    81→  Dialog,
+    82→  DialogContent,
+    83→  DialogDescription,
+    84→  DialogFooter,
+    85→  DialogHeader,
+    86→  DialogTitle,
+    87→} from "@/components/ui/dialog";
+    88→import {
+    89→  Select,
+    90→  SelectContent,
+    91→  SelectItem,
+    92→  SelectTrigger,
+    93→  SelectValue,
+    94→} from "@/components/ui/select";
+    95→import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+    96→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+    97→import { useAuth } from "@/hooks/use-auth";
+    98→import { adminData, logAudit } from "@/lib/admin-data";
+    99→import { getVisibleCountryCodes, isGlobalScope } from "@/lib/access-scope";
+   100→import {
+   101→  formatCurrency,
+   102→  formatDateTime,
+   103→  formatNumber,
+   104→  timeAgo,
+   105→} from "@/lib/formatters";
+   106→import type {
+   107→  CountryConfig,
+   108→  StockItem,
+   109→  StockItemStatus,
+   110→  StockItemType,
+   111→  StockOrder,
+   112→  StockOrderStatus,
+   113→} from "@/lib/types";
+   114→import { cn } from "@/lib/utils";
+   115→
+   116→const SUPER_ADMIN_DEPT = "dept_super_admin";
+   117→
+   118→/* Default delivery fee by country (currency code looked up from country). */
+   119→const DEFAULT_DELIVERY_FEE: Record<string, number> = {
+   120→  NG: 2000,
+   121→  GH: 20,
+   122→  KE: 300,
+   123→  ZA: 100,
+   124→};
+   125→
+   126→const STOCK_STATUS_STYLES: Record<
+   127→  StockItemStatus,
+   128→  { label: string; className: string }
+   129→> = {
+   130→  in_stock: {
+   131→    label: "In Stock",
+   132→    className:
+   133→      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   134→  },
+   135→  allocated: {
+   136→    label: "Allocated",
+   137→    className:
+   138→      "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+   139→  },
+   140→  shipped: {
+   141→    label: "Shipped",
+   142→    className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+   143→  },
+   144→  delivered: {
+   145→    label: "Delivered",
+   146→    className:
+   147→      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   148→  },
+   149→  damaged: {
+   150→    label: "Damaged",
+   151→    className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+   152→  },
+   153→  lost: {
+   154→    label: "Lost",
+   155→    className:
+   156→      "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
+   157→  },
+   158→};
+   159→
+   160→const ORDER_STATUS_STYLES: Record<
+   161→  StockOrderStatus,
+   162→  { label: string; className: string }
+   163→> = {
+   164→  pending: {
+   165→    label: "Pending",
+   166→    className:
+   167→      "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+   168→  },
+   169→  fulfilled: {
+   170→    label: "Fulfilled",
+   171→    className:
+   172→      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   173→  },
+   174→  shipped: {
+   175→    label: "Shipped",
+   176→    className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+   177→  },
+   178→  delivered: {
+   179→    label: "Delivered",
+   180→    className:
+   181→      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   182→  },
+   183→  cancelled: {
+   184→    label: "Cancelled",
+   185→    className:
+   186→      "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
+   187→  },
+   188→};
+   189→
+   190→const TYPE_META: Record<
+   191→  StockItemType,
+   192→  { label: string; icon: typeof Smartphone; shortLabel: string }
+   193→> = {
+   194→  physical_terminal: {
+   195→    label: "Physical Terminal",
+   196→    icon: Smartphone,
+   197→    shortLabel: "Terminal",
+   198→  },
+   199→  physical_card: { label: "Physical Card", icon: CreditCard, shortLabel: "Card" },
+   200→};
+   201→
+   202→export function StockView() {
+   203→  const { staff } = useAuth();
+   204→  const [items, setItems] = useState<StockItem[]>([]);
+   205→  const [orders, setOrders] = useState<StockOrder[]>([]);
+   206→  const [countries, setCountries] = useState<CountryConfig[]>([]);
+   207→
+   208→  // Top-level tab
+   209→  const [activeTab, setActiveTab] = useState<"inventory" | "orders">(
+   210→    "inventory",
+   211→  );
+   212→
+   213→  // Inventory filters
+   214→  const [invSearch, setInvSearch] = useState("");
+   215→  const [invCountry, setInvCountry] = useState<string>("all");
+   216→  const [invType, setInvType] = useState<string>("all");
+   217→  const [invStatus, setInvStatus] = useState<string>("all");
+   218→
+   219→  // Orders filters
+   220→  const [ordSearch, setOrdSearch] = useState("");
+   221→  const [ordCountry, setOrdCountry] = useState<string>("all");
+   222→  const [ordStatus, setOrdStatus] = useState<string>("all");
+   223→
+   224→  // Dialog state
+   225→  const [detailItem, setDetailItem] = useState<StockItem | null>(null);
+   226→  const [detailOrder, setDetailOrder] = useState<StockOrder | null>(null);
+   227→  const [addOpen, setAddOpen] = useState(false);
+   228→  const [addKey, setAddKey] = useState(0);
+   229→  const [orderOpen, setOrderOpen] = useState(false);
+   230→  const [orderKey, setOrderKey] = useState(0);
+   231→
+   232→  /* ----------------------- Subscriptions ----------------------- */
+   233→  useEffect(() => {
+   234→    const unsubStock = adminData.subscribeStock(setItems);
+   235→    const unsubOrders = adminData.subscribeStockOrders(setOrders);
+   236→    const unsubCountries = adminData.subscribeCountries(setCountries);
+   237→    return () => {
+   238→      unsubStock();
+   239→      unsubOrders();
+   240→      unsubCountries();
+   241→    };
+   242→  }, []);
+   243→
+   244→  /* ----------------------- Country scoping --------------------- */
+   245→  const visibleCountryCodes = useMemo(
+   246→    () => getVisibleCountryCodes(staff, countries),
+   247→    [staff, countries],
+   248→  );
+   249→  const isSuperAdmin =
+   250→    isGlobalScope(staff) || staff?.departmentId === SUPER_ADMIN_DEPT;
+   251→
+   252→  const filterableCountries = useMemo(
+   253→    () =>
+   254→      isSuperAdmin
+   255→        ? countries
+   256→        : countries.filter((c) => visibleCountryCodes.has(c.countryCode)),
+   257→    [countries, isSuperAdmin, visibleCountryCodes],
+   258→  );
+   259→
+   260→  const visibleItems = useMemo(
+   261→    () => items.filter((it) => visibleCountryCodes.has(it.countryCode)),
+   262→    [items, visibleCountryCodes],
+   263→  );
+   264→  const visibleOrders = useMemo(
+   265→    () => orders.filter((o) => visibleCountryCodes.has(o.countryCode)),
+   266→    [orders, visibleCountryCodes],
+   267→  );
+   268→
+   269→  const existingSerials = useMemo(
+   270→    () => new Set(items.map((i) => i.serialNumber.toLowerCase())),
+   271→    [items],
+   272→  );
+   273→
+   274→  /* ----------------------- Inventory filtering ----------------- */
+   275→  const filteredItems = useMemo(() => {
+   276→    let list = visibleItems;
+   277→    if (invCountry !== "all")
+   278→      list = list.filter((i) => i.countryCode === invCountry);
+   279→    if (invType !== "all") list = list.filter((i) => i.type === invType);
+   280→    if (invStatus !== "all") {
+   281→      if (invStatus === "damaged_lost")
+   282→        list = list.filter(
+   283→          (i) => i.status === "damaged" || i.status === "lost",
+   284→        );
+   285→      else list = list.filter((i) => i.status === invStatus);
+   286→    }
+   287→    if (invSearch.trim()) {
+   288→      const q = invSearch.trim().toLowerCase();
+   289→      list = list.filter(
+   290→        (i) =>
+   291→          i.serialNumber.toLowerCase().includes(q) ||
+   292→          i.model.toLowerCase().includes(q) ||
+   293→          (i.allocatedToName ?? "").toLowerCase().includes(q),
+   294→      );
+   295→    }
+   296→    return list;
+   297→  }, [visibleItems, invCountry, invType, invStatus, invSearch]);
+   298→
+   299→  /* ----------------------- Orders filtering -------------------- */
+   300→  const filteredOrders = useMemo(() => {
+   301→    let list = visibleOrders;
+   302→    if (ordCountry !== "all")
+   303→      list = list.filter((o) => o.countryCode === ordCountry);
+   304→    if (ordStatus !== "all")
+   305→      list = list.filter((o) => o.status === ordStatus);
+   306→    if (ordSearch.trim()) {
+   307→      const q = ordSearch.trim().toLowerCase();
+   308→      list = list.filter(
+   309→        (o) =>
+   310→          o.orderCode.toLowerCase().includes(q) ||
+   311→          o.userName.toLowerCase().includes(q) ||
+   312→          o.model.toLowerCase().includes(q),
+   313→      );
+   314→    }
+   315→    return list;
+   316→  }, [visibleOrders, ordCountry, ordStatus, ordSearch]);
+   317→
+   318→  /* ----------------------- Stats ------------------------------- */
+   319→  const inventoryStats = useMemo(() => {
+   320→    const total = visibleItems.length;
+   321→    const inStock = visibleItems.filter((i) => i.status === "in_stock").length;
+   322→    const allocated = visibleItems.filter((i) => i.status === "allocated").length;
+   323→    const damaged = visibleItems.filter(
+   324→      (i) => i.status === "damaged" || i.status === "lost",
+   325→    ).length;
+   326→
+   327→    // Stock value — group by currency to avoid mixing NGN + GHS + KES + ZAR
+   328→    const byCurrency = new Map<string, number>();
+   329→    visibleItems
+   330→      .filter((i) => i.status === "in_stock" || i.status === "allocated")
+   331→      .forEach((i) => {
+   332→        byCurrency.set(
+   333→          i.currency,
+   334→          (byCurrency.get(i.currency) ?? 0) + i.price,
+   335→        );
+   336→      });
+   337→    const totalStockValue = Array.from(byCurrency.entries())
+   338→      .map(([cur, amt]) => formatCurrency(amt, cur))
+   339→      .join(" · ") || "—";
+   340→
+   341→    return { total, inStock, allocated, damaged, totalStockValue };
+   342→  }, [visibleItems]);
+   343→
+   344→  const orderStats = useMemo(() => {
+   345→    const total = visibleOrders.length;
+   346→    const pending = visibleOrders.filter((o) => o.status === "pending").length;
+   347→    const shipped = visibleOrders.filter((o) => o.status === "shipped").length;
+   348→    const delivered = visibleOrders.filter(
+   349→      (o) => o.status === "delivered",
+   350→    ).length;
+   351→
+   352→    // Total revenue — group by currency, only delivered orders
+   353→    const byCurrency = new Map<string, number>();
+   354→    visibleOrders
+   355→      .filter((o) => o.status === "delivered")
+   356→      .forEach((o) => {
+   357→        byCurrency.set(
+   358→          o.currency,
+   359→          (byCurrency.get(o.currency) ?? 0) + o.totalAmount,
+   360→        );
+   361→      });
+   362→    const totalRevenue = Array.from(byCurrency.entries())
+   363→      .map(([cur, amt]) => formatCurrency(amt, cur))
+   364→      .join(" · ") || "—";
+   365→
+   366→    return { total, pending, shipped, delivered, totalRevenue };
+   367→  }, [visibleOrders]);
+   368→
+   369→  /* ----------------------- Helpers ----------------------------- */
+   370→  function countryName(code: string): string {
+   371→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   372→  }
+   373→  function countryCurrency(code: string): string {
+   374→    return countries.find((c) => c.countryCode === code)?.currency ?? "NGN";
+   375→  }
+   376→
+   377→  function actor() {
+   378→    if (!staff) return null;
+   379→    return {
+   380→      staffId: staff.id,
+   381→      staffName: `${staff.firstName} ${staff.lastName}`,
+   382→      department: staff.departmentId,
+   383→      role: staff.roleId,
+   384→    };
+   385→  }
+   386→
+   387→  function markDamaged(item: StockItem) {
+   388→    const a = actor();
+   389→    if (!a) return;
+   390→    adminData.updateStockItem(item.id, {
+   391→      status: "damaged",
+   392→      updatedAt: Date.now(),
+   393→    });
+   394→    logAudit(a, "stock.mark_damaged", "stock_item", item.id, {
+   395→      countryCode: item.countryCode,
+   396→      beforeValue: item.status,
+   397→      afterValue: "damaged",
+   398→    });
+   399→    toast.success(`Marked damaged: ${item.serialNumber}`, {
+   400→      description: `${item.model} · pulled from fulfilment queue`,
+   401→    });
+   402→  }
+   403→
+   404→  function markInStock(item: StockItem) {
+   405→    const a = actor();
+   406→    if (!a) return;
+   407→    adminData.updateStockItem(item.id, {
+   408→      status: "in_stock",
+   409→      allocatedToId: null,
+   410→      allocatedToName: null,
+   411→      allocatedAt: null,
+   412→      shippedAt: null,
+   413→      deliveredAt: null,
+   414→      updatedAt: Date.now(),
+   415→    });
+   416→    logAudit(a, "stock.mark_in_stock", "stock_item", item.id, {
+   417→      countryCode: item.countryCode,
+   418→      beforeValue: item.status,
+   419→      afterValue: "in_stock",
+   420→    });
+   421→    toast.success(`Marked in stock: ${item.serialNumber}`, {
+   422→      description: `${item.model} · available for ordering`,
+   423→    });
+   424→  }
+   425→
+   426→  function markOrderShipped(order: StockOrder) {
+   427→    const a = actor();
+   428→    if (!a) return;
+   429→    adminData.updateStockOrder(order.id, {
+   430→      status: "shipped",
+   431→      updatedAt: Date.now(),
+   432→    });
+   433→    if (order.stockItemId) {
+   434→      adminData.updateStockItem(order.stockItemId, {
+   435→        status: "shipped",
+   436→        shippedAt: Date.now(),
+   437→        updatedAt: Date.now(),
+   438→      });
+   439→    }
+   440→    logAudit(a, "stock_order.ship", "stock_order", order.id, {
+   441→      countryCode: order.countryCode,
+   442→      beforeValue: order.status,
+   443→      afterValue: "shipped",
+   444→    });
+   445→    toast.success(`Order shipped: ${order.orderCode}`, {
+   446→      description: `${order.userName} · ${order.model}`,
+   447→    });
+   448→  }
+   449→
+   450→  function markOrderDelivered(order: StockOrder) {
+   451→    const a = actor();
+   452→    if (!a) return;
+   453→    adminData.updateStockOrder(order.id, {
+   454→      status: "delivered",
+   455→      updatedAt: Date.now(),
+   456→    });
+   457→    if (order.stockItemId) {
+   458→      adminData.updateStockItem(order.stockItemId, {
+   459→        status: "delivered",
+   460→        deliveredAt: Date.now(),
+   461→        updatedAt: Date.now(),
+   462→      });
+   463→    }
+   464→    logAudit(a, "stock_order.deliver", "stock_order", order.id, {
+   465→      countryCode: order.countryCode,
+   466→      beforeValue: order.status,
+   467→      afterValue: "delivered",
+   468→    });
+   469→    toast.success(`Order delivered: ${order.orderCode}`, {
+   470→      description: `${order.userName} · ${order.model}`,
+   471→    });
+   472→  }
+   473→
+   474→  function cancelOrder(order: StockOrder) {
+   475→    const a = actor();
+   476→    if (!a) return;
+   477→    adminData.updateStockOrder(order.id, {
+   478→      status: "cancelled",
+   479→      updatedAt: Date.now(),
+   480→    });
+   481→    // Release the allocated item back to inventory
+   482→    if (order.stockItemId) {
+   483→      adminData.updateStockItem(order.stockItemId, {
+   484→        status: "in_stock",
+   485→        allocatedToId: null,
+   486→        allocatedToName: null,
+   487→        allocatedAt: null,
+   488→        shippedAt: null,
+   489→        deliveredAt: null,
+   490→        updatedAt: Date.now(),
+   491→      });
+   492→    }
+   493→    logAudit(a, "stock_order.cancel", "stock_order", order.id, {
+   494→      countryCode: order.countryCode,
+   495→      beforeValue: order.status,
+   496→      afterValue: "cancelled",
+   497→      reason: "Cancelled by admin",
+   498→    });
+   499→    toast.success(`Order cancelled: ${order.orderCode}`, {
+   500→      description: `Item returned to inventory`,
+   501→    });
+   502→  }
+   503→
+   504→  /* In-stock items grouped by type, for the order dialog */
+   505→  const inStockByType = useMemo(() => {
+   506→    const groups: Record<StockItemType, StockItem[]> = {
+   507→      physical_terminal: [],
+   508→      physical_card: [],
+   509→    };
+   510→    visibleItems
+   511→      .filter((i) => i.status === "in_stock")
+   512→      .forEach((i) => groups[i.type].push(i));
+   513→    return groups;
+   514→  }, [visibleItems]);
+   515→
+   516→  const hasTerminalInStock = inStockByType.physical_terminal.length > 0;
+   517→  const hasCardInStock = inStockByType.physical_card.length > 0;
+   518→
+   519→  return (
+   520→    <>
+   521→      <ViewHeader
+   522→        title="Stock & Inventory"
+   523→        description="Track physical terminals and cards in stock. When users order and pay from their apps, items move here to their profile. Admin fulfils and tracks delivery."
+   524→        icon={Boxes}
+   525→        actions={
+   526→          isSuperAdmin ? (
+   527→            <Button
+   528→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   529→              onClick={() => {
+   530→                setAddKey((k) => k + 1);
+   531→                setAddOpen(true);
+   532→              }}
+   533→            >
+   534→              <Plus className="size-4" /> Add to Stock
+   535→            </Button>
+   536→          ) : null
+   537→        }
+   538→      />
+   539→
+   540→      <ViewContainer>
+   541→        <Tabs
+   542→          value={activeTab}
+   543→          onValueChange={(v) => setActiveTab(v as "inventory" | "orders")}
+   544→          className="w-full"
+   545→        >
+   546→          <TabsList className="h-auto flex-wrap justify-start gap-1">
+   547→            <TabsTrigger value="inventory" className="text-xs">
+   548→              <Boxes className="size-3.5" /> Inventory
+   549→              <Badge variant="secondary" className="text-[10px] ml-1">
+   550→                {visibleItems.length}
+   551→              </Badge>
+   552→            </TabsTrigger>
+   553→            <TabsTrigger value="orders" className="text-xs">
+   554→              <ShoppingCart className="size-3.5" /> Orders
+   555→              <Badge variant="secondary" className="text-[10px] ml-1">
+   556→                {visibleOrders.length}
+   557→              </Badge>
+   558→            </TabsTrigger>
+   559→          </TabsList>
+   560→
+   561→          {/* ====================== INVENTORY TAB ====================== */}
+   562→          <TabsContent value="inventory" className="space-y-4">
+   563→            {/* Stat cards */}
+   564→            <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
+   565→              <StatCard
+   566→                label="Total Items"
+   567→                value={inventoryStats.total}
+   568→                hint="Terminals + cards"
+   569→                icon={Boxes}
+   570→              />
+   571→              <StatCard
+   572→                label="In Stock"
+   573→                value={inventoryStats.inStock}
+   574→                hint="Available to order"
+   575→                icon={PackageCheck}
+   576→                tone="success"
+   577→              />
+   578→              <StatCard
+   579→                label="Allocated"
+   580→                value={inventoryStats.allocated}
+   581→                hint="Bound to a user"
+   582→                icon={Building2}
+   583→                tone="warning"
+   584→              />
+   585→              <StatCard
+   586→                label="Damaged"
+   587→                value={inventoryStats.damaged}
+   588→                hint="Pulled from circulation"
+   589→                icon={AlertTriangle}
+   590→                tone="danger"
+   591→              />
+   592→              <StatCard
+   593→                label="Stock Value"
+   594→                value={inventoryStats.totalStockValue}
+   595→                hint="In stock + allocated"
+   596→                icon={Wallet}
+   597→                tone="info"
+   598→              />
+   599→            </div>
+   600→
+   601→            {/* Availability banner */}
+   602→            <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+   603→              <PackageCheck className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+   604→              <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed space-y-0.5">
+   605→                <div>
+   606→                  <span className="font-medium">Availability-based ordering:</span>{" "}
+   607→                  users can only order what is currently{" "}
+   608→                  <span className="font-medium">In Stock</span>. If no terminals
+   609→                  are in stock, terminal ordering is disabled. Same for cards.
+   610→                </div>
+   611→                <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+   612→                  <span className="inline-flex items-center gap-1">
+   613→                    <Smartphone className="size-3" />
+   614→                    Terminals in stock:{" "}
+   615→                    <span className={cn("font-mono font-semibold", hasTerminalInStock ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300")}>
+   616→                      {inStockByType.physical_terminal.length}
+   617→                    </span>
+   618→                  </span>
+   619→                  <span className="inline-flex items-center gap-1">
+   620→                    <CreditCard className="size-3" />
+   621→                    Cards in stock:{" "}
+   622→                    <span className={cn("font-mono font-semibold", hasCardInStock ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300")}>
+   623→                      {inStockByType.physical_card.length}
+   624→                    </span>
+   625→                  </span>
+   626→                </div>
+   627→              </div>
+   628→            </div>
+   629→
+   630→            {/* Filters */}
+   631→            <Card>
+   632→              <CardHeader className="pb-3">
+   633→                <CardTitle className="text-sm flex items-center gap-2">
+   634→                  <Filter className="size-4 text-emerald-600" />
+   635→                  Filter inventory
+   636→                </CardTitle>
+   637→                <div className="flex flex-wrap items-center gap-2 pt-1">
+   638→                  <div className="relative">
+   639→                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   640→                    <Input
+   641→                      placeholder="Search serial, model, merchant..."
+   642→                      value={invSearch}
+   643→                      onChange={(e) => setInvSearch(e.target.value)}
+   644→                      className="pl-7 h-8 w-56 text-xs"
+   645→                    />
+   646→                  </div>
+   647→                  <Select value={invCountry} onValueChange={setInvCountry}>
+   648→                    <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   649→                      <SelectValue placeholder="Country" />
+   650→                    </SelectTrigger>
+   651→                    <SelectContent>
+   652→                      <SelectItem value="all">All countries</SelectItem>
+   653→                      {filterableCountries.map((c) => (
+   654→                        <SelectItem key={c.countryCode} value={c.countryCode}>
+   655→                          {c.countryCode} · {c.countryName}
+   656→                        </SelectItem>
+   657→                      ))}
+   658→                    </SelectContent>
+   659→                  </Select>
+   660→                  <Select value={invType} onValueChange={setInvType}>
+   661→                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   662→                      <SelectValue placeholder="Type" />
+   663→                    </SelectTrigger>
+   664→                    <SelectContent>
+   665→                      <SelectItem value="all">All types</SelectItem>
+   666→                      <SelectItem value="physical_terminal">Terminal</SelectItem>
+   667→                      <SelectItem value="physical_card">Card</SelectItem>
+   668→                    </SelectContent>
+   669→                  </Select>
+   670→                  <Select value={invStatus} onValueChange={setInvStatus}>
+   671→                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   672→                      <SelectValue placeholder="Status" />
+   673→                    </SelectTrigger>
+   674→                    <SelectContent>
+   675→                      <SelectItem value="all">All statuses</SelectItem>
+   676→                      <SelectItem value="in_stock">In Stock</SelectItem>
+   677→                      <SelectItem value="allocated">Allocated</SelectItem>
+   678→                      <SelectItem value="shipped">Shipped</SelectItem>
+   679→                      <SelectItem value="delivered">Delivered</SelectItem>
+   680→                      <SelectItem value="damaged_lost">Damaged / Lost</SelectItem>
+   681→                    </SelectContent>
+   682→                  </Select>
+   683→                  {(invSearch ||
+   684→                    invCountry !== "all" ||
+   685→                    invType !== "all" ||
+   686→                    invStatus !== "all") && (
+   687→                    <Button
+   688→                      variant="ghost"
+   689→                      size="sm"
+   690→                      className="h-8 text-xs"
+   691→                      onClick={() => {
+   692→                        setInvSearch("");
+   693→                        setInvCountry("all");
+   694→                        setInvType("all");
+   695→                        setInvStatus("all");
+   696→                      }}
+   697→                    >
+   698→                      <XCircle className="size-3 mr-1" /> Clear
+   699→                    </Button>
+   700→                  )}
+   701→                </div>
+   702→              </CardHeader>
+   703→            </Card>
+   704→
+   705→            {/* Product cards grid */}
+   706→            {filteredItems.length === 0 ? (
+   707→              <Card>
+   708→                <CardContent className="p-0">
+   709→                  <EmptyState
+   710→                    icon={Boxes}
+   711→                    title="No items match"
+   712→                    description="Adjust filters or add new items to Faya's warehouse inventory."
+   713→                  />
+   714→                </CardContent>
+   715→              </Card>
+   716→            ) : (
+   717→              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+   718→                {filteredItems.map((item) => (
+   719→                  <ProductCard
+   720→                    key={item.id}
+   721→                    item={item}
+   722→                    countryName={countryName(item.countryCode)}
+   723→                    onDetail={() => setDetailItem(item)}
+   724→                    onMarkDamaged={() => markDamaged(item)}
+   725→                    onMarkInStock={() => markInStock(item)}
+   726→                  />
+   727→                ))}
+   728→              </div>
+   729→            )}
+   730→          </TabsContent>
+   731→
+   732→          {/* ======================= ORDERS TAB ======================= */}
+   733→          <TabsContent value="orders" className="space-y-4">
+   734→            {/* Stat cards */}
+   735→            <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
+   736→              <StatCard
+   737→                label="Total Orders"
+   738→                value={orderStats.total}
+   739→                hint="All time"
+   740→                icon={ShoppingCart}
+   741→              />
+   742→              <StatCard
+   743→                label="Pending"
+   744→                value={orderStats.pending}
+   745→                hint="Awaiting fulfilment"
+   746→                icon={Clock}
+   747→                tone="warning"
+   748→              />
+   749→              <StatCard
+   750→                label="Shipped"
+   751→                value={orderStats.shipped}
+   752→                hint="In transit"
+   753→                icon={Truck}
+   754→                tone="info"
+   755→              />
+   756→              <StatCard
+   757→                label="Delivered"
+   758→                value={orderStats.delivered}
+   759→                hint="Completed"
+   760→                icon={CheckCircle2}
+   761→                tone="success"
+   762→              />
+   763→              <StatCard
+   764→                label="Revenue"
+   765→                value={orderStats.totalRevenue}
+   766→                hint="Delivered orders only"
+   767→                icon={Wallet}
+   768→                tone="success"
+   769→              />
+   770→            </div>
+   771→
+   772→            {/* Filter bar */}
+   773→            <Card>
+   774→              <CardHeader className="pb-3">
+   775→                <CardTitle className="text-sm flex items-center gap-2">
+   776→                  <Filter className="size-4 text-emerald-600" />
+   777→                  Filter orders
+   778→                </CardTitle>
+   779→                <div className="flex flex-wrap items-center gap-2 pt-1">
+   780→                  <div className="relative">
+   781→                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   782→                    <Input
+   783→                      placeholder="Search order code, user, model..."
+   784→                      value={ordSearch}
+   785→                      onChange={(e) => setOrdSearch(e.target.value)}
+   786→                      className="pl-7 h-8 w-64 text-xs"
+   787→                    />
+   788→                  </div>
+   789→                  <Select value={ordCountry} onValueChange={setOrdCountry}>
+   790→                    <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   791→                      <SelectValue placeholder="Country" />
+   792→                    </SelectTrigger>
+   793→                    <SelectContent>
+   794→                      <SelectItem value="all">All countries</SelectItem>
+   795→                      {filterableCountries.map((c) => (
+   796→                        <SelectItem key={c.countryCode} value={c.countryCode}>
+   797→                          {c.countryCode} · {c.countryName}
+   798→                        </SelectItem>
+   799→                      ))}
+   800→                    </SelectContent>
+   801→                  </Select>
+   802→                  <Select value={ordStatus} onValueChange={setOrdStatus}>
+   803→                    <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   804→                      <SelectValue placeholder="Status" />
+   805→                    </SelectTrigger>
+   806→                    <SelectContent>
+   807→                      <SelectItem value="all">All statuses</SelectItem>
+   808→                      <SelectItem value="pending">Pending</SelectItem>
+   809→                      <SelectItem value="fulfilled">Fulfilled</SelectItem>
+   810→                      <SelectItem value="shipped">Shipped</SelectItem>
+   811→                      <SelectItem value="delivered">Delivered</SelectItem>
+   812→                      <SelectItem value="cancelled">Cancelled</SelectItem>
+   813→                    </SelectContent>
+   814→                  </Select>
+   815→                  {(ordSearch ||
+   816→                    ordCountry !== "all" ||
+   817→                    ordStatus !== "all") && (
+   818→                    <Button
+   819→                      variant="ghost"
+   820→                      size="sm"
+   821→                      className="h-8 text-xs"
+   822→                      onClick={() => {
+   823→                        setOrdSearch("");
+   824→                        setOrdCountry("all");
+   825→                        setOrdStatus("all");
+   826→                      }}
+   827→                    >
+   828→                      <XCircle className="size-3 mr-1" /> Clear
+   829→                    </Button>
+   830→                  )}
+   831→                </div>
+   832→              </CardHeader>
+   833→              <CardContent className="p-0">
+   834→                {filteredOrders.length === 0 ? (
+   835→                  <EmptyState
+   836→                    icon={ShoppingCart}
+   837→                    title="No orders match"
+   838→                    description="Orders placed by consumers and merchants for physical items will appear here."
+   839→                  />
+   840→                ) : (
+   841→                  <div
+   842→                    className={
+   843→                      "max-h-[60vh] overflow-auto " +
+   844→                      "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+   845→                      "[&::-webkit-scrollbar-thumb]:rounded-full " +
+   846→                      "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+   847→                      "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+   848→                    }
+   849→                  >
+   850→                    <Table>
+   851→                      <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   852→                        <TableRow>
+   853→                          <TableHead className="pl-4">Order Code</TableHead>
+   854→                          <TableHead>User</TableHead>
+   855→                          <TableHead>Item</TableHead>
+   856→                          <TableHead className="text-right">Unit Price</TableHead>
+   857→                          <TableHead className="text-right">Delivery Fee</TableHead>
+   858→                          <TableHead className="text-right">Total</TableHead>
+   859→                          <TableHead>Status</TableHead>
+   860→                          <TableHead className="hidden lg:table-cell">Delivery Address</TableHead>
+   861→                          <TableHead className="hidden md:table-cell">Created</TableHead>
+   862→                          <TableHead className="text-right pr-3">Actions</TableHead>
+   863→                        </TableRow>
+   864→                      </TableHeader>
+   865→                      <TableBody>
+   866→                        {filteredOrders.map((o) => {
+   867→                          const statusStyle = ORDER_STATUS_STYLES[o.status];
+   868→                          const typeMeta = TYPE_META[o.itemType];
+   869→                          const TypeIcon = typeMeta.icon;
+   870→                          return (
+   871→                            <TableRow key={o.id}>
+   872→                              <TableCell className="pl-4 font-mono text-xs">
+   873→                                {o.orderCode}
+   874→                              </TableCell>
+   875→                              <TableCell>
+   876→                                <div className="flex flex-col">
+   877→                                  <span className="text-xs font-medium inline-flex items-center gap-1">
+   878→                                    {o.userType === "merchant" ? (
+   879→                                      <Building2 className="size-3 text-emerald-600" />
+   880→                                    ) : (
+   881→                                      <User className="size-3 text-amber-600" />
+   882→                                    )}
+   883→                                    {o.userName}
+   884→                                  </span>
+   885→                                  <Badge
+   886→                                    variant="outline"
+   887→                                    className="text-[9px] w-fit mt-0.5 capitalize"
+   888→                                  >
+   889→                                    {o.userType}
+   890→                                  </Badge>
+   891→                                </div>
+   892→                              </TableCell>
+   893→                              <TableCell>
+   894→                                <div className="flex flex-col">
+   895→                                  <span className="text-xs font-medium inline-flex items-center gap-1">
+   896→                                    <TypeIcon className="size-3 text-emerald-600" />
+   897→                                    {o.model}
+   898→                                  </span>
+   899→                                  <span className="text-[10px] text-muted-foreground capitalize">
+   900→                                    {typeMeta.shortLabel} · {o.countryCode}
+   901→                                  </span>
+   902→                                </div>
+   903→                              </TableCell>
+   904→                              <TableCell className="text-right text-xs font-mono">
+   905→                                {formatCurrency(o.unitPrice, o.currency)}
+   906→                              </TableCell>
+   907→                              <TableCell className="text-right text-xs font-mono text-muted-foreground">
+   908→                                {formatCurrency(o.deliveryFee, o.currency)}
+   909→                              </TableCell>
+   910→                              <TableCell className="text-right text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+   911→                                {formatCurrency(o.totalAmount, o.currency)}
+   912→                              </TableCell>
+   913→                              <TableCell>
+   914→                                <Badge
+   915→                                  variant="secondary"
+   916→                                  className={cn("text-[10px]", statusStyle.className)}
+   917→                                >
+   918→                                  {statusStyle.label}
+   919→                                </Badge>
+   920→                              </TableCell>
+   921→                              <TableCell className="hidden lg:table-cell max-w-[200px] text-xs text-muted-foreground line-clamp-2">
+   922→                                {o.deliveryAddress || "—"}
+   923→                              </TableCell>
+   924→                              <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+   925→                                {timeAgo(o.createdAt)}
+   926→                              </TableCell>
+   927→                              <TableCell className="text-right pr-3">
+   928→                                <DropdownMenu>
+   929→                                  <DropdownMenuTrigger asChild>
+   930→                                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+   931→                                      <MoreHorizontal className="size-3.5" />
+   932→                                    </Button>
+   933→                                  </DropdownMenuTrigger>
+   934→                                  <DropdownMenuContent align="end" className="w-44">
+   935→                                    <DropdownMenuLabel className="text-xs font-mono">
+   936→                                      {o.orderCode}
+   937→                                    </DropdownMenuLabel>
+   938→                                    <DropdownMenuSeparator />
+   939→                                    <DropdownMenuItem onClick={() => setDetailOrder(o)}>
+   940→                                      <Eye className="size-3.5 mr-2" /> View details
+   941→                                    </DropdownMenuItem>
+   942→                                    {o.status === "pending" && (
+   943→                                      <DropdownMenuItem
+   944→                                        onClick={() => markOrderShipped(o)}
+   945→                                        className="text-sky-700 dark:text-sky-300 focus:text-sky-700"
+   946→                                      >
+   947→                                        <Truck className="size-3.5 mr-2" /> Mark shipped
+   948→                                      </DropdownMenuItem>
+   949→                                    )}
+   950→                                    {o.status === "shipped" && (
+   951→                                      <DropdownMenuItem
+   952→                                        onClick={() => markOrderDelivered(o)}
+   953→                                        className="text-emerald-700 dark:text-emerald-300 focus:text-emerald-700"
+   954→                                      >
+   955→                                        <CheckCircle2 className="size-3.5 mr-2" /> Mark delivered
+   956→                                      </DropdownMenuItem>
+   957→                                    )}
+   958→                                    {o.status === "pending" && (
+   959→                                      <DropdownMenuItem
+   960→                                        onClick={() => cancelOrder(o)}
+   961→                                        className="text-red-700 dark:text-red-300 focus:text-red-700"
+   962→                                      >
+   963→                                        <Ban className="size-3.5 mr-2" /> Cancel order
+   964→                                      </DropdownMenuItem>
+   965→                                    )}
+   966→                                  </DropdownMenuContent>
+   967→                                </DropdownMenu>
+   968→                              </TableCell>
+   969→                            </TableRow>
+   970→                          );
+   971→                        })}
+   972→                      </TableBody>
+   973→                    </Table>
+   974→                  </div>
+   975→                )}
+   976→              </CardContent>
+   977→            </Card>
+   978→          </TabsContent>
+   979→        </Tabs>
+   980→      </ViewContainer>
+   981→
+   982→      {/* Detail Dialog — keyed by item id so internal imgError state resets per item */}
+   983→      {detailItem && (
+   984→        <StockDetailDialog
+   985→          key={detailItem.id}
+   986→          item={detailItem}
+   987→          countryName={countryName}
+   988→          onOpenChange={(o) => !o && setDetailItem(null)}
+   989→        />
+   990→      )}
+   991→
+   992→      {/* Order Detail Dialog */}
+   993→      <OrderDetailDialog
+   994→        order={detailOrder}
+   995→        countryName={countryName}
+   996→        onOpenChange={(o) => !o && setDetailOrder(null)}
+   997→      />
+   998→
+   999→      {/* Add to Stock Dialog */}
+  1000→      <AddToStockDialog
+  1001→        key={addKey}
+  1002→        open={addOpen}
+  1003→        onOpenChange={setAddOpen}
+  1004→        countries={filterableCountries}
+  1005→        existingSerials={existingSerials}
+  1006→        onCreate={(newItem) => {
+  1007→          const a = actor();
+  1008→          if (!a) return;
+  1009→          adminData.createStockItem(newItem);
+  1010→          logAudit(a, "stock.create", "stock_item", newItem.id, {
+  1011→            countryCode: newItem.countryCode,
+  1012→            afterValue: `${newItem.type} · ${newItem.model} · ${newItem.serialNumber} · ${formatCurrency(newItem.price, newItem.currency)}`,
+  1013→          });
+  1014→          toast.success(`Added to stock: ${newItem.serialNumber}`, {
+  1015→            description: `${newItem.type === "physical_terminal" ? "Terminal" : "Card"} · ${newItem.model} · ${formatCurrency(newItem.price, newItem.currency)}`,
+  1016→          });
+  1017→          setAddOpen(false);
+  1018→        }}
+  1019→      />
+  1020→
+  1021→      <SonnerToaster richColors closeButton position="bottom-right" />
+  1022→    </>
+  1023→  );
+  1024→}
+  1025→
+  1026→/* ============================== Product Card ============================== */
+  1027→
+  1028→interface ProductCardProps {
+  1029→  item: StockItem;
+  1030→  countryName: string;
+  1031→  onDetail: () => void;
+  1032→  onMarkDamaged: () => void;
+  1033→  onMarkInStock: () => void;
+  1034→}
+  1035→
+  1036→function ProductCard({
+  1037→  item,
+  1038→  countryName,
+  1039→  onDetail,
+  1040→  onMarkDamaged,
+  1041→  onMarkInStock,
+  1042→}: ProductCardProps) {
+  1043→  const statusStyle = STOCK_STATUS_STYLES[item.status];
+  1044→  const typeMeta = TYPE_META[item.type];
+  1045→  const TypeIcon = typeMeta.icon;
+  1046→  const [imgError, setImgError] = useState(false);
+  1047→
+  1048→  const showImage = item.imageUrl && !imgError;
+  1049→
+  1050→  return (
+  1051→    <Card className="overflow-hidden flex flex-col group hover:shadow-md transition-shadow">
+  1052→      {/* Product image */}
+  1053→      <button
+  1054→        type="button"
+  1055→        onClick={onDetail}
+  1056→        className="relative w-full h-[120px] bg-slate-100 dark:bg-slate-800 flex items-center justify-center overflow-hidden text-left"
+  1057→        aria-label={`View details for ${item.model}`}
+  1058→      >
+  1059→        {showImage ? (
+  1060→          <img
+  1061→            src={item.imageUrl!}
+  1062→            alt={item.model}
+  1063→            onError={() => setImgError(true)}
+  1064→            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+  1065→            loading="lazy"
+  1066→          />
+  1067→        ) : (
+  1068→          <div className="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500">
+  1069→            <ImageOff className="size-8 mb-1" />
+  1070→            <span className="text-[10px]">No image</span>
+  1071→          </div>
+  1072→        )}
+  1073→        {/* Type badge */}
+  1074→        <div className="absolute top-2 left-2">
+  1075→          <Badge
+  1076→            variant="outline"
+  1077→            className={cn(
+  1078→              "text-[10px] bg-white/90 dark:bg-slate-900/80 backdrop-blur-sm",
+  1079→              item.type === "physical_terminal"
+  1080→                ? "text-emerald-700 border-emerald-300 dark:text-emerald-300 dark:border-emerald-800"
+  1081→                : "text-amber-700 border-amber-300 dark:text-amber-300 dark:border-amber-800",
+  1082→            )}
+  1083→          >
+  1084→            <TypeIcon className="size-2.5 mr-0.5" />
+  1085→            {typeMeta.label}
+  1086→          </Badge>
+  1087→        </div>
+  1088→        {/* Status badge */}
+  1089→        <div className="absolute top-2 right-2">
+  1090→          <Badge
+  1091→            variant="secondary"
+  1092→            className={cn("text-[10px]", statusStyle.className)}
+  1093→          >
+  1094→            {statusStyle.label}
+  1095→          </Badge>
+  1096→        </div>
+  1097→      </button>
+  1098→
+  1099→      <CardContent className="p-4 flex-1 flex flex-col gap-2">
+  1100→        {/* Model + serial */}
+  1101→        <div className="min-w-0">
+  1102→          <h3 className="text-sm font-semibold truncate">{item.model}</h3>
+  1103→          <p className="text-[11px] font-mono text-muted-foreground truncate">
+  1104→            {item.serialNumber}
+  1105→          </p>
+  1106→        </div>
+  1107→
+  1108→        {/* Description */}
+  1109→        {item.description && (
+  1110→          <p className="text-[11px] text-muted-foreground line-clamp-2 min-h-[28px]">
+  1111→            {item.description}
+  1112→          </p>
+  1113→        )}
+  1114→
+  1115→        {/* Price */}
+  1116→        <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-900/50 px-2.5 py-1.5">
+  1117→          <div className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+  1118→            Price
+  1119→          </div>
+  1120→          <div className="text-lg font-bold tabular-nums text-emerald-800 dark:text-emerald-200">
+  1121→            {formatCurrency(item.price, item.currency)}
+  1122→          </div>
+  1123→        </div>
+  1124→
+  1125→        {/* Allocated-to row */}
+  1126→        {item.allocatedToName && (
+  1127→          <div className="text-[11px] flex items-center gap-1 text-amber-700 dark:text-amber-300">
+  1128→            <Building2 className="size-3 shrink-0" />
+  1129→            <span className="truncate">
+  1130→              Allocated to: <span className="font-medium">{item.allocatedToName}</span>
+  1131→            </span>
+  1132→          </div>
+  1133→        )}
+  1134→
+  1135→        {/* Country + notes */}
+  1136→        <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+  1137→          <span className="inline-flex items-center gap-1">
+  1138→            <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">
+  1139→              {item.countryCode}
+  1140→            </span>
+  1141→            <span className="truncate hidden sm:inline">· {countryName}</span>
+  1142→          </span>
+  1143→          {item.notes ? (
+  1144→            <span className="truncate italic" title={item.notes}>
+  1145→              {item.notes}
+  1146→            </span>
+  1147→          ) : null}
+  1148→        </div>
+  1149→
+  1150→        {/* Actions */}
+  1151→        <div className="mt-auto pt-2 flex items-center gap-1">
+  1152→          <Button
+  1153→            variant="outline"
+  1154→            size="sm"
+  1155→            className="h-8 text-xs flex-1"
+  1156→            onClick={onDetail}
+  1157→          >
+  1158→            <Eye className="size-3 mr-1" /> Details
+  1159→          </Button>
+  1160→          <DropdownMenu>
+  1161→            <DropdownMenuTrigger asChild>
+  1162→              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+  1163→                <MoreHorizontal className="size-3.5" />
+  1164→              </Button>
+  1165→            </DropdownMenuTrigger>
+  1166→            <DropdownMenuContent align="end" className="w-44">
+  1167→              <DropdownMenuLabel className="text-xs font-mono">
+  1168→                {item.serialNumber}
+  1169→              </DropdownMenuLabel>
+  1170→              <DropdownMenuSeparator />
+  1171→              <DropdownMenuItem onClick={onDetail}>
+  1172→                <Eye className="size-3.5 mr-2" /> View details
+  1173→              </DropdownMenuItem>
+  1174→              {item.status !== "damaged" && item.status !== "lost" && (
+  1175→                <DropdownMenuItem
+  1176→                  onClick={onMarkDamaged}
+  1177→                  className="text-red-700 dark:text-red-300 focus:text-red-700"
+  1178→                >
+  1179→                  <PackageX className="size-3.5 mr-2" /> Mark damaged
+  1180→                </DropdownMenuItem>
+  1181→              )}
+  1182→              {item.status !== "in_stock" && (
+  1183→                <DropdownMenuItem
+  1184→                  onClick={onMarkInStock}
+  1185→                  className="text-emerald-700 dark:text-emerald-300 focus:text-emerald-700"
+  1186→                >
+  1187→                  <PackageCheck className="size-3.5 mr-2" /> Mark in stock
+  1188→                </DropdownMenuItem>
+  1189→              )}
+  1190→            </DropdownMenuContent>
+  1191→          </DropdownMenu>
+  1192→        </div>
+  1193→      </CardContent>
+  1194→    </Card>
+  1195→  );
+  1196→}
+  1197→
+  1198→/* ============================ Detail Dialog ============================ */
+  1199→
+  1200→function StockDetailDialog({
+  1201→  item,
+  1202→  countryName,
+  1203→  onOpenChange,
+  1204→}: {
+  1205→  item: StockItem;
+  1206→  countryName: (code: string) => string;
+  1207→  onOpenChange: (open: boolean) => void;
+  1208→}) {
+  1209→  const [imgError, setImgError] = useState(false);
+  1210→
+  1211→  const statusStyle = STOCK_STATUS_STYLES[item.status];
+  1212→  const typeMeta = TYPE_META[item.type];
+  1213→  const TypeIcon = typeMeta.icon;
+  1214→  const showImage = item.imageUrl && !imgError;
+  1215→
+  1216→  return (
+  1217→    <Dialog open={!!item} onOpenChange={onOpenChange}>
+  1218→      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+  1219→        <DialogHeader>
+  1220→          <DialogTitle className="flex items-center gap-2 text-base">
+  1221→            <Boxes className="size-5 text-emerald-600" />
+  1222→            Stock Item Detail
+  1223→          </DialogTitle>
+  1224→          <DialogDescription className="font-mono text-[11px]">
+  1225→            {item.id}
+  1226→          </DialogDescription>
+  1227→        </DialogHeader>
+  1228→
+  1229→        <div className="space-y-3 py-2">
+  1230→          {/* Product image */}
+  1231→          <div className="relative w-full h-[180px] rounded-md overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+  1232→            {showImage ? (
+  1233→              <img
+  1234→                src={item.imageUrl!}
+  1235→                alt={item.model}
+  1236→                onError={() => setImgError(true)}
+  1237→                className="h-full w-full object-cover"
+  1238→              />
+  1239→            ) : (
+  1240→              <div className="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500">
+  1241→                <ImageOff className="size-10 mb-1" />
+  1242→                <span className="text-xs">No image available</span>
+  1243→              </div>
+  1244→            )}
+  1245→          </div>
+  1246→
+  1247→          {/* Header chip */}
+  1248→          <div className="flex flex-wrap items-center gap-2">
+  1249→            <Badge
+  1250→              variant="outline"
+  1251→              className={cn(
+  1252→                "text-[10px]",
+  1253→                item.type === "physical_terminal"
+  1254→                  ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+  1255→                  : "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800",
+  1256→              )}
+  1257→            >
+  1258→              <TypeIcon className="size-2.5 mr-0.5" />
+  1259→              {typeMeta.label}
+  1260→            </Badge>
+  1261→            <Badge variant="secondary" className={cn("text-[10px]", statusStyle.className)}>
+  1262→              {statusStyle.label}
+  1263→            </Badge>
+  1264→          </div>
+  1265→
+  1266→          {/* Model + description */}
+  1267→          <div>
+  1268→            <div className="text-sm font-semibold">{item.model}</div>
+  1269→            {item.description && (
+  1270→              <p className="text-xs text-muted-foreground mt-1">{item.description}</p>
+  1271→            )}
+  1272→          </div>
+  1273→
+  1274→          {/* Price prominent */}
+  1275→          <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-900/50 px-3 py-2 flex items-center justify-between">
+  1276→            <div>
+  1277→              <div className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+  1278→                Unit Price
+  1279→              </div>
+  1280→              <div className="text-xs text-muted-foreground">
+  1281→                Charged at order time + delivery fee
+  1282→              </div>
+  1283→            </div>
+  1284→            <div className="text-2xl font-bold tabular-nums text-emerald-800 dark:text-emerald-200">
+  1285→              {formatCurrency(item.price, item.currency)}
+  1286→            </div>
+  1287→          </div>
+  1288→
+  1289→          {/* Detail rows */}
+  1290→          <div className="rounded-md border divide-y">
+  1291→            <DetailRow label="Serial Number" value={<span className="font-mono text-xs">{item.serialNumber}</span>} />
+  1292→            <DetailRow
+  1293→              label="Country"
+  1294→              value={
+  1295→                <span className="text-sm">
+  1296→                  <span className="font-mono">{item.countryCode}</span>
+  1297→                  <span className="text-muted-foreground ml-1">· {countryName(item.countryCode)}</span>
+  1298→                </span>
+  1299→              }
+  1300→            />
+  1301→            <DetailRow
+  1302→              label="Allocated To"
+  1303→              value={
+  1304→                item.allocatedToName ? (
+  1305→                  <span className="text-sm inline-flex items-center gap-1">
+  1306→                    <Building2 className="size-3 text-emerald-600" />
+  1307→                    {item.allocatedToName}
+  1308→                  </span>
+  1309→                ) : (
+  1310→                  <span className="text-xs text-muted-foreground">— not allocated —</span>
+  1311→                )
+  1312→              }
+  1313→            />
+  1314→            {item.allocatedAt && (
+  1315→              <DetailRow label="Allocated At" value={<span className="text-xs">{formatDateTime(item.allocatedAt)}</span>} />
+  1316→            )}
+  1317→            {item.shippedAt && (
+  1318→              <DetailRow label="Shipped At" value={<span className="text-xs">{formatDateTime(item.shippedAt)}</span>} />
+  1319→            )}
+  1320→            {item.deliveredAt && (
+  1321→              <DetailRow label="Delivered At" value={<span className="text-xs">{formatDateTime(item.deliveredAt)}</span>} />
+  1322→            )}
+  1323→            <DetailRow label="Created At" value={<span className="text-xs">{formatDateTime(item.createdAt)}</span>} />
+  1324→            <DetailRow label="Last Updated" value={<span className="text-xs">{formatDateTime(item.updatedAt)}</span>} />
+  1325→          </div>
+  1326→
+  1327→          {item.notes && (
+  1328→            <div>
+  1329→              <div className="text-xs font-medium text-muted-foreground uppercase mb-1">
+  1330→                Notes
+  1331→              </div>
+  1332→              <p className="text-sm bg-muted/40 border rounded-md p-3">{item.notes}</p>
+  1333→            </div>
+  1334→          )}
+  1335→        </div>
+  1336→
+  1337→        <DialogFooter>
+  1338→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+  1339→            Close
+  1340→          </Button>
+  1341→        </DialogFooter>
+  1342→      </DialogContent>
+  1343→    </Dialog>
+  1344→  );
+  1345→}
+  1346→
+  1347→function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  1348→  return (
+  1349→    <div className="flex items-start justify-between gap-3 py-1.5 px-3">
+  1350→      <span className="text-xs text-muted-foreground uppercase tracking-wide">
+  1351→        {label}
+  1352→      </span>
+  1353→      <span className="text-sm text-right min-w-0">{value}</span>
+  1354→    </div>
+  1355→  );
+  1356→}
+  1357→
+  1358→/* ========================= Order Detail Dialog ========================= */
+  1359→
+  1360→function OrderDetailDialog({
+  1361→  order,
+  1362→  countryName,
+  1363→  onOpenChange,
+  1364→}: {
+  1365→  order: StockOrder | null;
+  1366→  countryName: (code: string) => string;
+  1367→  onOpenChange: (open: boolean) => void;
+  1368→}) {
+  1369→  if (!order) return null;
+  1370→  const statusStyle = ORDER_STATUS_STYLES[order.status];
+  1371→  const typeMeta = TYPE_META[order.itemType];
+  1372→  const TypeIcon = typeMeta.icon;
+  1373→
+  1374→  return (
+  1375→    <Dialog open={!!order} onOpenChange={onOpenChange}>
+  1376→      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+  1377→        <DialogHeader>
+  1378→          <DialogTitle className="flex items-center gap-2 text-base">
+  1379→            <ShoppingCart className="size-5 text-emerald-600" />
+  1380→            Order Detail
+  1381→          </DialogTitle>
+  1382→          <DialogDescription className="font-mono text-[11px]">
+  1383→            {order.orderCode}
+  1384→          </DialogDescription>
+  1385→        </DialogHeader>
+  1386→
+  1387→        <div className="space-y-3 py-2">
+  1388→          {/* Status + type */}
+  1389→          <div className="flex flex-wrap items-center gap-2">
+  1390→            <Badge variant="secondary" className={cn("text-[10px]", statusStyle.className)}>
+  1391→              {statusStyle.label}
+  1392→            </Badge>
+  1393→            <Badge
+  1394→              variant="outline"
+  1395→              className={cn(
+  1396→                "text-[10px]",
+  1397→                order.itemType === "physical_terminal"
+  1398→                  ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+  1399→                  : "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800",
+  1400→              )}
+  1401→            >
+  1402→              <TypeIcon className="size-2.5 mr-0.5" />
+  1403→              {typeMeta.label}
+  1404→            </Badge>
+  1405→            <Badge variant="outline" className="text-[10px] capitalize">
+  1406→              {order.userType}
+  1407→            </Badge>
+  1408→          </div>
+  1409→
+  1410→          {/* Cost summary */}
+  1411→          <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 space-y-1.5">
+  1412→            <div className="flex items-center justify-between text-xs">
+  1413→              <span className="text-muted-foreground inline-flex items-center gap-1">
+  1414→                <Receipt className="size-3" /> Unit price
+  1415→              </span>
+  1416→              <span className="font-mono">{formatCurrency(order.unitPrice, order.currency)}</span>
+  1417→            </div>
+  1418→            <div className="flex items-center justify-between text-xs">
+  1419→              <span className="text-muted-foreground inline-flex items-center gap-1">
+  1420→                <Truck className="size-3" /> Delivery fee
+  1421→              </span>
+  1422→              <span className="font-mono">{formatCurrency(order.deliveryFee, order.currency)}</span>
+  1423→            </div>
+  1424→            <div className="border-t border-emerald-200 dark:border-emerald-900/50 my-1" />
+  1425→            <div className="flex items-center justify-between text-sm">
+  1426→              <span className="font-semibold inline-flex items-center gap-1">
+  1427→                <Wallet className="size-3.5 text-emerald-600" /> Total amount
+  1428→              </span>
+  1429→              <span className="font-mono font-bold text-emerald-800 dark:text-emerald-200">
+  1430→                {formatCurrency(order.totalAmount, order.currency)}
+  1431→              </span>
+  1432→            </div>
+  1433→          </div>
+  1434→
+  1435→          {/* Detail rows */}
+  1436→          <div className="rounded-md border divide-y">
+  1437→            <DetailRow
+  1438→              label="Customer"
+  1439→              value={
+  1440→                <span className="text-sm inline-flex items-center gap-1">
+  1441→                  {order.userType === "merchant" ? (
+  1442→                    <Building2 className="size-3 text-emerald-600" />
+  1443→                  ) : (
+  1444→                    <User className="size-3 text-amber-600" />
+  1445→                  )}
+  1446→                  {order.userName}
+  1447→                </span>
+  1448→              }
+  1449→            />
+  1450→            <DetailRow label="Customer ID" value={<span className="font-mono text-xs">{order.userId}</span>} />
+  1451→            <DetailRow label="Item Model" value={<span className="text-sm">{order.model}</span>} />
+  1452→            <DetailRow
+  1453→              label="Country"
+  1454→              value={
+  1455→                <span className="text-sm">
+  1456→                  <span className="font-mono">{order.countryCode}</span>
+  1457→                  <span className="text-muted-foreground ml-1">· {countryName(order.countryCode)}</span>
+  1458→                </span>
+  1459→              }
+  1460→            />
+  1461→            <DetailRow
+  1462→              label="Delivery Address"
+  1463→              value={<span className="text-xs">{order.deliveryAddress || "—"}</span>}
+  1464→            />
+  1465→            {order.stockItemId && (
+  1466→              <DetailRow label="Stock Item" value={<span className="font-mono text-xs">{order.stockItemId}</span>} />
+  1467→            )}
+  1468→            <DetailRow label="Created" value={<span className="text-xs">{formatDateTime(order.createdAt)}</span>} />
+  1469→            <DetailRow label="Last Updated" value={<span className="text-xs">{formatDateTime(order.updatedAt)}</span>} />
+  1470→          </div>
+  1471→
+  1472→          {order.notes && (
+  1473→            <div>
+  1474→              <div className="text-xs font-medium text-muted-foreground uppercase mb-1">
+  1475→                Notes
+  1476→              </div>
+  1477→              <p className="text-sm bg-muted/40 border rounded-md p-3">{order.notes}</p>
+  1478→            </div>
+  1479→          )}
+  1480→        </div>
+  1481→
+  1482→        <DialogFooter>
+  1483→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+  1484→            Close
+  1485→          </Button>
+  1486→        </DialogFooter>
+  1487→      </DialogContent>
+  1488→    </Dialog>
+  1489→  );
+  1490→}
+  1491→
+  1492→/* ============================ Add to Stock Dialog ============================ */
+  1493→
+  1494→function AddToStockDialog({
+  1495→  open,
+  1496→  onOpenChange,
+  1497→  countries,
+  1498→  existingSerials,
+  1499→  onCreate,
+  1500→}: {
+  1501→  open: boolean;
+  1502→  onOpenChange: (open: boolean) => void;
+  1503→  countries: CountryConfig[];
+  1504→  existingSerials: Set<string>;
+  1505→  onCreate: (item: StockItem) => void;
+  1506→}) {
+  1507→  const [serialNumber, setSerialNumber] = useState("");
+  1508→  const [type, setType] = useState<StockItemType>("physical_terminal");
+  1509→  const [model, setModel] = useState("");
+  1510→  const [description, setDescription] = useState("");
+  1511→  const [price, setPrice] = useState<string>("");
+  1512→  const [imageUrl, setImageUrl] = useState("");
+  1513→  const [countryCode, setCountryCode] = useState<string>(
+  1514→    () => countries[0]?.countryCode ?? "",
+  1515→  );
+  1516→  const [notes, setNotes] = useState("");
+  1517→  const [imgPreviewError, setImgPreviewError] = useState(false);
+  1518→
+  1519→  const currency = useMemo(() => {
+  1520→    return countries.find((c) => c.countryCode === countryCode)?.currency ?? "NGN";
+  1521→  }, [countryCode, countries]);
+  1522→
+  1523→  const serialError = useMemo(() => {
+  1524→    if (!serialNumber.trim()) return null;
+  1525→    if (existingSerials.has(serialNumber.trim().toLowerCase())) {
+  1526→      return "Serial number already exists in stock.";
+  1527→    }
+  1528→    return null;
+  1529→  }, [serialNumber, existingSerials]);
+  1530→
+  1531→  const priceNum = useMemo(() => {
+  1532→    const n = Number(price);
+  1533→    return Number.isFinite(n) && n >= 0 ? n : 0;
+  1534→  }, [price]);
+  1535→
+  1536→  const canSubmit =
+  1537→    serialNumber.trim() &&
+  1538→    model.trim() &&
+  1539→    price.trim() &&
+  1540→    priceNum > 0 &&
+  1541→    countryCode &&
+  1542→    !serialError;
+  1543→
+  1544→  function handleSubmit() {
+  1545→    if (!canSubmit) return;
+  1546→    const now = Date.now();
+  1547→    const newItem: StockItem = {
+  1548→      id: `stk_${now}_${Math.random().toString(36).slice(2, 8)}`,
+  1549→      serialNumber: serialNumber.trim(),
+  1550→      type,
+  1551→      model: model.trim(),
+  1552→      description: description.trim(),
+  1553→      price: priceNum,
+  1554→      currency,
+  1555→      imageUrl: imageUrl.trim() || null,
+  1556→      countryCode,
+  1557→      status: "in_stock",
+  1558→      allocatedToId: null,
+  1559→      allocatedToName: null,
+  1560→      allocatedAt: null,
+  1561→      shippedAt: null,
+  1562→      deliveredAt: null,
+  1563→      notes: notes.trim(),
+  1564→      createdAt: now,
+  1565→      updatedAt: now,
+  1566→    };
+  1567→    onCreate(newItem);
+  1568→  }
+  1569→
+  1570→  return (
+  1571→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1572→      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+  1573→        <DialogHeader>
+  1574→          <DialogTitle className="flex items-center gap-2">
+  1575→            <Plus className="size-5 text-emerald-600" />
+  1576→            Add to Stock
+  1577→          </DialogTitle>
+  1578→          <DialogDescription>
+  1579→            Register a new physical item in Faya&apos;s warehouse. Items enter as{" "}
+  1580→            <span className="font-medium text-emerald-700 dark:text-emerald-400">In Stock</span>{" "}
+  1581→            and become available for ordering.
+  1582→          </DialogDescription>
+  1583→        </DialogHeader>
+  1584→
+  1585→        <div className="space-y-4 py-2">
+  1586→          {/* Type selector */}
+  1587→          <div className="space-y-2">
+  1588→            <Label className="text-xs font-medium">Item type</Label>
+  1589→            <RadioGroup
+  1590→              value={type}
+  1591→              onValueChange={(v) => setType(v as StockItemType)}
+  1592→              className="grid grid-cols-1 sm:grid-cols-2 gap-2"
+  1593→            >
+  1594→              <label
+  1595→                htmlFor="opt_terminal"
+  1596→                className={cn(
+  1597→                  "flex items-start gap-2 rounded-md border p-3 cursor-pointer transition-colors",
+  1598→                  type === "physical_terminal"
+  1599→                    ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+  1600→                    : "border-input hover:bg-muted/40",
+  1601→                )}
+  1602→              >
+  1603→                <RadioGroupItem value="physical_terminal" id="opt_terminal" className="mt-0.5" />
+  1604→                <div className="space-y-0.5">
+  1605→                  <div className="text-sm font-medium flex items-center gap-1.5">
+  1606→                    <Smartphone className="size-3.5 text-emerald-600" />
+  1607→                    Physical Terminal
+  1608→                  </div>
+  1609→                  <div className="text-[11px] text-muted-foreground">
+  1610→                    Card POS device (e.g. Ingenico Move 2500).
+  1611→                  </div>
+  1612→                </div>
+  1613→              </label>
+  1614→              <label
+  1615→                htmlFor="opt_card"
+  1616→                className={cn(
+  1617→                  "flex items-start gap-2 rounded-md border p-3 cursor-pointer transition-colors",
+  1618→                  type === "physical_card"
+  1619→                    ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+  1620→                    : "border-input hover:bg-muted/40",
+  1621→                )}
+  1622→              >
+  1623→                <RadioGroupItem value="physical_card" id="opt_card" className="mt-0.5" />
+  1624→                <div className="space-y-0.5">
+  1625→                  <div className="text-sm font-medium flex items-center gap-1.5">
+  1626→                    <CreditCard className="size-3.5 text-emerald-600" />
+  1627→                    Physical Card
+  1628→                  </div>
+  1629→                  <div className="text-[11px] text-muted-foreground">
+  1630→                    Embossed/plastic card with issuance fee.
+  1631→                  </div>
+  1632→                </div>
+  1633→              </label>
+  1634→            </RadioGroup>
+  1635→          </div>
+  1636→
+  1637→          {/* Serial number */}
+  1638→          <div className="space-y-1.5">
+  1639→            <Label className="text-xs font-medium">
+  1640→              Serial number <span className="text-red-500">*</span>
+  1641→            </Label>
+  1642→            <Input
+  1643→              value={serialNumber}
+  1644→              onChange={(e) => setSerialNumber(e.target.value)}
+  1645→              placeholder="e.g. ING-2500-A4F92K"
+  1646→              className="h-9 text-sm font-mono"
+  1647→            />
+  1648→            {serialError && (
+  1649→              <p className="text-[11px] text-red-600 dark:text-red-400 flex items-center gap-1">
+  1650→                <XCircle className="size-3" /> {serialError}
+  1651→              </p>
+  1652→            )}
+  1653→          </div>
+  1654→
+  1655→          {/* Model */}
+  1656→          <div className="space-y-1.5">
+  1657→            <Label className="text-xs font-medium">
+  1658→              Model <span className="text-red-500">*</span>
+  1659→            </Label>
+  1660→            <Input
+  1661→              value={model}
+  1662→              onChange={(e) => setModel(e.target.value)}
+  1663→              placeholder={
+  1664→                type === "physical_terminal"
+  1665→                  ? "e.g. Ingenico Move 2500"
+  1666→                  : "e.g. Visa Physical Card v2"
+  1667→              }
+  1668→              className="h-9 text-sm"
+  1669→            />
+  1670→          </div>
+  1671→
+  1672→          {/* Description */}
+  1673→          <div className="space-y-1.5">
+  1674→            <Label className="text-xs font-medium">Description</Label>
+  1675→            <Textarea
+  1676→              value={description}
+  1677→              onChange={(e) => setDescription(e.target.value)}
+  1678→              placeholder="Brief product description shown on the card"
+  1679→              className="text-sm min-h-[60px]"
+  1680→            />
+  1681→          </div>
+  1682→
+  1683→          {/* Price + country */}
+  1684→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  1685→            <div className="space-y-1.5">
+  1686→              <Label className="text-xs font-medium">
+  1687→                Price <span className="text-red-500">*</span>
+  1688→              </Label>
+  1689→              <div className="relative">
+  1690→                <Input
+  1691→                  type="number"
+  1692→                  min="0"
+  1693→                  step="1"
+  1694→                  value={price}
+  1695→                  onChange={(e) => setPrice(e.target.value)}
+  1696→                  placeholder="e.g. 45000"
+  1697→                  className="h-9 text-sm pr-14 font-mono"
+  1698→                />
+  1699→                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-muted-foreground">
+  1700→                  {currency}
+  1701→                </span>
+  1702→              </div>
+  1703→              {price.trim() && priceNum <= 0 && (
+  1704→                <p className="text-[11px] text-red-600 dark:text-red-400 flex items-center gap-1">
+  1705→                  <XCircle className="size-3" /> Price must be greater than 0
+  1706→                </p>
+  1707→              )}
+  1708→            </div>
+  1709→            <div className="space-y-1.5">
+  1710→              <Label className="text-xs font-medium">
+  1711→                Warehouse country <span className="text-red-500">*</span>
+  1712→              </Label>
+  1713→              <Select
+  1714→                value={countryCode}
+  1715→                onValueChange={(v) => {
+  1716→                  setCountryCode(v);
+  1717→                  setImgPreviewError(false);
+  1718→                }}
+  1719→              >
+  1720→                <SelectTrigger size="sm" className="w-full text-sm h-9">
+  1721→                  <SelectValue placeholder="Select country" />
+  1722→                </SelectTrigger>
+  1723→                <SelectContent>
+  1724→                  {countries.map((c) => (
+  1725→                    <SelectItem key={c.countryCode} value={c.countryCode}>
+  1726→                      {c.countryCode} · {c.countryName} ({c.currency})
+  1727→                    </SelectItem>
+  1728→                  ))}
+  1729→                </SelectContent>
+  1730→              </Select>
+  1731→            </div>
+  1732→          </div>
+  1733→
+  1734→          {/* Image URL with live preview */}
+  1735→          <div className="space-y-1.5">
+  1736→            <Label className="text-xs font-medium">Product image URL</Label>
+  1737→            <Input
+  1738→              value={imageUrl}
+  1739→              onChange={(e) => {
+  1740→                setImageUrl(e.target.value);
+  1741→                setImgPreviewError(false);
+  1742→              }}
+  1743→              placeholder="https://...product-image.jpg"
+  1744→              className="h-9 text-sm"
+  1745→            />
+  1746→            {imageUrl.trim() && !imgPreviewError ? (
+  1747→              <div className="mt-2 relative w-full h-[100px] rounded-md overflow-hidden border bg-slate-50 dark:bg-slate-800">
+  1748→                <img
+  1749→                  src={imageUrl.trim()}
+  1750→                  alt="Preview"
+  1751→                  onError={() => setImgPreviewError(true)}
+  1752→                  className="h-full w-full object-cover"
+  1753→                />
+  1754→                <div className="absolute bottom-1 left-1">
+  1755→                  <Badge variant="secondary" className="text-[9px] bg-white/90 dark:bg-slate-900/80">
+  1756→                    Live preview
+  1757→                  </Badge>
+  1758→                </div>
+  1759→              </div>
+  1760→            ) : imageUrl.trim() && imgPreviewError ? (
+  1761→              <div className="mt-2 w-full h-[100px] rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 flex flex-col items-center justify-center text-red-600 dark:text-red-400">
+  1762→                <ImageOff className="size-6 mb-1" />
+  1763→                <span className="text-[10px]">Image could not be loaded</span>
+  1764→              </div>
+  1765→            ) : null}
+  1766→          </div>
+  1767→
+  1768→          {/* Notes */}
+  1769→          <div className="space-y-1.5">
+  1770→            <Label className="text-xs font-medium">Notes (optional)</Label>
+  1771→            <Textarea
+  1772→              value={notes}
+  1773→              onChange={(e) => setNotes(e.target.value)}
+  1774→              placeholder="e.g. New shipment arrived 2025-03 batch. QA-tested."
+  1775→              className="text-sm min-h-[60px]"
+  1776→            />
+  1777→          </div>
+  1778→        </div>
+  1779→
+  1780→        <DialogFooter className="gap-2">
+  1781→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+  1782→            Cancel
+  1783→          </Button>
+  1784→          <Button
+  1785→            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1786→            disabled={!canSubmit}
+  1787→            onClick={handleSubmit}
+  1788→          >
+  1789→            <Plus className="size-4 mr-1" /> Add to stock
+  1790→          </Button>
+  1791→        </DialogFooter>
+  1792→      </DialogContent>
+  1793→    </Dialog>
+  1794→  );
+  1795→}
+  1796→
+  1797→/* ============================ Create Order Dialog ============================ */
+  1798→
+  1799→interface CreateOrderPayload {
+  1800→  userType: "consumer" | "merchant";
+  1801→  userId: string;
+  1802→  userName: string;
+  1803→  countryCode: string;
+  1804→  itemType: StockItemType;
+  1805→  item: StockItem;
+  1806→  deliveryAddress: string;
+  1807→  deliveryFee: number;
+  1808→  notes: string;
+  1809→}
+  1810→
+  1811→function CreateOrderDialog({
+  1812→  open,
+  1813→  onOpenChange,
+  1814→  countries,
+  1815→  inStockByType,
+  1816→  countryCurrency,
+  1817→  defaultDeliveryFee,
+  1818→  onSubmit,
+  1819→}: {
+  1820→  open: boolean;
+  1821→  onOpenChange: (open: boolean) => void;
+  1822→  countries: CountryConfig[];
+  1823→  inStockByType: Record<StockItemType, StockItem[]>;
+  1824→  countryCurrency: (code: string) => string;
+  1825→  defaultDeliveryFee: Record<string, number>;
+  1826→  onSubmit: (payload: CreateOrderPayload) => void;
+  1827→}) {
+  1828→  const [userType, setUserType] = useState<"consumer" | "merchant">("merchant");
+  1829→  const [userName, setUserName] = useState("");
+  1830→  const [userId, setUserId] = useState("");
+  1831→  const [countryCode, setCountryCode] = useState<string>(
+  1832→    () => countries[0]?.countryCode ?? "",
+  1833→  );
+  1834→
+  1835→  // Determine which item types are available (have at least 1 in stock)
+  1836→  const hasTerminal = inStockByType.physical_terminal.length > 0;
+  1837→  const hasCard = inStockByType.physical_card.length > 0;
+  1838→
+  1839→  const [itemType, setItemType] = useState<StockItemType>(() =>
+  1840→    inStockByType.physical_terminal.length > 0 ? "physical_terminal" : "physical_card",
+  1841→  );
+  1842→  const [stockItemId, setStockItemId] = useState<string>("");
+  1843→  const [deliveryAddress, setDeliveryAddress] = useState("");
+  1844→  const [deliveryFee, setDeliveryFee] = useState<string>(() => {
+  1845→    const cc = countries[0]?.countryCode ?? "";
+  1846→    return String(defaultDeliveryFee[cc] ?? 0);
+  1847→  });
+  1848→  const [notes, setNotes] = useState("");
+  1849→
+  1850→  // When item type changes, clear the previously selected item — handled inline
+  1851→  // in the RadioGroup onValueChange below.
+  1852→  // When country changes, refresh the default delivery fee — handled inline in
+  1853→  // the Select onValueChange below.
+  1854→
+  1855→  const availableItems = inStockByType[itemType] ?? [];
+  1856→
+  1857→  const selectedItem = useMemo(
+  1858→    () => availableItems.find((i) => i.id === stockItemId) ?? null,
+  1859→    [availableItems, stockItemId],
+  1860→  );
+  1861→
+  1862→  const currency = selectedItem?.currency ?? countryCurrency(countryCode);
+  1863→  const deliveryFeeNum = useMemo(() => {
+  1864→    const n = Number(deliveryFee);
+  1865→    return Number.isFinite(n) && n >= 0 ? n : 0;
+  1866→  }, [deliveryFee]);
+  1867→
+  1868→  const totalAmount = (selectedItem?.price ?? 0) + deliveryFeeNum;
+  1869→
+  1870→  const canSubmit =
+  1871→    userName.trim() &&
+  1872→    userId.trim() &&
+  1873→    countryCode &&
+  1874→    selectedItem &&
+  1875→    deliveryAddress.trim() &&
+  1876→    deliveryFee.trim();
+  1877→
+  1878→  function handleSubmit() {
+  1879→    if (!canSubmit || !selectedItem) return;
+  1880→    onSubmit({
+  1881→      userType,
+  1882→      userId: userId.trim(),
+  1883→      userName: userName.trim(),
+  1884→      countryCode,
+  1885→      itemType,
+  1886→      item: selectedItem,
+  1887→      deliveryAddress: deliveryAddress.trim(),
+  1888→      deliveryFee: deliveryFeeNum,
+  1889→      notes: notes.trim(),
+  1890→    });
+  1891→  }
+  1892→
+  1893→  // If no items of any type are in stock, show a blocking message
+  1894→  const nothingInStock = !hasTerminal && !hasCard;
+  1895→
+  1896→  return (
+  1897→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1898→      <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+  1899→        <DialogHeader>
+  1900→          <DialogTitle className="flex items-center gap-2">
+  1901→            <ShoppingCart className="size-5 text-emerald-600" />
+  1902→            Create Order
+  1903→          </DialogTitle>
+  1904→          <DialogDescription>
+  1905→            Place an order on behalf of a consumer or merchant. You can only
+  1906→            order items that are currently{" "}
+  1907→            <span className="font-medium text-emerald-700 dark:text-emerald-400">In Stock</span>.
+  1908→            The unit price + delivery fee = total amount charged.
+  1909→          </DialogDescription>
+  1910→        </DialogHeader>
+  1911→
+  1912→        {nothingInStock ? (
+  1913→          <div className="py-6">
+  1914→            <EmptyState
+  1915→              icon={PackageX}
+  1916→              title="No items in stock"
+  1917→              description="There are currently no terminals or cards available to order. Add items to stock first, or mark existing items as In Stock."
+  1918→            />
+  1919→          </div>
+  1920→        ) : (
+  1921→          <div className="space-y-4 py-2">
+  1922→            {/* User type */}
+  1923→            <div className="space-y-2">
+  1924→              <Label className="text-xs font-medium">User type</Label>
+  1925→              <RadioGroup
+  1926→                value={userType}
+  1927→                onValueChange={(v) => setUserType(v as "consumer" | "merchant")}
+  1928→                className="grid grid-cols-2 gap-2"
+  1929→              >
+  1930→                <label
+  1931→                  htmlFor="ut_merchant"
+  1932→                  className={cn(
+  1933→                    "flex items-center gap-2 rounded-md border p-2.5 cursor-pointer transition-colors text-sm",
+  1934→                    userType === "merchant"
+  1935→                      ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+  1936→                      : "border-input hover:bg-muted/40",
+  1937→                  )}
+  1938→                >
+  1939→                  <RadioGroupItem value="merchant" id="ut_merchant" />
+  1940→                  <Building2 className="size-3.5 text-emerald-600" />
+  1941→                  Merchant
+  1942→                </label>
+  1943→                <label
+  1944→                  htmlFor="ut_consumer"
+  1945→                  className={cn(
+  1946→                    "flex items-center gap-2 rounded-md border p-2.5 cursor-pointer transition-colors text-sm",
+  1947→                    userType === "consumer"
+  1948→                      ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+  1949→                      : "border-input hover:bg-muted/40",
+  1950→                  )}
+  1951→                >
+  1952→                  <RadioGroupItem value="consumer" id="ut_consumer" />
+  1953→                  <User className="size-3.5 text-amber-600" />
+  1954→                  Consumer
+  1955→                </label>
+  1956→              </RadioGroup>
+  1957→            </div>
+  1958→
+  1959→            {/* User name + id */}
+  1960→            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  1961→              <div className="space-y-1.5">
+  1962→                <Label className="text-xs font-medium">
+  1963→                  {userType === "merchant" ? "Merchant name" : "Consumer name"}{" "}
+  1964→                  <span className="text-red-500">*</span>
+  1965→                </Label>
+  1966→                <Input
+  1967→                  value={userName}
+  1968→                  onChange={(e) => setUserName(e.target.value)}
+  1969→                  placeholder={userType === "merchant" ? "e.g. Lagos Foods Ltd" : "e.g. Adebayo Ogun"}
+  1970→                  className="h-9 text-sm"
+  1971→                />
+  1972→              </div>
+  1973→              <div className="space-y-1.5">
+  1974→                <Label className="text-xs font-medium">
+  1975→                  {userType === "merchant" ? "Merchant ID" : "Consumer ID"}{" "}
+  1976→                  <span className="text-red-500">*</span>
+  1977→                </Label>
+  1978→                <Input
+  1979→                  value={userId}
+  1980→                  onChange={(e) => setUserId(e.target.value)}
+  1981→                  placeholder="e.g. mch_NG_001"
+  1982→                  className="h-9 text-sm font-mono"
+  1983→                />
+  1984→              </div>
+  1985→            </div>
+  1986→
+  1987→            {/* Country */}
+  1988→            <div className="space-y-1.5">
+  1989→              <Label className="text-xs font-medium">
+  1990→                Delivery country <span className="text-red-500">*</span>
+  1991→              </Label>
+  1992→              <Select
+  1993→                value={countryCode}
+  1994→                onValueChange={(v) => {
+  1995→                  setCountryCode(v);
+  1996→                  setDeliveryFee(String(defaultDeliveryFee[v] ?? 0));
+  1997→                }}
+  1998→              >
+  1999→                <SelectTrigger size="sm" className="w-full text-sm h-9">
+  2000→                  <SelectValue placeholder="Select country" />
+
+[showing lines 1-2000 of 2224; use offset=2001 with limit to continue reading]

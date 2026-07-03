@@ -19,7 +19,7 @@
  *   stock.create / stock.mark_damaged / stock.mark_in_stock
  *   stock_order.create / stock_order.ship / stock_order.deliver / stock_order.cancel
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
   Plus,
@@ -46,6 +46,7 @@ import {
   Receipt,
   ArrowRight,
   PlusCircle,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -240,6 +241,35 @@ export function StockView() {
       unsubCountries();
     };
   }, []);
+
+  /* ----------------- New-order real-time notification ----------------- *
+   * Watches the live `orders` list. Whenever an order ID appears that
+   * wasn't present in the previous render, fires a sonner toast so the
+   * admin gets instant feedback when a user/merchant pays from their app.
+   * The first snapshot (initial load) is captured silently so we don't
+   * toast every existing order on mount. */
+  const seenOrderIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (orders.length === 0) return;
+    const seen = seenOrderIdsRef.current;
+    if (seen === null) {
+      // First load — seed the set without toasting.
+      seenOrderIdsRef.current = new Set(orders.map((o) => o.id));
+      return;
+    }
+    const fresh = orders.filter((o) => !seen.has(o.id));
+    if (fresh.length === 0) return;
+    // Sort fresh by createdAt asc so older-fresh orders toast first.
+    fresh
+      .slice()
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .forEach((o) => {
+        toast.success("New order received", {
+          description: `${o.orderCode} — ${o.userName} ordered ${o.model} for ${formatCurrency(o.totalAmount, o.currency)}`,
+        });
+      });
+    fresh.forEach((o) => seen.add(o.id));
+  }, [orders]);
 
   /* ----------------------- Country scoping --------------------- */
   const visibleCountryCodes = useMemo(
@@ -520,32 +550,20 @@ export function StockView() {
     <>
       <ViewHeader
         title="Stock & Inventory"
-        description="Physical terminals and cards in Faya's warehouse, with prices, product images, availability-based ordering, and delivery fees."
+        description="Track physical terminals and cards in stock. When users order and pay from their apps, items move here to their profile. Admin fulfils and tracks delivery."
         icon={Boxes}
         actions={
-          <>
+          isSuperAdmin ? (
             <Button
-              variant="outline"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
               onClick={() => {
-                setOrderKey((k) => k + 1);
-                setOrderOpen(true);
+                setAddKey((k) => k + 1);
+                setAddOpen(true);
               }}
-              className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
             >
-              <ShoppingCart className="size-4" /> New Order
+              <Plus className="size-4" /> Add to Stock
             </Button>
-            {isSuperAdmin ? (
-              <Button
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                onClick={() => {
-                  setAddKey((k) => k + 1);
-                  setAddOpen(true);
-                }}
-              >
-                <Plus className="size-4" /> Add to Stock
-              </Button>
-            ) : null}
-          </>
+          ) : null
         }
       />
 
@@ -743,6 +761,17 @@ export function StockView() {
 
           {/* ======================= ORDERS TAB ======================= */}
           <TabsContent value="orders" className="space-y-4">
+            {/* Info banner — explains the order flow */}
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+              <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+              <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+                Orders are placed by users and merchants from their own apps
+                (Faya Pay for cards, Faya Merchant for terminals). When they
+                pay, the item is automatically allocated from stock and appears
+                on their profile. Admin fulfils by marking shipped → delivered.
+              </div>
+            </div>
+
             {/* Stat cards */}
             <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
               <StatCard
@@ -1027,62 +1056,6 @@ export function StockView() {
             description: `${newItem.type === "physical_terminal" ? "Terminal" : "Card"} · ${newItem.model} · ${formatCurrency(newItem.price, newItem.currency)}`,
           });
           setAddOpen(false);
-        }}
-      />
-
-      {/* Create Order Dialog */}
-      <CreateOrderDialog
-        key={orderKey}
-        open={orderOpen}
-        onOpenChange={setOrderOpen}
-        countries={filterableCountries}
-        inStockByType={inStockByType}
-        countryCurrency={countryCurrency}
-        defaultDeliveryFee={DEFAULT_DELIVERY_FEE}
-        onSubmit={(payload) => {
-          const a = actor();
-          if (!a) return;
-          const now = Date.now();
-          const orderCode = `FAY-ORD-${payload.countryCode}-${String(
-            visibleOrders.length + 1,
-          ).padStart(5, "0")}`;
-          const newOrder: StockOrder = {
-            id: `sord_${now}_${Math.random().toString(36).slice(2, 8)}`,
-            orderCode,
-            userType: payload.userType,
-            userId: payload.userId,
-            userName: payload.userName,
-            countryCode: payload.countryCode,
-            itemType: payload.itemType,
-            model: payload.item.model,
-            unitPrice: payload.item.price,
-            deliveryFee: payload.deliveryFee,
-            totalAmount: payload.item.price + payload.deliveryFee,
-            currency: payload.item.currency,
-            status: "pending",
-            deliveryAddress: payload.deliveryAddress,
-            stockItemId: payload.item.id,
-            notes: payload.notes || "",
-            createdAt: now,
-            updatedAt: now,
-          };
-          adminData.createStockOrder(newOrder);
-          // Allocate the item immediately
-          adminData.updateStockItem(payload.item.id, {
-            status: "allocated",
-            allocatedToId: payload.userId,
-            allocatedToName: payload.userName,
-            allocatedAt: now,
-            updatedAt: now,
-          });
-          logAudit(a, "stock_order.create", "stock_order", newOrder.id, {
-            countryCode: payload.countryCode,
-            afterValue: `${orderCode} · ${payload.userName} · ${payload.item.model} · ${formatCurrency(newOrder.totalAmount, newOrder.currency)} (unit ${formatCurrency(newOrder.unitPrice, newOrder.currency)} + delivery ${formatCurrency(newOrder.deliveryFee, newOrder.currency)})`,
-          });
-          toast.success(`Order created: ${orderCode}`, {
-            description: `${payload.userName} · ${payload.item.model} · ${formatCurrency(newOrder.totalAmount, newOrder.currency)}`,
-          });
-          setOrderOpen(false);
         }}
       />
 

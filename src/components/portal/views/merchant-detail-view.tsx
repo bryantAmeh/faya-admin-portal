@@ -92,6 +92,9 @@ import {
   MapPin,
   User,
   Info,
+  ShoppingCart,
+  Truck,
+  Package,
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/portal/view-helpers";
@@ -171,6 +174,9 @@ import type {
   MerchantStatus,
   KybStatus,
   RiskLevel,
+  StockOrder,
+  StockOrderStatus,
+  StockItemType,
 } from "@/lib/types";
 import { PLATFORM_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -304,6 +310,27 @@ const TXN_STATUS_STYLES: Record<
 };
 
 const RISK_TONE = (level: RiskLevel) => statusBadge("risk", level);
+
+/* Stock order styling — mirrors the consumer Orders tab in user-detail-view
+ * and the styles used in stock-view.tsx. */
+const STOCK_ORDER_STATUS_STYLES: Record<
+  StockOrderStatus,
+  { label: string; className: string }
+> = {
+  pending: { label: "Pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+  fulfilled: { label: "Fulfilled", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  shipped: { label: "Shipped", className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300" },
+  delivered: { label: "Delivered", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  cancelled: { label: "Cancelled", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+};
+
+const STOCK_TYPE_META: Record<
+  StockItemType,
+  { label: string; icon: typeof Smartphone }
+> = {
+  physical_terminal: { label: "Terminal", icon: Smartphone },
+  physical_card: { label: "Card", icon: CreditCard },
+};
 
 type MerchantAction =
   | "restrict"
@@ -477,6 +504,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [fraudAlerts, setFraudAlerts] = useState<FraudAlert[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [stockOrders, setStockOrders] = useState<StockOrder[]>([]);
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
@@ -492,6 +520,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
       unsubs.push(adminData.subscribeTickets(setTickets));
       unsubs.push(adminData.subscribeFraud(setFraudAlerts));
       unsubs.push(adminData.subscribeAudit(setAuditLogs));
+      unsubs.push(adminData.subscribeStockOrders(setStockOrders));
     } catch (e) {
       console.error("[MerchantDetailView] subscription error:", e);
     }
@@ -584,6 +613,16 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
     () =>
       merchant ? auditLogs.filter((a) => a.entityId === merchant.id) : [],
     [auditLogs, merchant],
+  );
+
+  const merchantOrders = useMemo(
+    () =>
+      merchant
+        ? stockOrders.filter(
+            (o) => o.userId === merchant.id && o.userType === "merchant",
+          )
+        : [],
+    [stockOrders, merchant],
   );
 
   /* ---------- Helpers ---------- */
@@ -947,6 +986,9 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
           <TabsTrigger value="audit" className="text-[11px] h-8">
             Activity & Audit <CountBadge n={merchantAuditLogs.length} />
           </TabsTrigger>
+          <TabsTrigger value="orders" className="text-[11px] h-8">
+            Orders <CountBadge n={merchantOrders.length} />
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-0">
@@ -988,6 +1030,9 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
         </TabsContent>
         <TabsContent value="audit" className="mt-0">
           <AuditLogsTab items={merchantAuditLogs} />
+        </TabsContent>
+        <TabsContent value="orders" className="mt-0">
+          <StockOrdersTab items={merchantOrders} merchant={merchant} />
         </TabsContent>
       </Tabs>
 
@@ -2798,5 +2843,258 @@ function AuditLogsTab({ items }: { items: AuditLog[] }) {
         ))}
       </TableBody>
     </ScrollTable>
+  );
+}
+
+/* ============================ TAB: Stock Orders ============================ */
+//
+// Stock orders placed by this merchant from the Faya Merchant app. When a
+// merchant orders a physical terminal and pays, the order shows up here in
+// real time, the stock item is allocated to them on the Stock page, and the
+// admin fulfils it (mark shipped → delivered).
+
+function StockOrdersTab({
+  items,
+  merchant,
+}: {
+  items: StockOrder[];
+  merchant: Merchant;
+}) {
+  const { staff } = useAuth();
+
+  function actor() {
+    if (!staff) return null;
+    return {
+      staffId: staff.id,
+      staffName: `${staff.firstName} ${staff.lastName}`,
+      department: staff.departmentId,
+      role: staff.roleId,
+    };
+  }
+
+  function markShipped(order: StockOrder) {
+    const a = actor();
+    if (!a) return;
+    adminData.updateStockOrder(order.id, {
+      status: "shipped",
+      updatedAt: Date.now(),
+    });
+    if (order.stockItemId) {
+      adminData.updateStockItem(order.stockItemId, {
+        status: "shipped",
+        shippedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+    logAudit(a, "stock_order.ship", "stock_order", order.id, {
+      countryCode: order.countryCode,
+      beforeValue: order.status,
+      afterValue: "shipped",
+      reason: `Ship order ${order.orderCode} for ${merchant.merchantCode}`,
+    });
+    toast.success(`Order shipped: ${order.orderCode}`, {
+      description: `${order.model} · ${order.userName}`,
+    });
+  }
+
+  function markDelivered(order: StockOrder) {
+    const a = actor();
+    if (!a) return;
+    adminData.updateStockOrder(order.id, {
+      status: "delivered",
+      updatedAt: Date.now(),
+    });
+    if (order.stockItemId) {
+      adminData.updateStockItem(order.stockItemId, {
+        status: "delivered",
+        deliveredAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+    logAudit(a, "stock_order.deliver", "stock_order", order.id, {
+      countryCode: order.countryCode,
+      beforeValue: order.status,
+      afterValue: "delivered",
+      reason: `Deliver order ${order.orderCode} for ${merchant.merchantCode}`,
+    });
+    toast.success(`Order delivered: ${order.orderCode}`, {
+      description: `${order.model} · ${order.userName}`,
+    });
+  }
+
+  function cancelOrder(order: StockOrder) {
+    const a = actor();
+    if (!a) return;
+    adminData.updateStockOrder(order.id, {
+      status: "cancelled",
+      updatedAt: Date.now(),
+    });
+    if (order.stockItemId) {
+      adminData.updateStockItem(order.stockItemId, {
+        status: "in_stock",
+        allocatedToId: null,
+        allocatedToName: null,
+        allocatedAt: null,
+        shippedAt: null,
+        deliveredAt: null,
+        updatedAt: Date.now(),
+      });
+    }
+    logAudit(a, "stock_order.cancel", "stock_order", order.id, {
+      countryCode: order.countryCode,
+      beforeValue: order.status,
+      afterValue: "cancelled",
+      reason: `Cancel order ${order.orderCode} for ${merchant.merchantCode}`,
+    });
+    toast.success(`Order cancelled: ${order.orderCode}`, {
+      description: "Stock item returned to inventory.",
+    });
+  }
+
+  const sorted = items.slice().sort((a, b) => b.createdAt - a.createdAt);
+
+  return (
+    <div className="space-y-3">
+      {/* Emerald info banner */}
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+        <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+        <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+          When this merchant orders and pays for a physical terminal from the{" "}
+          <span className="font-medium">Faya Merchant app</span>, the order
+          appears here automatically and the terminal is allocated from stock.
+          Fulfil by marking it shipped → delivered.
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <EmptyState
+          icon={ShoppingCart}
+          title="No orders yet"
+          description="No orders yet. When this merchant orders a terminal from the Faya Merchant app, it will appear here."
+        />
+      ) : (
+        <ScrollTable>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow>
+              <TableHead className="pl-3 text-[11px]">Order Code</TableHead>
+              <TableHead className="text-[11px]">Item</TableHead>
+              <TableHead className="text-[11px] text-right">Unit Price</TableHead>
+              <TableHead className="text-[11px] text-right">Delivery Fee</TableHead>
+              <TableHead className="text-[11px] text-right">Total</TableHead>
+              <TableHead className="text-[11px]">Status</TableHead>
+              <TableHead className="text-[11px] hidden lg:table-cell">Delivery Address</TableHead>
+              <TableHead className="text-[11px] hidden md:table-cell">Ordered</TableHead>
+              <TableHead className="text-[11px] text-right pr-3">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.map((o) => {
+              const statusStyle = STOCK_ORDER_STATUS_STYLES[o.status];
+              const typeMeta = STOCK_TYPE_META[o.itemType];
+              const TypeIcon = typeMeta.icon;
+              return (
+                <TableRow key={o.id}>
+                  <TableCell className="pl-3 font-mono text-[10px] text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+                    {o.orderCode}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-medium inline-flex items-center gap-1">
+                        <TypeIcon className="size-3 text-emerald-600" />
+                        {o.model}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[9px] w-fit mt-0.5",
+                          o.itemType === "physical_terminal"
+                            ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+                            : "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800",
+                        )}
+                      >
+                        {typeMeta.label}
+                      </Badge>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right text-[11px] font-mono">
+                    {formatCurrency(o.unitPrice, o.currency)}
+                  </TableCell>
+                  <TableCell className="text-right text-[11px] font-mono text-muted-foreground">
+                    {formatCurrency(o.deliveryFee, o.currency)}
+                  </TableCell>
+                  <TableCell className="text-right text-[11px] font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                    {formatCurrency(o.totalAmount, o.currency)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="secondary"
+                      className={cn("text-[10px]", statusStyle.className)}
+                    >
+                      {statusStyle.label}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell max-w-[200px] text-[11px] text-muted-foreground line-clamp-2">
+                    {o.deliveryAddress || "—"}
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell text-[11px] text-muted-foreground whitespace-nowrap">
+                    {formatDateTime(o.createdAt)}
+                  </TableCell>
+                  <TableCell className="text-right pr-3">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-muted-foreground hover:bg-muted"
+                        title="View details"
+                        onClick={() =>
+                          toast.info(`Order ${o.orderCode}`, {
+                            description: `${o.model} · ${formatCurrency(o.totalAmount, o.currency)} · ${o.deliveryAddress || "no address"}`,
+                          })
+                        }
+                      >
+                        <Info className="size-3.5" />
+                      </Button>
+                      {o.status === "pending" && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 text-sky-700 hover:bg-sky-100 dark:hover:bg-sky-900/40"
+                          title="Mark shipped"
+                          onClick={() => markShipped(o)}
+                        >
+                          <Truck className="size-3.5" />
+                        </Button>
+                      )}
+                      {o.status === "shipped" && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 text-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                          title="Mark delivered"
+                          onClick={() => markDelivered(o)}
+                        >
+                          <CheckCircle2 className="size-3.5" />
+                        </Button>
+                      )}
+                      {(o.status === "pending" || o.status === "fulfilled") && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 text-red-700 hover:bg-red-100 dark:hover:bg-red-900/40"
+                          title="Cancel order"
+                          onClick={() => cancelOrder(o)}
+                        >
+                          <Ban className="size-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </ScrollTable>
+      )}
+    </div>
   );
 }

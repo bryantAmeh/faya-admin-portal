@@ -866,3 +866,67 @@ Stage Summary:
 - Users can only order what's in stock — if no terminals in stock, terminal ordering is disabled
 - Delivery fee is included in every order (separate column in orders table, shown in order dialog summary)
 - Add to Stock dialog has image URL field with live preview
+
+---
+Task ID: FIX3
+Agent: subagent-profile-orders-notifications
+Task: Add stock orders to user/merchant profiles + notifications on new orders
+
+Work Log:
+- Read worklog.md, types.ts, admin-data.ts, use-portal-store.ts, user-detail-view.tsx, merchant-detail-view.tsx, stock-view.tsx for context.
+- user-detail-view.tsx:
+  - Added lucide imports (ShoppingCart, Truck, Smartphone, Package) and type imports (StockOrder, StockOrderStatus, StockItemType).
+  - Added module-level STOCK_ORDER_STATUS_STYLES + STOCK_TYPE_META maps (mirroring stock-view.tsx).
+  - ProfileTabs now also subscribes via adminData.subscribeStockOrders and filters by `order.userId === consumer.id && order.userType === "consumer"` → consumerOrders.
+  - Added `<ProfileTab value="orders" label="Orders" count={consumerOrders.length} />` + `<TabsContent value="orders">` pointing at a new OrdersTab component.
+  - OrdersTab: emerald info banner explaining Faya Pay flow, ScrollTable (max-h-96, sticky header) with columns Order Code | Item (model + type badge) | Unit Price | Delivery Fee | Total | Status | Delivery Address (lg+) | Ordered (md+) | Actions. EmptyState copy: "No orders yet. When this consumer orders a physical card from the Faya Pay app, it will appear here." Actions: View (toast), Mark shipped (pending), Mark delivered (shipped), Cancel (pending/fulfilled) — all via adminData.updateStockOrder + updateStockItem + logAudit.
+- merchant-detail-view.tsx:
+  - Added lucide imports (ShoppingCart, Truck, Package) + type imports (StockOrder, StockOrderStatus, StockItemType).
+  - Added STOCK_ORDER_STATUS_STYLES + STOCK_TYPE_META module maps.
+  - Main view subscribes to adminData.subscribeStockOrders and filters by `o.userId === merchant.id && o.userType === "merchant"` → merchantOrders.
+  - Added `Orders <CountBadge n={merchantOrders.length} />` tab trigger + matching TabsContent rendering new StockOrdersTab.
+  - StockOrdersTab: emerald info banner (Faya Merchant app copy), ScrollTable with same columns as consumer tab, EmptyState "No orders yet. When this merchant orders a terminal from the Faya Merchant app, it will appear here.", fulfil/cancel actions.
+- stock-view.tsx:
+  - Added Info icon import + useRef from react.
+  - Added emerald info banner at the very top of the Orders TabsContent (before stat cards) explaining the Faya Pay / Faya Merchant order flow.
+  - Added a useEffect (deps: [orders]) that keeps a useRef<Set<string> | null> of previously-seen order IDs. First snapshot seeds silently (no toast storm on mount). For subsequent renders, any new order ID fires `toast.success("New order received", { description: "{orderCode} — {userName} ordered {model} for {totalAmount}" })`. Fresh orders sorted by createdAt asc.
+- Wrote agent record at agent-ctx/FIX3-subagent-profile-orders-notifications.md.
+- Ran `bun run lint` → clean (no errors). Dev server returns HTTP 200 on /, latest compiles succeed.
+
+Stage Summary:
+- Consumer profile now has an Orders tab showing physical-card orders placed from the Faya Pay app, with full ship/deliver/cancel fulfilment actions.
+- Merchant profile now has an Orders tab showing physical-terminal orders placed from the Faya Merchant app, with the same fulfilment actions.
+- Stock page Orders tab leads with an emerald info banner explaining the end-to-end order flow.
+- Stock page now emits a sonner toast for every brand-new order that arrives via the live subscription, simulating real-time notifications when users/merchants pay from their apps.
+- All four tasks use the existing emerald accent system, ScrollTable helpers, count badges, and adminData/logAudit patterns — no indigo/blue, no new global state.
+
+---
+Task ID: ADMIN-FRAMEWORK-FIX
+Agent: main
+Task: Fix admin platform framing — admin works FOR users/merchants, not as users ordering for themselves
+
+Work Log:
+- Removed "New Order" button from stock view — admin does NOT place orders, users/merchants do from their own apps
+- Removed CreateOrderDialog entirely from stock view
+- Updated stock view description: "Track physical terminals and cards in stock. When users order and pay from their apps, items move here to their profile. Admin fulfils and tracks delivery."
+- Subagent FIX3 added:
+  • Orders tab on user profile (consumer orders from Faya Pay app) — shows order code, item, unit price, delivery fee, total, status, delivery address
+  • Orders tab on merchant profile (merchant orders from Faya Merchant app) — same columns
+  • Info banner on stock Orders tab: "Orders are placed by users and merchants from their own apps..."
+  • Real-time toast notification when new orders arrive: "New order received: {orderCode} — {userName} ordered {model}"
+- Browser verification:
+  * Stock page: NO "New Order" button — only "Add to Stock" for Super Admin
+  * Orders tab has info banner explaining users order from their apps
+  * User profile (Adebayo Ogun): "Orders (1)" tab showing his physical card order
+  * Merchant profile (Lagos Foods): "Orders (1)" tab showing their terminal order
+  * Both profiles show Order Code, Item, Unit Price, Delivery Fee, Total, Status columns
+- Lint: 0 errors. Dev server: 200 OK.
+
+Stage Summary:
+- The admin platform is now correctly framed: admin works FOR users and merchants
+- Users order physical cards from Faya Pay app → order appears on admin + user profile
+- Merchants order terminals from Faya Merchant app → order appears on admin + merchant profile
+- When they pay, stock item is automatically allocated to them (removed from available stock)
+- Admin gets real-time notification when new order arrives
+- Admin fulfils: marks shipped → delivered
+- All ordered items tracked on user/merchant profiles for proper assignment and tracking
