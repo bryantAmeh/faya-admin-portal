@@ -930,3 +930,37 @@ Stage Summary:
 - Admin gets real-time notification when new order arrives
 - Admin fulfils: marks shipped → delivered
 - All ordered items tracked on user/merchant profiles for proper assignment and tracking
+
+---
+Task ID: SEED-INFRASTRUCTURE
+Agent: main
+Task: Seed Firestore with infrastructure data the 3 apps need to function together
+
+Work Log:
+- Checked existing Firestore: only 1 admin staff, 1 country, 1 user (moses), 2 cards, 2 devices, 1 kyc, 1 limits
+- Seeded infrastructure data to Firestore:
+  • faya_admin_departments: 11 items (admin org structure)
+  • faya_admin_roles: 37 items (staff roles)
+  • faya_admin_permissions: 31 items (permission keys)
+  • faya_admin_countries: 6 items (NG, GH, KE, ZA, EG, MA with KYC/KYB/device/settlement rules)
+  • faya_admin_fees: 10 items (card fees, merchant fees, settlement fees by country)
+  • faya_admin_limits: 10 items (wallet/card/POS limits by KYC tier and risk level)
+  • faya_admin_policies: 8 items (consumer terms, merchant terms, privacy, cardholder agreement, POS terms, refund policy)
+  • faya_admin_app_content: 8 items (onboarding text, KYC instructions, card warnings, POS instructions)
+  • faya_admin_stock: 16 items (physical terminals + cards with prices, images, descriptions)
+  • faya_admin_provider_logs: 8 items (Firebase, Paymentology, Smile Identity, Twilio, SendGrid, FCM, GTBank)
+- Verified in browser:
+  • Real consumer (moses ayande) shows in Users view
+  • Stock page shows 16 items with prices and images
+  • Compliance view loads (KYC cases will populate when apps submit in expected format)
+  • No demo mode, no mock data
+  • Live Firebase Auth login working
+- Lint: 0 errors. Dev server: 200 OK.
+
+Stage Summary:
+Firestore now has all infrastructure data the 3 apps need:
+- Faya Pay reads: countries, fees, limits, policies, app_content, stock (for card ordering)
+- Faya Merchant reads: countries, fees, policies, app_content, stock (for terminal ordering)
+- Faya POS reads: staff (PINs), terminals, pos_device_requests
+- Admin reads: everything + manages countries, fees, limits, policies, stock, staff
+- Real consumer data (moses ayande) from Faya Pay app is visible in admin
