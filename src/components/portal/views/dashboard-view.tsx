@@ -65,7 +65,7 @@ export function DashboardView({
   merchants,
   consumers,
 }: DashboardViewProps) {
-  const { staff: currentStaff, isDemoMode } = useAuth();
+  const { staff: currentStaff } = useAuth();
   const { setView, selectCountry, setView: setPortalView } = usePortalStore();
 
   // Filter to the staff's assigned countries (Super Admin sees all)
@@ -148,11 +148,6 @@ export function DashboardView({
             : `Scoped to your assigned countries: ${visibleCountries.map((c) => c.countryCode).join(", ")}`
         }
         icon={LayoutDashboard}
-        actions={
-          isDemoMode ? (
-            <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">Demo mode</Badge>
-          ) : null
-        }
       />
       <ViewContainer>
         {/* Top KPI row */}

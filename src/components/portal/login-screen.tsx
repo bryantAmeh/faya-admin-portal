@@ -1,33 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { ShieldCheck, Lock, Mail, Loader2, AlertCircle, Sparkles } from "lucide-react";
-import { useAuth, DEMO_EMAIL, DEMO_PASSWORD } from "@/hooks/use-auth";
+import { ShieldCheck, Lock, Mail, Loader2, AlertCircle } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { FIREBASE_PROJECT_ID, FIREBASE_AUTH_DOMAIN } from "@/lib/firebase";
+import { FIREBASE_PROJECT_ID } from "@/lib/firebase";
 
 export function LoginScreen() {
-  const { signIn, signInDemo, loading, error } = useAuth();
-  const [email, setEmail] = useState(DEMO_EMAIL);
-  const [password, setPassword] = useState(DEMO_PASSWORD);
+  const { signIn, loading, error } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [mfaCode, setMfaCode] = useState("");
   const [showMfa, setShowMfa] = useState(false);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await signIn(email.trim(), password);
-  };
-
-  const onDemo = async () => {
-    setEmail(DEMO_EMAIL);
-    setPassword(DEMO_PASSWORD);
-    await signInDemo();
   };
 
   return (
@@ -52,10 +45,10 @@ export function LoginScreen() {
             </p>
             <div className="grid grid-cols-2 gap-3">
               {[
-                { t: "Country-scoped access", d: "NG · GH · KE · ZA · EG · MA" },
-                { t: "Role-based permissions", d: "11 departments · 35+ roles" },
+                { t: "Faya Pay consumers", d: "KYC, wallet, payments" },
+                { t: "Faya Business merchants", d: "KYB, sales, settlements" },
+                { t: "Country + region scoping", d: "NG · GH · KE · ZA · EG · MA" },
                 { t: "Dual approval workflows", d: "For high-risk actions" },
-                { t: "Immutable audit logs", d: "Every action recorded" },
               ].map((f) => (
                 <div key={f.t} className="rounded-lg border bg-card p-3">
                   <div className="text-sm font-medium">{f.t}</div>
@@ -63,13 +56,15 @@ export function LoginScreen() {
                 </div>
               ))}
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Sparkles className="size-3.5" />
-              <span>
-                Connected to Firebase:{" "}
-                <code className="font-mono">{FIREBASE_PROJECT_ID}</code>
-              </span>
-              <Badge variant="secondary" className="text-[10px]">Auth + Firestore</Badge>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/40 dark:border-emerald-900 p-3 text-xs">
+              <div className="font-medium text-emerald-900 dark:text-emerald-200 mb-1">
+                Connected to Firebase
+              </div>
+              <div className="text-emerald-800 dark:text-emerald-300 leading-relaxed">
+                Project <code className="font-mono">{FIREBASE_PROJECT_ID}</code> — Auth + Firestore.
+                The Faya Pay app (consumers), Faya Business app (merchants), and Faya POS app
+                all read from the same Firestore database. Admin actions sync to all apps in real time.
+              </div>
             </div>
           </div>
 
@@ -88,7 +83,7 @@ export function LoginScreen() {
               <div className="hidden lg:block">
                 <CardTitle className="text-2xl">Staff Sign-in</CardTitle>
                 <CardDescription>
-                  Use your work email, password, and MFA code.
+                  Use your work email and password.
                 </CardDescription>
               </div>
             </CardHeader>
@@ -111,7 +106,7 @@ export function LoginScreen() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="firstname.lastname@faya.admin"
+                      placeholder="you@faya.africa"
                       className="pl-9"
                     />
                   </div>
@@ -171,35 +166,17 @@ export function LoginScreen() {
                   ) : (
                     <>
                       <ShieldCheck className="size-4" />
-                      Sign in securely
+                      Sign in
                     </>
                   )}
                 </Button>
-                <Separator />
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={onDemo}
-                  disabled={loading}
-                >
-                  <Sparkles className="size-4" />
-                  Try demo as Super Admin
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Demo mode reads staff records from Firestore directly without
-                  Firebase Auth. In production, enable Email/Password &amp; MFA in the
-                  Firebase console for{" "}
-                  <code className="font-mono">{FIREBASE_AUTH_DOMAIN}</code>.
-                </p>
               </CardFooter>
             </form>
           </Card>
         </div>
       </main>
       <footer className="border-t bg-white/50 dark:bg-slate-950/50 backdrop-blur py-3 text-center text-xs text-muted-foreground">
-        Faya Admin Portal · Firebase project{" "}
-        <code className="font-mono">{FIREBASE_PROJECT_ID}</code> · All actions are audited
+        Faya Admin Portal · Firebase project <code className="font-mono">{FIREBASE_PROJECT_ID}</code> · All actions are audited
       </footer>
     </div>
   );

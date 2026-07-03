@@ -52,7 +52,7 @@ import { Toaster as SonnerToaster } from "sonner";
  * Handles auth gate + data loading state.
  */
 export function PortalApp() {
-  const { loading, staff, isDemoMode } = useAuth();
+  const { loading, staff } = useAuth();
   const [seeding, setSeeding] = useState(true);
   const [seedError, setSeedError] = useState<string | null>(null);
 

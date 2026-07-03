@@ -90,7 +90,7 @@ export function PortalShell({
   pendingTicketsCount,
 }: PortalShellProps) {
   const { view, setView, sidebarCollapsed, toggleSidebar } = usePortalStore();
-  const { staff, isDemoMode, logout } = useAuth();
+  const { staff, logout } = useAuth();
 
   const groupedNav = useMemo(() => {
     const groups: Record<NavItem["group"], NavItem[]> = {
@@ -141,11 +141,6 @@ export function PortalShell({
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            {isDemoMode && (
-              <Badge variant="outline" className="hidden sm:inline-flex text-amber-700 border-amber-300 bg-amber-50">
-                <ShieldAlert className="size-3 mr-1" /> Demo mode
-              </Badge>
-            )}
             {staff.mfaEnabled ? (
               <Badge variant="outline" className="hidden sm:inline-flex text-emerald-700 border-emerald-300 bg-emerald-50">
                 MFA on
