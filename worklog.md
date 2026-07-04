@@ -1205,3 +1205,31 @@ Work Log:
 
 Stage Summary:
 - The delete-consumer dialog no longer crashes when a consumer doc lacks an `email` field. All `consumer.email` accesses in the delete handler and dialog use defensive fallbacks (`?? ""` / `|| "(no email on file)"`), so the page renders for every consumer regardless of profile completeness.
+
+---
+Task ID: custom-firestore-auth-dual-accounts-full-deletion
+Agent: main
+Task: Deleted accounts should be fully removed from the database; move authentication out of Firebase Auth so dual accounts (same email, different passwords) work natively
+
+Work Log:
+- Architectural decision: moved consumer + merchant authentication OUT of Firebase Auth into Firestore-stored bcrypt password hashes. Firebase Auth is kept ONLY for admin portal staff. This solves both asks:
+  1. Dual accounts work natively — each profile doc (users / merchants) has its own passwordHash field, so amehbryant@gmail.com can have a consumer doc (hash A) and a merchant doc (hash B) with DIFFERENT passwords. No plus-addressing hack.
+  2. Deletion is complete — the profile doc IS the account. Deleting the Firestore doc removes the passwordHash, so the user can never log in again. No separate Firebase Auth account to clean up (which couldn't be deleted without Admin SDK credentials anyway).
+- Installed bcryptjs. Created src/lib/auth-helpers.ts: hashPassword (bcrypt hashSync, 10 rounds), verifyPassword (compareSync), issueToken (HMAC-SHA256 signed base64 payload {uid, role, exp}, 7-day TTL), verifyToken (constant-time signature check + expiry), extractBearerToken, generateTempPassword.
+- Created src/app/api/auth/login/route.ts (POST {email, password, role}): looks up profile doc by email (consumer: users.email; merchant: merchants.ownerEmail then contactEmail), verifies bcrypt hash, issues session token. Returns {success, token, uid, role, profile}. If profile has no passwordHash yet (migration case), returns 401 needsPasswordReset:true telling the user to reset.
+- Rewrote src/app/api/create-consumer-account/route.ts: stores passwordHash (bcrypt) on the users doc. No Firebase Auth, no plus-addressing. Blocks only if a consumer profile already exists for the email. Generates uid usr_<ts>_<rand>.
+- Rewrote src/app/api/create-merchant-account/route.ts: stores passwordHash on the merchants doc. No Firebase Admin SDK (which had no credentials in this env and failed). Blocks only if a merchant profile already exists. Generates uid mch_<ts>_<rand> + merchantCode FAY-<CC>-M-<nnnnn>.
+- Created src/app/api/auth/set-password/route.ts (POST {email, role, newPassword?}): admin sets a new password. If newPassword omitted, generates a random 12-char temp password. Hashes + stores on the profile doc. Returns the plaintext ONCE so the admin can share it. Audit-logged.
+- Updated admin UI (user-detail-view + merchant-detail-view): the "Reset password" button now opens a dialog that generates a new temp password via /api/auth/set-password and displays it in a read-only Input with a Copy button. Dialog text: "Generate new password" → success shows "New password set" + the temp password + "shown only once" note. Removed the old Firebase sendPasswordResetEmail flow for consumer/merchant accounts.
+- Verified end-to-end with a shared email dualtest_...@testfaya.com:
+  1. Create CONSUMER (password ConsumerPass1) → success, uid usr_...
+  2. Create MERCHANT (SAME email, DIFFERENT password MerchantPass2) → success, uid mch_... (different UID, no collision)
+  3. Login consumer with ConsumerPass1 → success (token issued)
+  4. Login merchant with MerchantPass2 → success (token issued) — fully independent accounts, same email, different passwords, no plus-addressing
+  5. Login merchant with CONSUMER password → FAILS (Incorrect email or password) — confirms independence
+  6. Admin set-password for consumer → generated temp password 5gveBPeigtB5; login with it → success
+  7. Delete consumer doc → login consumer fails; account-status returns found=false, canLogin=false; merchant account STILL works (unaffected by consumer deletion)
+- Browser-verified: merchant profile → Reset password → "Reset merchant password?" dialog → Generate new password → "New password set" + temp password shown. Merchant now has a passwordHash (login with wrong password returns "Incorrect email or password" instead of needsPasswordReset). No console errors. Lint clean.
+
+Stage Summary:
+- Consumer + merchant authentication is now Firestore bcrypt-based (passwordHash on each profile doc), not Firebase Auth. Same email can have independent consumer + merchant accounts with different passwords — no plus-addressing. Deleting a profile doc fully removes the account (login fails, account-status blocks) — no leftover Firebase Auth account. Admin "Reset password" generates a temp password shown once in the dialog with a Copy button. Firebase Auth remains only for admin portal staff. Existing consumer/merchant accounts created under the old Firebase Auth flow have no passwordHash yet — their first login returns needsPasswordReset:true, and the admin can set a password via the new Reset password button.

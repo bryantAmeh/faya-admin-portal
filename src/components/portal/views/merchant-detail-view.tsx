@@ -490,6 +490,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
   const [confirmAction, setConfirmAction] = useState<MerchantAction | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
 
   const merchant = useMemo(
     () => merchants.find((m) => m.id === selectedMerchantId) ?? null,
@@ -735,7 +736,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
     if (!merchant || !staff) return;
     setResettingPassword(true);
     try {
-      const res = await fetch("/api/send-password-reset", {
+      const res = await fetch("/api/auth/set-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -747,18 +748,18 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to send reset email");
+        throw new Error(data.error || "Failed to set new password");
       }
-      toast.success("Password reset email sent", {
-        description: `A secure reset link was sent to ${merchant.ownerEmail || merchant.contactEmail}. The merchant sets their own new password.`,
+      setGeneratedPassword(data.newPassword);
+      toast.success("New password set", {
+        description: "A temporary password was generated. Share it with the merchant — shown below.",
       });
     } catch (e) {
-      toast.error("Could not send reset email", {
+      toast.error("Could not set new password", {
         description: e instanceof Error ? e.message : String(e),
       });
     } finally {
       setResettingPassword(false);
-      setResetConfirm(false);
     }
   }
 
@@ -1182,31 +1183,91 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Reset password confirmation */}
-      <AlertDialog open={resetConfirm} onOpenChange={setResetConfirm}>
+      {/* Reset / set password dialog */}
+      <AlertDialog
+        open={resetConfirm}
+        onOpenChange={(o) => {
+          setResetConfirm(o);
+          if (!o) setGeneratedPassword(null);
+        }}
+      >
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Send password reset email?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This sends a secure password-reset link to{" "}
-              <span className="font-medium text-foreground">
-                {merchant.ownerEmail || merchant.contactEmail}
-              </span>
-              . The merchant sets their own new password — you will not see or
-              set it. The link expires after the standard Firebase window.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={resettingPassword}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={resettingPassword}
-              onClick={handleResetPassword}
-            >
-              {resettingPassword ? "Sending…" : "Send reset link"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
+          {generatedPassword ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>New password set</AlertDialogTitle>
+                <AlertDialogDescription>
+                  A temporary password was generated for{" "}
+                  <span className="font-medium text-foreground">
+                    {merchant.ownerEmail || merchant.contactEmail}
+                  </span>
+                  . Share it with the merchant — they should sign in and change it.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <div className="space-y-2 py-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Temporary password
+                </label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={generatedPassword}
+                    className="font-mono text-sm"
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(generatedPassword);
+                      toast.success("Copied to clipboard");
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  This password is shown only once. Store or share it securely.
+                </p>
+              </div>
+              <AlertDialogFooter>
+                <AlertDialogAction
+                  onClick={() => {
+                    setResetConfirm(false);
+                    setGeneratedPassword(null);
+                  }}
+                >
+                  Done
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Reset merchant password?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This generates a new temporary password for{" "}
+                  <span className="font-medium text-foreground">
+                    {merchant.ownerEmail || merchant.contactEmail}
+                  </span>
+                  . You'll see it once to share with them. The merchant should
+                  sign in and change it afterward.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={resettingPassword}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={resettingPassword}
+                  onClick={handleResetPassword}
+                >
+                  {resettingPassword ? "Setting…" : "Generate new password"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
         </AlertDialogContent>
       </AlertDialog>
     </div>
