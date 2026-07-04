@@ -58,6 +58,7 @@ import {
   Pause,
   RotateCcw,
   KeyRound,
+  Trash2,
   Eye,
   MoreHorizontal,
   ShoppingCart,
@@ -73,6 +74,7 @@ import { ViewContainer, EmptyState } from "@/components/portal/view-helpers";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Tabs,
   TabsContent,
@@ -108,7 +110,7 @@ import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 
 import { usePortalStore } from "@/hooks/use-portal-store";
 import { useAuth } from "@/hooks/use-auth";
-import { adminData, logAudit } from "@/lib/admin-data";
+import { adminData, logAudit, remove, COLLECTIONS } from "@/lib/admin-data";
 import {
   formatCurrency,
   formatDateTime,
@@ -303,7 +305,7 @@ function kycBadge(s: string) {
 
 export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
   const { staff } = useAuth();
-  const { selectedUserId, setView, selectMerchant } = usePortalStore();
+  const { selectedUserId, setView, selectMerchant, selectUser } = usePortalStore();
   const [confirmAction, setConfirmAction] = useState<{
     consumer: Consumer;
     action: "restrict" | "suspend" | "reactivate";
@@ -311,6 +313,9 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
   const [allMerchants, setAllMerchants] = useState<any[]>([]);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteEmailInput, setDeleteEmailInput] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const unsub = adminData.subscribeMerchants(setAllMerchants);
@@ -407,6 +412,91 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
     }
   }
 
+  async function handleDeleteConsumer() {
+    if (!consumer || !staff) return;
+    // Require the admin to type the consumer's exact email before allowing deletion.
+    if (deleteEmailInput.trim().toLowerCase() !== consumer.email.trim().toLowerCase()) {
+      toast.error("Email does not match", {
+        description: `Type ${consumer.email} exactly to confirm deletion.`,
+      });
+      return;
+    }
+    setDeleting(true);
+    try {
+      const consumerId = consumer.id;
+      const consumerEmail = consumer.email;
+      const consumerName = consumer.fullName || `${consumer.firstName || ""} ${consumer.lastName || ""}`.trim();
+      const consumerCode = consumer.consumerCode ?? "";
+
+      // 1. Delete the consumer profile doc from `users`.
+      await adminData.deleteConsumer(consumerId);
+
+      // 2. Delete the consumer's cards and wallets (meaningless without a
+      //    profile). Transactions, documents, disputes and tickets are KEPT
+      //    for audit / compliance — they remain linked by userId for history.
+      try {
+        const cards = await import("@/lib/admin-data").then((m) =>
+          m.fetchAll<{ id: string; userId: string }>(COLLECTIONS.cards),
+        );
+        await Promise.all(
+          cards
+            .filter((c) => c.userId === consumerId)
+            .map((c) => remove(COLLECTIONS.cards, c.id)),
+        );
+      } catch {
+        // Best-effort cleanup.
+      }
+      try {
+        const wallets = await import("@/lib/admin-data").then((m) =>
+          m.fetchAll<{ id: string; userId: string }>(COLLECTIONS.wallets),
+        );
+        await Promise.all(
+          wallets
+            .filter((w) => w.userId === consumerId)
+            .map((w) => remove(COLLECTIONS.wallets, w.id)),
+        );
+      } catch {
+        // Best-effort cleanup.
+      }
+
+      // 3. Audit log the deletion (with all identifying details since the
+      //    profile doc is now gone).
+      logAudit(
+        {
+          staffId: staff.id,
+          staffName: `${staff.firstName} ${staff.lastName}`,
+          department: staff.departmentId,
+          role: staff.roleId,
+        },
+        "consumer.delete",
+        "consumer",
+        consumerId,
+        {
+          countryCode: consumer.countryCode,
+          beforeValue: consumer.status as string,
+          afterValue: "deleted",
+          reason: `Deleted consumer ${consumerName} (${consumerCode}, ${consumerEmail}). Profile + cards + wallets removed. Transactions/documents kept for audit.`,
+        },
+      );
+
+      toast.success("Consumer deleted", {
+        description: `${consumerName} (${consumerEmail}) has been removed. The user can no longer log in to Faya Pay.`,
+      });
+
+      // 4. Navigate back to the Users list.
+      setDeleteConfirm(false);
+      setDeleteEmailInput("");
+      selectUser(null);
+      setView("users");
+    } catch (e) {
+      toast.error("Could not delete consumer", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   // Not-found fallback
   if (!consumer) {
     return (
@@ -492,6 +582,36 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
         staff={staff}
       />
 
+      {/* D. Danger zone — destructive actions kept separate from routine ones */}
+      <Card className="border-red-200 dark:border-red-900/50">
+        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Trash2 className="size-4 text-red-600" />
+              <h3 className="text-sm font-semibold text-red-700 dark:text-red-400">
+                Delete consumer account
+              </h3>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              Permanently removes the consumer profile, cards, and wallets.
+              Transactions and documents are kept for audit. The user will no
+              longer be able to log in to Faya Pay. This cannot be undone.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/20 shrink-0"
+            onClick={() => {
+              setDeleteEmailInput("");
+              setDeleteConfirm(true);
+            }}
+            disabled={!staff || deleting}
+          >
+            <Trash2 className="size-3.5 mr-1" /> Delete consumer
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* Confirm action dialog */}
       <AlertDialog
         open={!!confirmAction}
@@ -564,6 +684,55 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
               onClick={handleResetPassword}
             >
               {resettingPassword ? "Sending…" : "Send reset link"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete consumer confirmation — requires typed email to match */}
+      <AlertDialog open={deleteConfirm} onOpenChange={(o) => !o && setDeleteConfirm(o)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-700 dark:text-red-400">
+              Delete consumer account?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes{" "}
+              <span className="font-medium text-foreground">
+                {consumer.fullName || `${consumer.firstName} ${consumer.lastName}`}
+              </span>{" "}
+              ({consumer.email}). The profile, cards, and wallets will be
+              removed. Transactions and documents are kept for audit. The user
+              will no longer be able to log in to Faya Pay.{" "}
+              <strong>This cannot be undone.</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-xs font-medium text-muted-foreground">
+              Type the consumer's email to confirm:{" "}
+              <span className="font-mono text-foreground">{consumer.email}</span>
+            </label>
+            <Input
+              value={deleteEmailInput}
+              onChange={(e) => setDeleteEmailInput(e.target.value)}
+              placeholder={consumer.email}
+              className="text-sm"
+              autoFocus
+              disabled={deleting}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={
+                deleting ||
+                deleteEmailInput.trim().toLowerCase() !==
+                  consumer.email.trim().toLowerCase()
+              }
+              onClick={handleDeleteConsumer}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleting ? "Deleting…" : "Delete account"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

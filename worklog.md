@@ -1161,3 +1161,28 @@ Work Log:
 
 Stage Summary:
 - The Faya Pay, Faya Business, and Faya POS apps now have a single endpoint to enforce admin suspensions: GET /api/account-status?uid=X&role=consumer|merchant. After Firebase Auth login, the app checks canLogin — if false (suspended/closed), it signs the user out and shows the reason. Before each transaction, the app checks canTransact — if false (suspended/restricted/closed/onboarding/pending_kyc), the transaction is blocked. The admin portal's Suspend/Restrict/Reactivate buttons (already wired to update the Firestore status field) now have real enforcement power across all three apps.
+
+---
+Task ID: delete-consumer-from-admin
+Agent: main
+Task: Admin should be able to delete a user/consumer from the admin page
+
+Work Log:
+- Added a "Delete consumer account" feature to the consumer profile (user-detail-view.tsx):
+  - Added a "Danger zone" card at the bottom of the profile page (after the tabs, before the dialogs) with a red-bordered "Delete consumer" button. Kept destructive actions separate from routine ones (Restrict/Suspend/Reactivate/Reset password) to prevent accidents.
+  - Strong confirmation: an AlertDialog requires the admin to TYPE the consumer's exact email to enable the "Delete account" button. The button stays disabled until the typed email matches.
+  - handleDeleteConsumer(): (1) deletes the `users` Firestore doc via adminData.deleteConsumer; (2) best-effort deletes the consumer's cards and wallets via remove(COLLECTIONS.cards/wallets, id); (3) KEEPS transactions, documents, disputes, tickets for audit/compliance (they remain linked by userId); (4) logs audit entry "consumer.delete" with all identifying details (name, code, email) since the profile doc is gone; (5) toast success; (6) navigates back to Users list.
+  - Security: after deletion, /api/account-status returns found=false → canLogin=false → the user can no longer log in to Faya Pay (even though the Firebase Auth account technically remains — can't be deleted without Admin SDK credentials, but the account-status check blocks login).
+  - Imported Trash2 icon, Input component, remove + COLLECTIONS from admin-data, selectUser from usePortalStore.
+- Verified end-to-end via Agent Browser:
+  - Created a test consumer (delete-test-1783130776@testfaya.com) via /api/create-consumer-account.
+  - Opened the consumer profile in admin portal → scrolled to "Danger zone" → clicked "Delete consumer".
+  - Confirmation dialog appeared showing the consumer's name + email + typed-email requirement.
+  - Typed the exact email → "Delete account" button enabled → clicked.
+  - "Consumer deleted" success toast appeared → navigated back to "Users — Consumers" list → consumer no longer in the list.
+  - Confirmed via Firestore REST: the users doc is gone.
+  - Confirmed via /api/account-status: found=false, canLogin=false, canTransact=false (user blocked from Faya Pay login).
+  - No console errors. Lint clean.
+
+Stage Summary:
+- Admins can now permanently delete a consumer from the admin portal. A "Danger zone" section at the bottom of each consumer profile has a red "Delete consumer" button. Clicking it opens a confirmation dialog requiring the admin to type the consumer's exact email to proceed. On confirm: the profile doc + cards + wallets are deleted from Firestore; transactions and documents are kept for audit; the deletion is audit-logged with all identifying details; the admin is navigated back to the Users list. The deleted user can no longer log in to Faya Pay (account-status returns canLogin=false when no profile exists).
