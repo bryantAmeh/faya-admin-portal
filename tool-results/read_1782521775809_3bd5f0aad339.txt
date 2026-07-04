@@ -1,0 +1,1344 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Staff Management view (spec §6)
+     5→ *
+     6→ * Lists all admin staff with filters, search, create/edit dialog, row actions
+     7→ * (view / edit / suspend / unlock / reset MFA / force logout), and a detail
+     8→ * Sheet showing the full staff profile, country access and permissions.
+     9→ *
+    10→ * All mutations go through `adminData` and are logged via `logAudit`.
+    11→ */
+    12→import { useMemo, useState } from "react";
+    13→import {
+    14→  Users,
+    15→  UserPlus,
+    16→  MoreHorizontal,
+    17→  Shield,
+    18→  ShieldOff,
+    19→  Lock,
+    20→  Unlock,
+    21→  Ban,
+    22→  LogOut,
+    23→  Search,
+    24→  Filter,
+    25→  Eye,
+    26→  Pencil,
+    27→  Mail,
+    28→  Phone,
+    29→  Building2,
+    30→  Calendar,
+    31→  KeyRound,
+    32→  Globe2,
+    33→  MapPinned,
+    34→  ScrollText,
+    35→  X,
+    36→} from "lucide-react";
+    37→import { toast } from "sonner";
+    38→
+    39→import { ViewHeader, ViewContainer, StatCard, EmptyState } from "@/components/portal/view-helpers";
+    40→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    41→import { Badge } from "@/components/ui/badge";
+    42→import { Button } from "@/components/ui/button";
+    43→import { Input } from "@/components/ui/input";
+    44→import { Label } from "@/components/ui/label";
+    45→import { Textarea } from "@/components/ui/textarea";
+    46→import { Switch } from "@/components/ui/switch";
+    47→import { Checkbox } from "@/components/ui/checkbox";
+    48→import { Separator } from "@/components/ui/separator";
+    49→import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+    50→import {
+    51→  Table,
+    52→  TableBody,
+    53→  TableCell,
+    54→  TableHead,
+    55→  TableHeader,
+    56→  TableRow,
+    57→} from "@/components/ui/table";
+    58→import {
+    59→  Dialog,
+    60→  DialogContent,
+    61→  DialogDescription,
+    62→  DialogFooter,
+    63→  DialogHeader,
+    64→  DialogTitle,
+    65→} from "@/components/ui/dialog";
+    66→import {
+    67→  Sheet,
+    68→  SheetContent,
+    69→  SheetDescription,
+    70→  SheetHeader,
+    71→  SheetTitle,
+    72→} from "@/components/ui/sheet";
+    73→import {
+    74→  AlertDialog,
+    75→  AlertDialogAction,
+    76→  AlertDialogCancel,
+    77→  AlertDialogContent,
+    78→  AlertDialogDescription,
+    79→  AlertDialogFooter,
+    80→  AlertDialogHeader,
+    81→  AlertDialogTitle,
+    82→} from "@/components/ui/alert-dialog";
+    83→import {
+    84→  DropdownMenu,
+    85→  DropdownMenuContent,
+    86→  DropdownMenuItem,
+    87→  DropdownMenuLabel,
+    88→  DropdownMenuSeparator,
+    89→  DropdownMenuTrigger,
+    90→} from "@/components/ui/dropdown-menu";
+    91→import {
+    92→  Select,
+    93→  SelectContent,
+    94→  SelectItem,
+    95→  SelectTrigger,
+    96→  SelectValue,
+    97→} from "@/components/ui/select";
+    98→
+    99→import { useAuth } from "@/hooks/use-auth";
+   100→import { adminData, logAudit } from "@/lib/admin-data";
+   101→import { getAccessSummary, getScopeLabel } from "@/lib/access-scope";
+   102→import { formatDateTime, formatDate, statusBadge, timeAgo } from "@/lib/formatters";
+   103→import { AFRICAN_REGIONS } from "@/lib/types";
+   104→import type {
+   105→  AdminStaff,
+   106→  CountryConfig,
+   107→  Department,
+   108→  Role,
+   109→  StaffCountryAccess,
+   110→  StaffStatus,
+   111→} from "@/lib/types";
+   112→
+   113→interface StaffViewProps {
+   114→  staff: AdminStaff[];
+   115→  departments: Department[];
+   116→  roles: Role[];
+   117→  countries: CountryConfig[];
+   118→}
+   119→
+   120→const ACCESS_LEVELS: StaffCountryAccess["accessLevel"][] = ["view", "operate", "manage"];
+   121→
+   122→const ACCESS_LEVEL_BADGE: Record<StaffCountryAccess["accessLevel"], string> = {
+   123→  view: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+   124→  operate: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+   125→  manage: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   126→};
+   127→
+   128→const SUPER_ADMIN_DEPT_ID = "dept_super_admin";
+   129→
+   130→function initials(s: AdminStaff): string {
+   131→  return `${s.firstName?.[0] ?? ""}${s.lastName?.[0] ?? ""}`.toUpperCase() || "?";
+   132→}
+   133→
+   134→function fullName(s: AdminStaff): string {
+   135→  return `${s.firstName} ${s.lastName}`.trim();
+   136→}
+   137→
+   138→function deptName(deptId: string, departments: Department[]): string {
+   139→  return departments.find((d) => d.id === deptId)?.name ?? "—";
+   140→}
+   141→
+   142→function roleName(roleId: string, roles: Role[]): string {
+   143→  return roles.find((r) => r.id === roleId)?.name ?? "—";
+   144→}
+   145→
+   146→function countryName(code: string, countries: CountryConfig[]): string {
+   147→  return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   148→}
+   149→
+   150→function isSuperAdmin(s: AdminStaff | null): boolean {
+   151→  return !!s && s.departmentId === SUPER_ADMIN_DEPT_ID;
+   152→}
+   153→
+   154→/** Badge class for the staff's effective access scope. */
+   155→function scopeBadgeClass(s: AdminStaff): string {
+   156→  const label = getScopeLabel(s);
+   157→  if (label === "Global") {
+   158→    return "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-800";
+   159→  }
+   160→  if (label.startsWith("Region:")) {
+   161→    return "bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-800";
+   162→  }
+   163→  if (label.startsWith("Country:")) {
+   164→    return "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700";
+   165→  }
+   166→  return "bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700";
+   167→}
+   168→
+   169→/** Compact label for dense table cells (truncates long region/country lists). */
+   170→function scopeCompactLabel(s: AdminStaff): string {
+   171→  const label = getScopeLabel(s);
+   172→  if (label === "Global" || label === "No access" || label === "—") return label;
+   173→  if (label.startsWith("Region:")) {
+   174→    const regions = s.regionAccess;
+   175→    if (regions.length <= 1) return label;
+   176→    return `Region: ${regions[0]} +${regions.length - 1}`;
+   177→  }
+   178→  if (label.startsWith("Country:")) {
+   179→    const codes = s.countries.map((c) => c.countryCode);
+   180→    if (codes.length <= 2) return label;
+   181→    return `Country: ${codes.slice(0, 2).join(", ")} +${codes.length - 2}`;
+   182→  }
+   183→  return label;
+   184→}
+   185→
+   186→/** Empty form state used for "Create Staff". */
+   187→function emptyStaffForm(): StaffFormState {
+   188→  return {
+   189→    firstName: "",
+   190→    lastName: "",
+   191→    email: "",
+   192→    phone: "",
+   193→    departmentId: "",
+   194→    roleId: "",
+   195→    mfaEnabled: true,
+   196→    notes: "",
+   197→    countries: [],
+   198→    regionAccess: [],
+   199→  };
+   200→}
+   201→
+   202→interface StaffFormState {
+   203→  firstName: string;
+   204→  lastName: string;
+   205→  email: string;
+   206→  phone: string;
+   207→  departmentId: string;
+   208→  roleId: string;
+   209→  mfaEnabled: boolean;
+   210→  notes: string;
+   211→  countries: StaffCountryAccess[];
+   212→  regionAccess: string[];
+   213→}
+   214→
+   215→export function StaffView({ staff, departments, roles, countries }: StaffViewProps) {
+   216→  const { staff: currentStaff } = useAuth();
+   217→
+   218→  /* ---------------------------- filter state ---------------------------- */
+   219→  const [search, setSearch] = useState("");
+   220→  const [filterDept, setFilterDept] = useState<string>("all");
+   221→  const [filterRole, setFilterRole] = useState<string>("all");
+   222→  const [filterCountry, setFilterCountry] = useState<string>("all");
+   223→  const [filterStatus, setFilterStatus] = useState<string>("all");
+   224→  const [filterMfa, setFilterMfa] = useState<string>("all");
+   225→
+   226→  /* --------------------------- dialog state ----------------------------- */
+   227→  const [formOpen, setFormOpen] = useState(false);
+   228→  const [editing, setEditing] = useState<AdminStaff | null>(null);
+   229→  const [form, setForm] = useState<StaffFormState>(emptyStaffForm());
+   230→  const [saving, setSaving] = useState(false);
+   231→
+   232→  /* --------------------------- detail sheet ----------------------------- */
+   233→  const [detailStaff, setDetailStaff] = useState<AdminStaff | null>(null);
+   234→
+   235→  /* --------------------------- suspend dialog --------------------------- */
+   236→  const [suspendTarget, setSuspendTarget] = useState<AdminStaff | null>(null);
+   237→  const [suspending, setSuspending] = useState(false);
+   238→
+   239→  const canCreate = isSuperAdmin(currentStaff);
+   240→
+   241→  /* ----------------------------- derived -------------------------------- */
+   242→  const filteredStaff = useMemo(() => {
+   243→    const q = search.trim().toLowerCase();
+   244→    return staff.filter((s) => {
+   245→      if (q) {
+   246→        const hay = `${s.firstName} ${s.lastName} ${s.email}`.toLowerCase();
+   247→        if (!hay.includes(q)) return false;
+   248→      }
+   249→      if (filterDept !== "all" && s.departmentId !== filterDept) return false;
+   250→      if (filterRole !== "all" && s.roleId !== filterRole) return false;
+   251→      if (filterCountry !== "all" && !s.countries.some((c) => c.countryCode === filterCountry)) return false;
+   252→      if (filterStatus !== "all" && s.status !== filterStatus) return false;
+   253→      if (filterMfa === "on" && !s.mfaEnabled) return false;
+   254→      if (filterMfa === "off" && s.mfaEnabled) return false;
+   255→      return true;
+   256→    });
+   257→  }, [staff, search, filterDept, filterRole, filterCountry, filterStatus, filterMfa]);
+   258→
+   259→  const rolesForDept = useMemo(
+   260→    () => roles.filter((r) => r.departmentId === form.departmentId),
+   261→    [roles, form.departmentId],
+   262→  );
+   263→
+   264→  const stats = useMemo(() => {
+   265→    const total = staff.length;
+   266→    const active = staff.filter((s) => s.status === "active").length;
+   267→    const suspended = staff.filter((s) => s.status === "suspended").length;
+   268→    const locked = staff.filter((s) => s.status === "locked").length;
+   269→    const invited = staff.filter((s) => s.status === "invited").length;
+   270→    const mfaOn = staff.filter((s) => s.mfaEnabled).length;
+   271→    return {
+   272→      total,
+   273→      active,
+   274→      suspended,
+   275→      locked,
+   276→      invited,
+   277→      mfaPct: total > 0 ? Math.round((mfaOn / total) * 100) : 0,
+   278→    };
+   279→  }, [staff]);
+   280→
+   281→  /* ----------------------------- handlers ------------------------------- */
+   282→  function openCreate() {
+   283→    setEditing(null);
+   284→    setForm(emptyStaffForm());
+   285→    setFormOpen(true);
+   286→  }
+   287→
+   288→  function openEdit(s: AdminStaff) {
+   289→    setEditing(s);
+   290→    setForm({
+   291→      firstName: s.firstName,
+   292→      lastName: s.lastName,
+   293→      email: s.email,
+   294→      phone: s.phone,
+   295→      departmentId: s.departmentId,
+   296→      roleId: s.roleId,
+   297→      mfaEnabled: s.mfaEnabled,
+   298→      notes: s.notes ?? "",
+   299→      countries: s.countries.map((c) => ({ ...c })),
+   300→      regionAccess: Array.isArray(s.regionAccess) ? [...s.regionAccess] : [],
+   301→    });
+   302→    setFormOpen(true);
+   303→  }
+   304→
+   305→  function onDeptChange(deptId: string) {
+   306→    // Reset role if it doesn't belong to the new dept
+   307→    const stillValid = roles.some((r) => r.id === form.roleId && r.departmentId === deptId);
+   308→    setForm((f) => ({ ...f, departmentId: deptId, roleId: stillValid ? f.roleId : "" }));
+   309→  }
+   310→
+   311→  function toggleCountry(code: string, checked: boolean) {
+   312→    setForm((f) => {
+   313→      const exists = f.countries.find((c) => c.countryCode === code);
+   314→      if (checked && !exists) {
+   315→        return { ...f, countries: [...f.countries, { countryCode: code, accessLevel: "view" }] };
+   316→      }
+   317→      if (!checked && exists) {
+   318→        return { ...f, countries: f.countries.filter((c) => c.countryCode !== code) };
+   319→      }
+   320→      return f;
+   321→    });
+   322→  }
+   323→
+   324→  function setCountryAccess(code: string, level: StaffCountryAccess["accessLevel"]) {
+   325→    setForm((f) => ({
+   326→      ...f,
+   327→      countries: f.countries.map((c) => (c.countryCode === code ? { ...c, accessLevel: level } : c)),
+   328→    }));
+   329→  }
+   330→
+   331→  function toggleRegion(region: string, checked: boolean) {
+   332→    setForm((f) => {
+   333→      if (checked) {
+   334→        if (f.regionAccess.includes(region)) return f;
+   335→        return { ...f, regionAccess: [...f.regionAccess, region] };
+   336→      }
+   337→      return { ...f, regionAccess: f.regionAccess.filter((r) => r !== region) };
+   338→    });
+   339→  }
+   340→
+   341→  function validate(): string | null {
+   342→    if (!form.firstName.trim()) return "First name is required";
+   343→    if (!form.lastName.trim()) return "Last name is required";
+   344→    if (!form.email.trim()) return "Email is required";
+   345→    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
+   346→    if (!emailOk) return "Enter a valid email address";
+   347→    // email uniqueness
+   348→    const duplicate = staff.find(
+   349→      (s) => s.email.toLowerCase() === form.email.trim().toLowerCase() && s.id !== editing?.id,
+   350→    );
+   351→    if (duplicate) return `Email already used by ${duplicate.firstName} ${duplicate.lastName}`;
+   352→    if (!form.departmentId) return "Department is required";
+   353→    if (!form.roleId) return "Role is required";
+   354→    // Access scope — Super Admin gets global automatically. Other departments
+   355→    // must have at least one country OR one region assigned.
+   356→    if (
+   357→      form.departmentId !== SUPER_ADMIN_DEPT_ID &&
+   358→      form.countries.length === 0 &&
+   359→      form.regionAccess.length === 0
+   360→    ) {
+   361→      return "Assign at least one country or region (or pick the Super Admin department for global access)";
+   362→    }
+   363→    return null;
+   364→  }
+   365→
+   366→  async function onSave() {
+   367→    if (!currentStaff) return;
+   368→    const err = validate();
+   369→    if (err) {
+   370→      toast.error(err);
+   371→      return;
+   372→    }
+   373→    setSaving(true);
+   374→    try {
+   375→      const dept = departments.find((d) => d.id === form.departmentId);
+   376→      const role = roles.find((r) => r.id === form.roleId);
+   377→      const actor = {
+   378→        staffId: currentStaff.id,
+   379→        staffName: fullName(currentStaff),
+   380→        department: deptName(currentStaff.departmentId, departments),
+   381→        role: roleName(currentStaff.roleId, roles),
+   382→      };
+   383→
+   384→      if (editing) {
+   385→        const after: AdminStaff = {
+   386→          ...editing,
+   387→          firstName: form.firstName.trim(),
+   388→          lastName: form.lastName.trim(),
+   389→          email: form.email.trim(),
+   390→          phone: form.phone.trim(),
+   391→          departmentId: form.departmentId,
+   392→          roleId: form.roleId,
+   393→          mfaEnabled: form.mfaEnabled,
+   394→          notes: form.notes.trim(),
+   395→          countries: form.countries,
+   396→          // Super Admin → all regions (display nicety; global access is implicit).
+   397→          regionAccess:
+   398→            form.departmentId === SUPER_ADMIN_DEPT_ID
+   399→              ? [...AFRICAN_REGIONS]
+   400→              : form.regionAccess,
+   401→          updatedAt: Date.now(),
+   402→        };
+   403→        await adminData.updateStaff(editing.id, {
+   404→          firstName: after.firstName,
+   405→          lastName: after.lastName,
+   406→          email: after.email,
+   407→          phone: after.phone,
+   408→          departmentId: after.departmentId,
+   409→          roleId: after.roleId,
+   410→          mfaEnabled: after.mfaEnabled,
+   411→          notes: after.notes,
+   412→          countries: after.countries,
+   413→          regionAccess: after.regionAccess,
+   414→          updatedAt: after.updatedAt,
+   415→        });
+   416→        logAudit(actor, "staff.update", "staff", editing.id, {
+   417→          afterValue: `${after.firstName} ${after.lastName} · ${dept?.name ?? "?"} · ${role?.name ?? "?"}`,
+   418→        });
+   419→        toast.success(`Updated ${after.firstName} ${after.lastName}`);
+   420→        setFormOpen(false);
+   421→      } else {
+   422→        const now = Date.now();
+   423→        const newStaff: AdminStaff = {
+   424→          id: `staff_${now}`,
+   425→          firstName: form.firstName.trim(),
+   426→          lastName: form.lastName.trim(),
+   427→          email: form.email.trim(),
+   428→          phone: form.phone.trim(),
+   429→          departmentId: form.departmentId,
+   430→          roleId: form.roleId,
+   431→          managerId: null,
+   432→          status: "invited",
+   433→          mfaEnabled: form.mfaEnabled,
+   434→          countries: form.countries,
+   435→          // Super Admin → all regions (display nicety; global access is implicit).
+   436→          regionAccess:
+   437→            form.departmentId === SUPER_ADMIN_DEPT_ID
+   438→              ? [...AFRICAN_REGIONS]
+   439→              : form.regionAccess,
+   440→          permissions: [],
+   441→          lastLoginAt: null,
+   442→          failedLoginCount: 0,
+   443→          createdBy: currentStaff.id,
+   444→          createdAt: now,
+   445→          updatedAt: now,
+   446→          notes: form.notes.trim(),
+   447→        };
+   448→        await adminData.createStaff(newStaff);
+   449→        logAudit(actor, "staff.create", "staff", newStaff.id, {
+   450→          afterValue: `${newStaff.firstName} ${newStaff.lastName} · ${dept?.name ?? "?"} · ${role?.name ?? "?"} · ${newStaff.email}`,
+   451→        });
+   452→        toast.success(`Invited ${newStaff.firstName} ${newStaff.lastName}`);
+   453→        setFormOpen(false);
+   454→      }
+   455→    } catch (e) {
+   456→      console.error("[StaffView.save]", e);
+   457→      toast.error(e instanceof Error ? e.message : "Failed to save staff");
+   458→    } finally {
+   459→      setSaving(false);
+   460→    }
+   461→  }
+   462→
+   463→  async function onSuspendConfirm() {
+   464→    if (!currentStaff || !suspendTarget) return;
+   465→    setSuspending(true);
+   466→    try {
+   467→      await adminData.updateStaff(suspendTarget.id, { status: "suspended", updatedAt: Date.now() });
+   468→      logAudit(
+   469→        {
+   470→          staffId: currentStaff.id,
+   471→          staffName: fullName(currentStaff),
+   472→          department: deptName(currentStaff.departmentId, departments),
+   473→          role: roleName(currentStaff.roleId, roles),
+   474→        },
+   475→        "staff.suspend",
+   476→        "staff",
+   477→        suspendTarget.id,
+   478→        {
+   479→          beforeValue: suspendTarget.status,
+   480→          afterValue: "suspended",
+   481→          reason: "Manual suspension by admin",
+   482→        },
+   483→      );
+   484→      toast.success(`${suspendTarget.firstName} ${suspendTarget.lastName} suspended`);
+   485→      setSuspendTarget(null);
+   486→    } catch (e) {
+   487→      console.error("[StaffView.suspend]", e);
+   488→      toast.error("Failed to suspend staff");
+   489→    } finally {
+   490→      setSuspending(false);
+   491→    }
+   492→  }
+   493→
+   494→  async function onUnlock(s: AdminStaff) {
+   495→    if (!currentStaff) return;
+   496→    try {
+   497→      await adminData.updateStaff(s.id, { status: "active", failedLoginCount: 0, updatedAt: Date.now() });
+   498→      logAudit(
+   499→        {
+   500→          staffId: currentStaff.id,
+   501→          staffName: fullName(currentStaff),
+   502→          department: deptName(currentStaff.departmentId, departments),
+   503→          role: roleName(currentStaff.roleId, roles),
+   504→        },
+   505→        "staff.unlock",
+   506→        "staff",
+   507→        s.id,
+   508→        { beforeValue: s.status, afterValue: "active" },
+   509→      );
+   510→      toast.success(`Unlocked ${s.firstName} ${s.lastName}`);
+   511→    } catch (e) {
+   512→      console.error("[StaffView.unlock]", e);
+   513→      toast.error("Failed to unlock staff");
+   514→    }
+   515→  }
+   516→
+   517→  async function onResetMfa(s: AdminStaff) {
+   518→    if (!currentStaff) return;
+   519→    try {
+   520→      await adminData.updateStaff(s.id, { mfaEnabled: false, updatedAt: Date.now() });
+   521→      logAudit(
+   522→        {
+   523→          staffId: currentStaff.id,
+   524→          staffName: fullName(currentStaff),
+   525→          department: deptName(currentStaff.departmentId, departments),
+   526→          role: roleName(currentStaff.roleId, roles),
+   527→        },
+   528→        "staff.mfa_reset",
+   529→        "staff",
+   530→        s.id,
+   531→        { beforeValue: String(s.mfaEnabled), afterValue: "false" },
+   532→      );
+   533→      toast.success(`MFA reset for ${s.firstName} ${s.lastName}. They must re-enroll at next login.`);
+   534→    } catch (e) {
+   535→      console.error("[StaffView.resetMfa]", e);
+   536→      toast.error("Failed to reset MFA");
+   537→    }
+   538→  }
+   539→
+   540→  function onForceLogout(s: AdminStaff) {
+   541→    // Demo only — no real session store.
+   542→    toast.message(`Force-logout signal sent to ${s.firstName} ${s.lastName}`, {
+   543→      description: "Active sessions will be invalidated on next request (demo only).",
+   544→    });
+   545→  }
+   546→
+   547→  function clearFilters() {
+   548→    setSearch("");
+   549→    setFilterDept("all");
+   550→    setFilterRole("all");
+   551→    setFilterCountry("all");
+   552→    setFilterStatus("all");
+   553→    setFilterMfa("all");
+   554→  }
+   555→
+   556→  const hasActiveFilters =
+   557→    search !== "" ||
+   558→    filterDept !== "all" ||
+   559→    filterRole !== "all" ||
+   560→    filterCountry !== "all" ||
+   561→    filterStatus !== "all" ||
+   562→    filterMfa !== "all";
+   563→
+   564→  /* ------------------------------ render -------------------------------- */
+   565→  return (
+   566→    <>
+   567→      <ViewHeader
+   568→        title="Staff & Roles"
+   569→        description="Manage admin accounts, departments, country access, and MFA."
+   570→        icon={Users}
+   571→        actions={
+   572→          canCreate ? (
+   573→            <Button onClick={openCreate} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+   574→              <UserPlus className="size-4" /> Create Staff
+   575→            </Button>
+   576→          ) : null
+   577→        }
+   578→      />
+   579→      <ViewContainer>
+   580→        {/* Stat row */}
+   581→        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+   582→          <StatCard label="Total Staff" value={stats.total} hint={`${stats.invited} invited`} icon={Users} />
+   583→          <StatCard label="Active" value={stats.active} hint={`${stats.locked} locked · ${stats.suspended} suspended`} icon={Unlock} tone="success" />
+   584→          <StatCard label="Suspended" value={stats.suspended} icon={Ban} tone="danger" />
+   585→          <StatCard label="MFA Coverage" value={`${stats.mfaPct}%`} hint="of all staff" icon={Shield} tone={stats.mfaPct >= 90 ? "success" : "warning"} />
+   586→        </div>
+   587→
+   588→        {/* Filters */}
+   589→        <Card>
+   590→          <CardHeader className="pb-3">
+   591→            <CardTitle className="text-sm flex items-center gap-2">
+   592→              <Filter className="size-4 text-emerald-600" /> Filters
+   593→            </CardTitle>
+   594→          </CardHeader>
+   595→          <CardContent className="space-y-3">
+   596→            <div className="relative">
+   597→              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+   598→              <Input
+   599→                placeholder="Search by name or email…"
+   600→                value={search}
+   601→                onChange={(e) => setSearch(e.target.value)}
+   602→                className="pl-9"
+   603→              />
+   604→            </div>
+   605→            <div className="grid gap-2 grid-cols-2 md:grid-cols-5">
+   606→              <Select value={filterDept} onValueChange={setFilterDept}>
+   607→                <SelectTrigger className="w-full" size="sm">
+   608→                  <SelectValue placeholder="Department" />
+   609→                </SelectTrigger>
+   610→                <SelectContent>
+   611→                  <SelectItem value="all">All departments</SelectItem>
+   612→                  {departments.map((d) => (
+   613→                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+   614→                  ))}
+   615→                </SelectContent>
+   616→              </Select>
+   617→              <Select value={filterRole} onValueChange={setFilterRole}>
+   618→                <SelectTrigger className="w-full" size="sm">
+   619→                  <SelectValue placeholder="Role" />
+   620→                </SelectTrigger>
+   621→                <SelectContent>
+   622→                  <SelectItem value="all">All roles</SelectItem>
+   623→                  {roles.map((r) => (
+   624→                    <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+   625→                  ))}
+   626→                </SelectContent>
+   627→              </Select>
+   628→              <Select value={filterCountry} onValueChange={setFilterCountry}>
+   629→                <SelectTrigger className="w-full" size="sm">
+   630→                  <SelectValue placeholder="Country" />
+   631→                </SelectTrigger>
+   632→                <SelectContent>
+   633→                  <SelectItem value="all">All countries</SelectItem>
+   634→                  {countries.map((c) => (
+   635→                    <SelectItem key={c.id} value={c.countryCode}>{c.countryCode} — {c.countryName}</SelectItem>
+   636→                  ))}
+   637→                </SelectContent>
+   638→              </Select>
+   639→              <Select value={filterStatus} onValueChange={setFilterStatus}>
+   640→                <SelectTrigger className="w-full" size="sm">
+   641→                  <SelectValue placeholder="Status" />
+   642→                </SelectTrigger>
+   643→                <SelectContent>
+   644→                  <SelectItem value="all">All statuses</SelectItem>
+   645→                  <SelectItem value="invited">Invited</SelectItem>
+   646→                  <SelectItem value="active">Active</SelectItem>
+   647→                  <SelectItem value="suspended">Suspended</SelectItem>
+   648→                  <SelectItem value="locked">Locked</SelectItem>
+   649→                  <SelectItem value="removed">Removed</SelectItem>
+   650→                </SelectContent>
+   651→              </Select>
+   652→              <Select value={filterMfa} onValueChange={setFilterMfa}>
+   653→                <SelectTrigger className="w-full" size="sm">
+   654→                  <SelectValue placeholder="MFA" />
+   655→                </SelectTrigger>
+   656→                <SelectContent>
+   657→                  <SelectItem value="all">MFA: any</SelectItem>
+   658→                  <SelectItem value="on">MFA: enabled</SelectItem>
+   659→                  <SelectItem value="off">MFA: disabled</SelectItem>
+   660→                </SelectContent>
+   661→              </Select>
+   662→            </div>
+   663→            {hasActiveFilters && (
+   664→              <div className="flex items-center justify-between">
+   665→                <p className="text-xs text-muted-foreground">
+   666→                  Showing {filteredStaff.length} of {staff.length} staff
+   667→                </p>
+   668→                <Button variant="ghost" size="sm" onClick={clearFilters} className="text-xs h-7">
+   669→                  <X className="size-3 mr-1" /> Clear filters
+   670→                </Button>
+   671→              </div>
+   672→            )}
+   673→          </CardContent>
+   674→        </Card>
+   675→
+   676→        {/* Staff table */}
+   677→        <Card>
+   678→          <CardHeader className="pb-3">
+   679→            <CardTitle className="text-sm flex items-center justify-between">
+   680→              <span className="flex items-center gap-2">
+   681→                <Users className="size-4 text-emerald-600" /> Staff directory
+   682→              </span>
+   683→              <span className="text-xs text-muted-foreground font-normal">{filteredStaff.length} records</span>
+   684→            </CardTitle>
+   685→          </CardHeader>
+   686→          <CardContent className="p-0">
+   687→            {filteredStaff.length === 0 ? (
+   688→              <EmptyState
+   689→                icon={Users}
+   690→                title={hasActiveFilters ? "No staff match these filters" : "No staff yet"}
+   691→                description={hasActiveFilters ? "Try clearing filters or refining search." : "Create your first admin staff to get started."}
+   692→              />
+   693→            ) : (
+   694→              <div className="max-h-[70vh] overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 dark:[&::-webkit-scrollbar-thumb]:bg-slate-700">
+   695→                <Table>
+   696→                  <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.05)]">
+   697→                    <TableRow>
+   698→                      <TableHead className="pl-4">Name</TableHead>
+   699→                      <TableHead>Email</TableHead>
+   700→                      <TableHead>Department</TableHead>
+   701→                      <TableHead>Role</TableHead>
+   702→                      <TableHead>Countries</TableHead>
+   703→                      <TableHead>Scope</TableHead>
+   704→                      <TableHead>Status</TableHead>
+   705→                      <TableHead>MFA</TableHead>
+   706→                      <TableHead className="hidden lg:table-cell">Last login</TableHead>
+   707→                      <TableHead className="hidden lg:table-cell">Created</TableHead>
+   708→                      <TableHead className="text-right pr-4">Actions</TableHead>
+   709→                    </TableRow>
+   710→                  </TableHeader>
+   711→                  <TableBody>
+   712→                    {filteredStaff.map((s) => {
+   713→                      const status = statusBadge("staff", s.status);
+   714→                      return (
+   715→                        <TableRow
+   716→                          key={s.id}
+   717→                          className="cursor-pointer"
+   718→                          onClick={() => setDetailStaff(s)}
+   719→                        >
+   720→                          <TableCell className="pl-4">
+   721→                            <div className="flex items-center gap-2">
+   722→                              <Avatar className="size-8">
+   723→                                <AvatarFallback className="bg-emerald-100 text-emerald-800 text-[11px] font-semibold dark:bg-emerald-900/40 dark:text-emerald-300">
+   724→                                  {initials(s)}
+   725→                                </AvatarFallback>
+   726→                              </Avatar>
+   727→                              <div className="min-w-0">
+   728→                                <div className="font-medium truncate">{fullName(s)}</div>
+   729→                                <div className="text-xs text-muted-foreground font-mono truncate">{s.id}</div>
+   730→                              </div>
+   731→                            </div>
+   732→                          </TableCell>
+   733→                          <TableCell className="text-sm text-muted-foreground">{s.email}</TableCell>
+   734→                          <TableCell>
+   735→                            <span className="text-sm">{deptName(s.departmentId, departments)}</span>
+   736→                          </TableCell>
+   737→                          <TableCell>
+   738→                            <span className="text-sm">{roleName(s.roleId, roles)}</span>
+   739→                          </TableCell>
+   740→                          <TableCell>
+   741→                            {s.countries.length === 0 ? (
+   742→                              <span className="text-xs text-muted-foreground">—</span>
+   743→                            ) : (
+   744→                              <div className="flex flex-wrap gap-1 max-w-[160px]">
+   745→                                {s.countries.slice(0, 3).map((c) => (
+   746→                                  <Badge key={c.countryCode} variant="outline" className="text-[10px] px-1.5 py-0">
+   747→                                    {c.countryCode}
+   748→                                  </Badge>
+   749→                                ))}
+   750→                                {s.countries.length > 3 && (
+   751→                                  <span className="text-[10px] text-muted-foreground">+{s.countries.length - 3}</span>
+   752→                                )}
+   753→                              </div>
+   754→                            )}
+   755→                          </TableCell>
+   756→                          <TableCell>
+   757→                            <Badge
+   758→                              variant="outline"
+   759→                              className={`text-[10px] px-1.5 py-0 font-medium ${scopeBadgeClass(s)}`}
+   760→                              title={getScopeLabel(s)}
+   761→                            >
+   762→                              {scopeCompactLabel(s)}
+   763→                            </Badge>
+   764→                          </TableCell>
+   765→                          <TableCell>
+   766→                            <Badge variant="secondary" className={status.className}>{status.label}</Badge>
+   767→                          </TableCell>
+   768→                          <TableCell>
+   769→                            {s.mfaEnabled ? (
+   770→                              <Badge variant="outline" className="text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700">
+   771→                                <Shield className="size-3" /> On
+   772→                              </Badge>
+   773→                            ) : (
+   774→                              <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700">
+   775→                                <ShieldOff className="size-3" /> Off
+   776→                              </Badge>
+   777→                            )}
+   778→                          </TableCell>
+   779→                          <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
+   780→                            {s.lastLoginAt ? (
+   781→                              <span title={formatDateTime(s.lastLoginAt)}>{timeAgo(s.lastLoginAt)}</span>
+   782→                            ) : (
+   783→                              <span>Never</span>
+   784→                            )}
+   785→                          </TableCell>
+   786→                          <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
+   787→                            {formatDate(s.createdAt)}
+   788→                          </TableCell>
+   789→                          <TableCell className="text-right pr-4">
+   790→                            <DropdownMenu>
+   791→                              <DropdownMenuTrigger asChild>
+   792→                                <Button
+   793→                                  variant="ghost"
+   794→                                  size="icon"
+   795→                                  className="size-8"
+   796→                                  onClick={(e) => e.stopPropagation()}
+   797→                                  aria-label={`Actions for ${fullName(s)}`}
+   798→                                >
+   799→                                  <MoreHorizontal className="size-4" />
+   800→                                </Button>
+   801→                              </DropdownMenuTrigger>
+   802→                              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+   803→                                <DropdownMenuLabel>{fullName(s)}</DropdownMenuLabel>
+   804→                                <DropdownMenuSeparator />
+   805→                                <DropdownMenuItem onClick={() => setDetailStaff(s)}>
+   806→                                  <Eye className="size-4" /> View profile
+   807→                                </DropdownMenuItem>
+   808→                                {canCreate && (
+   809→                                  <DropdownMenuItem onClick={() => openEdit(s)}>
+   810→                                    <Pencil className="size-4" /> Edit
+   811→                                  </DropdownMenuItem>
+   812→                                )}
+   813→                                <DropdownMenuSeparator />
+   814→                                {s.status !== "suspended" && s.status !== "removed" && (
+   815→                                  <DropdownMenuItem
+   816→                                    variant="destructive"
+   817→                                    onClick={() => setSuspendTarget(s)}
+   818→                                    disabled={!canCreate}
+   819→                                  >
+   820→                                    <Ban className="size-4" /> Suspend
+   821→                                  </DropdownMenuItem>
+   822→                                )}
+   823→                                {(s.status === "locked" || s.status === "suspended") && (
+   824→                                  <DropdownMenuItem onClick={() => onUnlock(s)} disabled={!canCreate}>
+   825→                                    <Unlock className="size-4" /> Unlock
+   826→                                  </DropdownMenuItem>
+   827→                                )}
+   828→                                <DropdownMenuItem onClick={() => onResetMfa(s)} disabled={!canCreate}>
+   829→                                  <KeyRound className="size-4" /> Reset MFA
+   830→                                </DropdownMenuItem>
+   831→                                <DropdownMenuItem onClick={() => onForceLogout(s)}>
+   832→                                  <LogOut className="size-4" /> Force logout
+   833→                                </DropdownMenuItem>
+   834→                              </DropdownMenuContent>
+   835→                            </DropdownMenu>
+   836→                          </TableCell>
+   837→                        </TableRow>
+   838→                      );
+   839→                    })}
+   840→                  </TableBody>
+   841→                </Table>
+   842→              </div>
+   843→            )}
+   844→          </CardContent>
+   845→        </Card>
+   846→      </ViewContainer>
+   847→
+   848→      {/* Create / Edit dialog */}
+   849→      <Dialog open={formOpen} onOpenChange={(o) => !saving && setFormOpen(o)}>
+   850→        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+   851→          <DialogHeader>
+   852→            <DialogTitle>{editing ? "Edit Staff" : "Create Staff"}</DialogTitle>
+   853→            <DialogDescription>
+   854→              {editing
+   855→                ? "Update profile, department, role, country access and MFA."
+   856→                : "Provision a new admin account. The new staff will receive an invitation email."}
+   857→            </DialogDescription>
+   858→          </DialogHeader>
+   859→
+   860→          <div className="grid gap-4">
+   861→            {/* Name */}
+   862→            <div className="grid gap-3 sm:grid-cols-2">
+   863→              <div className="space-y-1.5">
+   864→                <Label htmlFor="firstName">First name <span className="text-destructive">*</span></Label>
+   865→                <Input
+   866→                  id="firstName"
+   867→                  value={form.firstName}
+   868→                  onChange={(e) => setForm((f) => ({ ...f, firstName: e.target.value }))}
+   869→                  placeholder="Amara"
+   870→                />
+   871→              </div>
+   872→              <div className="space-y-1.5">
+   873→                <Label htmlFor="lastName">Last name <span className="text-destructive">*</span></Label>
+   874→                <Input
+   875→                  id="lastName"
+   876→                  value={form.lastName}
+   877→                  onChange={(e) => setForm((f) => ({ ...f, lastName: e.target.value }))}
+   878→                  placeholder="Okafor"
+   879→                />
+   880→              </div>
+   881→            </div>
+   882→
+   883→            {/* Contact */}
+   884→            <div className="grid gap-3 sm:grid-cols-2">
+   885→              <div className="space-y-1.5">
+   886→                <Label htmlFor="email">Email <span className="text-destructive">*</span></Label>
+   887→                <Input
+   888→                  id="email"
+   889→                  type="email"
+   890→                  value={form.email}
+   891→                  onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+   892→                  placeholder="amara.okafor@faya.admin"
+   893→                />
+   894→              </div>
+   895→              <div className="space-y-1.5">
+   896→                <Label htmlFor="phone">Phone</Label>
+   897→                <Input
+   898→                  id="phone"
+   899→                  value={form.phone}
+   900→                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+   901→                  placeholder="+234 800 000 0000"
+   902→                />
+   903→              </div>
+   904→            </div>
+   905→
+   906→            {/* Dept + role */}
+   907→            <div className="grid gap-3 sm:grid-cols-2">
+   908→              <div className="space-y-1.5">
+   909→                <Label htmlFor="department">Department <span className="text-destructive">*</span></Label>
+   910→                <Select value={form.departmentId} onValueChange={onDeptChange}>
+   911→                  <SelectTrigger id="department" className="w-full">
+   912→                    <SelectValue placeholder="Select department" />
+   913→                  </SelectTrigger>
+   914→                  <SelectContent>
+   915→                    {departments.map((d) => (
+   916→                      <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+   917→                    ))}
+   918→                  </SelectContent>
+   919→                </Select>
+   920→              </div>
+   921→              <div className="space-y-1.5">
+   922→                <Label htmlFor="role">Role <span className="text-destructive">*</span></Label>
+   923→                <Select value={form.roleId} onValueChange={(v) => setForm((f) => ({ ...f, roleId: v }))} disabled={!form.departmentId}>
+   924→                  <SelectTrigger id="role" className="w-full">
+   925→                    <SelectValue placeholder={form.departmentId ? "Select role" : "Pick a department first"} />
+   926→                  </SelectTrigger>
+   927→                  <SelectContent>
+   928→                    {rolesForDept.map((r) => (
+   929→                      <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+   930→                    ))}
+   931→                  </SelectContent>
+   932→                </Select>
+   933→              </div>
+   934→            </div>
+   935→
+   936→            {/* Country access */}
+   937→            <div className="space-y-1.5">
+   938→              <div className="flex items-center justify-between">
+   939→                <Label>Country access</Label>
+   940→                <span className="text-xs text-muted-foreground">
+   941→                  {form.departmentId === SUPER_ADMIN_DEPT_ID
+   942→                    ? "Super Admin — global access, no country selection required"
+   943→                    : `Select at least 1 country · ${form.countries.length} selected`}
+   944→                </span>
+   945→              </div>
+   946→              <div className="rounded-md border max-h-52 overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 dark:[&::-webkit-scrollbar-thumb]:bg-slate-700">
+   947→                {countries.length === 0 ? (
+   948→                  <div className="p-4 text-sm text-muted-foreground">No countries configured.</div>
+   949→                ) : (
+   950→                  <ul className="divide-y">
+   951→                    {countries.map((c) => {
+   952→                      const selected = form.countries.find((x) => x.countryCode === c.countryCode);
+   953→                      const isSel = !!selected;
+   954→                      return (
+   955→                        <li key={c.id} className="flex items-center gap-3 px-3 py-2">
+   956→                          <Checkbox
+   957→                            checked={isSel}
+   958→                            onCheckedChange={(v) => toggleCountry(c.countryCode, v === true)}
+   959→                            id={`cntry-${c.countryCode}`}
+   960→                          />
+   961→                          <Label htmlFor={`cntry-${c.countryCode}`} className="flex-1 cursor-pointer text-sm font-normal">
+   962→                            <span className="font-medium">{c.countryCode}</span>
+   963→                            <span className="text-muted-foreground"> — {c.countryName}</span>
+   964→                          </Label>
+   965→                          {isSel && (
+   966→                            <Select
+   967→                              value={selected!.accessLevel}
+   968→                              onValueChange={(v) => setCountryAccess(c.countryCode, v as StaffCountryAccess["accessLevel"])}
+   969→                            >
+   970→                              <SelectTrigger size="sm" className="w-28 h-7">
+   971→                                <SelectValue />
+   972→                              </SelectTrigger>
+   973→                              <SelectContent>
+   974→                                {ACCESS_LEVELS.map((lv) => (
+   975→                                  <SelectItem key={lv} value={lv} className="capitalize">{lv}</SelectItem>
+   976→                                ))}
+   977→                              </SelectContent>
+   978→                            </Select>
+   979→                          )}
+   980→                        </li>
+   981→                      );
+   982→                    })}
+   983→                  </ul>
+   984→                )}
+   985→              </div>
+   986→            </div>
+   987→
+   988→            {/* Region access */}
+   989→            <div className="space-y-1.5">
+   990→              <div className="flex items-center justify-between">
+   991→                <Label className="flex items-center gap-1.5">
+   992→                  <MapPinned className="size-3.5 text-emerald-600" /> Region access
+   993→                  <span className="text-xs font-normal text-muted-foreground">(additive)</span>
+   994→                </Label>
+   995→                <span className="text-xs text-muted-foreground">
+   996→                  {form.departmentId === SUPER_ADMIN_DEPT_ID
+   997→                    ? "All regions included (Super Admin)"
+   998→                    : `${form.regionAccess.length} of ${AFRICAN_REGIONS.length} selected`}
+   999→                </span>
+  1000→              </div>
+  1001→              <p className="text-xs text-muted-foreground">
+  1002→                Region access is additive — staff see all countries in selected regions PLUS their
+  1003→                assigned countries. Super Admins have global access automatically.
+  1004→              </p>
+  1005→              <div className="grid grid-cols-2 gap-2 rounded-md border p-3">
+  1006→                {AFRICAN_REGIONS.map((region) => {
+  1007→                  const regionId = `region-${region.replace(/\s+/g, "-").toLowerCase()}`;
+  1008→                  const isSuper = form.departmentId === SUPER_ADMIN_DEPT_ID;
+  1009→                  const checked = isSuper || form.regionAccess.includes(region);
+  1010→                  return (
+  1011→                    <label
+  1012→                      key={region}
+  1013→                      htmlFor={regionId}
+  1014→                      className={`flex items-center gap-2 text-sm ${
+  1015→                        isSuper ? "cursor-not-allowed opacity-70" : "cursor-pointer"
+  1016→                      }`}
+  1017→                    >
+  1018→                      <Checkbox
+  1019→                        id={regionId}
+  1020→                        checked={checked}
+  1021→                        disabled={isSuper}
+  1022→                        onCheckedChange={(v) => toggleRegion(region, v === true)}
+  1023→                      />
+  1024→                      <span>{region}</span>
+  1025→                    </label>
+  1026→                  );
+  1027→                })}
+  1028→              </div>
+  1029→            </div>
+  1030→
+  1031→            {/* MFA + notes */}
+  1032→            <div className="grid gap-3 sm:grid-cols-2">
+  1033→              <div className="flex items-center justify-between rounded-md border p-3">
+  1034→                <div className="space-y-0.5">
+  1035→                  <Label htmlFor="mfa" className="text-sm">Require MFA</Label>
+  1036→                  <p className="text-xs text-muted-foreground">Enforce 2-factor on next sign-in</p>
+  1037→                </div>
+  1038→                <Switch
+  1039→                  id="mfa"
+  1040→                  checked={form.mfaEnabled}
+  1041→                  onCheckedChange={(v) => setForm((f) => ({ ...f, mfaEnabled: v }))}
+  1042→                />
+  1043→              </div>
+  1044→              <div className="space-y-1.5">
+  1045→                <Label htmlFor="notes">Notes</Label>
+  1046→                <Textarea
+  1047→                  id="notes"
+  1048→                  rows={2}
+  1049→                  value={form.notes}
+  1050→                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+  1051→                  placeholder="Optional internal notes (only visible to admins)"
+  1052→                />
+  1053→              </div>
+  1054→            </div>
+  1055→          </div>
+  1056→
+  1057→          <DialogFooter>
+  1058→            <Button variant="outline" onClick={() => setFormOpen(false)} disabled={saving}>
+  1059→              Cancel
+  1060→            </Button>
+  1061→            <Button
+  1062→              onClick={onSave}
+  1063→              disabled={saving}
+  1064→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1065→            >
+  1066→              {saving ? "Saving…" : editing ? "Save changes" : "Create & invite"}
+  1067→            </Button>
+  1068→          </DialogFooter>
+  1069→        </DialogContent>
+  1070→      </Dialog>
+  1071→
+  1072→      {/* Suspend confirmation */}
+  1073→      <AlertDialog open={!!suspendTarget} onOpenChange={(o) => !suspending && !o && setSuspendTarget(null)}>
+  1074→        <AlertDialogContent>
+  1075→          <AlertDialogHeader>
+  1076→            <AlertDialogTitle>Suspend {suspendTarget ? fullName(suspendTarget) : "staff"}?</AlertDialogTitle>
+  1077→            <AlertDialogDescription>
+  1078→              This staff member will immediately lose portal access. They can be reactivated later via the
+  1079→              "Unlock" action. The action is recorded in the audit log.
+  1080→            </AlertDialogDescription>
+  1081→          </AlertDialogHeader>
+  1082→          <AlertDialogFooter>
+  1083→            <AlertDialogCancel disabled={suspending}>Cancel</AlertDialogCancel>
+  1084→            <AlertDialogAction
+  1085→              onClick={onSuspendConfirm}
+  1086→              disabled={suspending}
+  1087→              className="bg-red-600 hover:bg-red-700 text-white"
+  1088→            >
+  1089→              {suspending ? "Suspending…" : "Suspend"}
+  1090→            </AlertDialogAction>
+  1091→          </AlertDialogFooter>
+  1092→        </AlertDialogContent>
+  1093→      </AlertDialog>
+  1094→
+  1095→      {/* Detail Sheet */}
+  1096→      <Sheet open={!!detailStaff} onOpenChange={(o) => !o && setDetailStaff(null)}>
+  1097→        <SheetContent side="right" className="sm:max-w-md w-full overflow-y-auto">
+  1098→          {detailStaff && (
+  1099→            <StaffDetail
+  1100→              staff={detailStaff}
+  1101→              departments={departments}
+  1102→              roles={roles}
+  1103→              countries={countries}
+  1104→              onEdit={canCreate ? () => {
+  1105→                const s = detailStaff;
+  1106→                setDetailStaff(null);
+  1107→                openEdit(s);
+  1108→              } : undefined}
+  1109→              onAuditHistory={() => {
+  1110→                toast.message("Audit history", {
+  1111→                  description: `Open the Audit Logs view and filter by staff ID ${detailStaff.id}.`,
+  1112→                });
+  1113→              }}
+  1114→            />
+  1115→          )}
+  1116→        </SheetContent>
+  1117→      </Sheet>
+  1118→    </>
+  1119→  );
+  1120→}
+  1121→
+  1122→/* --------------------------- Detail Sheet panel -------------------------- */
+  1123→
+  1124→interface StaffDetailProps {
+  1125→  staff: AdminStaff;
+  1126→  departments: Department[];
+  1127→  roles: Role[];
+  1128→  countries: CountryConfig[];
+  1129→  onEdit?: () => void;
+  1130→  onAuditHistory: () => void;
+  1131→}
+  1132→
+  1133→function StaffDetail({
+  1134→  staff: s,
+  1135→  departments,
+  1136→  roles,
+  1137→  countries,
+  1138→  onEdit,
+  1139→  onAuditHistory,
+  1140→}: StaffDetailProps) {
+  1141→  const status = statusBadge("staff", s.status);
+  1142→  const summary = getAccessSummary(s, countries);
+  1143→  return (
+  1144→    <>
+  1145→      <SheetHeader>
+  1146→        <div className="flex items-start gap-3 pr-6">
+  1147→          <Avatar className="size-12">
+  1148→            <AvatarFallback className="bg-emerald-100 text-emerald-800 text-sm font-semibold dark:bg-emerald-900/40 dark:text-emerald-300">
+  1149→              {initials(s)}
+  1150→            </AvatarFallback>
+  1151→          </Avatar>
+  1152→          <div className="min-w-0">
+  1153→            <SheetTitle className="truncate">{fullName(s)}</SheetTitle>
+  1154→            <SheetDescription className="truncate">{s.email}</SheetDescription>
+  1155→            {/* Prominent access scope */}
+  1156→            <div className="mt-2 flex items-center gap-2">
+  1157→              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+  1158→                Scope
+  1159→              </span>
+  1160→              <Badge
+  1161→                variant="outline"
+  1162→                className={`text-xs font-medium ${scopeBadgeClass(s)}`}
+  1163→              >
+  1164→                <Globe2 className="size-3 mr-1" />
+  1165→                {getScopeLabel(s)}
+  1166→              </Badge>
+  1167→            </div>
+  1168→            <div className="flex flex-wrap gap-1.5 mt-1.5">
+  1169→              <Badge variant="secondary" className={status.className}>{status.label}</Badge>
+  1170→              {s.mfaEnabled ? (
+  1171→                <Badge variant="outline" className="text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700">
+  1172→                  <Shield className="size-3" /> MFA on
+  1173→                </Badge>
+  1174→              ) : (
+  1175→                <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700">
+  1176→                  <ShieldOff className="size-3" /> MFA off
+  1177→                </Badge>
+  1178→              )}
+  1179→            </div>
+  1180→          </div>
+  1181→        </div>
+  1182→      </SheetHeader>
+  1183→
+  1184→      <div className="px-4 pb-4 space-y-4">
+  1185→        {/* Identity */}
+  1186→        <DetailSection title="Identity">
+  1187→          <DetailRow icon={Users} label="Staff ID" value={<span className="font-mono text-xs">{s.id}</span>} />
+  1188→          <DetailRow icon={Mail} label="Email" value={s.email} />
+  1189→          <DetailRow icon={Phone} label="Phone" value={s.phone || "—"} />
+  1190→          <DetailRow icon={Building2} label="Department" value={deptName(s.departmentId, departments)} />
+  1191→          <DetailRow icon={KeyRound} label="Role" value={roleName(s.roleId, roles)} />
+  1192→          <DetailRow
+  1193→            icon={Calendar}
+  1194→            label="Created"
+  1195→            value={formatDateTime(s.createdAt)}
+  1196→          />
+  1197→          <DetailRow
+  1198→            icon={Calendar}
+  1199→            label="Last login"
+  1200→            value={s.lastLoginAt ? `${formatDateTime(s.lastLoginAt)} (${timeAgo(s.lastLoginAt)})` : "Never"}
+  1201→          />
+  1202→          <DetailRow
+  1203→            icon={Lock}
+  1204→            label="Failed logins"
+  1205→            value={String(s.failedLoginCount)}
+  1206→          />
+  1207→          <DetailRow
+  1208→            icon={Users}
+  1209→            label="Created by"
+  1210→            value={<span className="font-mono text-xs">{s.createdBy}</span>}
+  1211→          />
+  1212→        </DetailSection>
+  1213→
+  1214→        {/* Country access */}
+  1215→        <DetailSection title={`Country access (${s.countries.length})`}>
+  1216→          {s.countries.length === 0 ? (
+  1217→            <p className="text-xs text-muted-foreground">
+  1218→              {isSuperAdmin(s)
+  1219→                ? "Global access (Super Admin)."
+  1220→                : s.regionAccess.length > 0
+  1221→                  ? "No explicit countries — access via region selection."
+  1222→                  : "No country or region access."}
+  1223→            </p>
+  1224→          ) : (
+  1225→            <ul className="space-y-1.5 max-h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 dark:[&::-webkit-scrollbar-thumb]:bg-slate-700">
+  1226→              {s.countries.map((c) => (
+  1227→                <li key={c.countryCode} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5">
+  1228→                  <div className="min-w-0">
+  1229→                    <div className="text-sm font-medium">{c.countryCode}</div>
+  1230→                    <div className="text-xs text-muted-foreground truncate">{countryName(c.countryCode, countries)}</div>
+  1231→                  </div>
+  1232→                  <Badge variant="secondary" className={`capitalize text-[10px] ${ACCESS_LEVEL_BADGE[c.accessLevel]}`}>
+  1233→                    {c.accessLevel}
+  1234→                  </Badge>
+  1235→                </li>
+  1236→              ))}
+  1237→            </ul>
+  1238→          )}
+  1239→        </DetailSection>
+  1240→
+  1241→        {/* Region access */}
+  1242→        <DetailSection title={`Region access (${s.regionAccess.length})`}>
+  1243→          {s.regionAccess.length === 0 ? (
+  1244→            <p className="text-xs text-muted-foreground">
+  1245→              {isSuperAdmin(s)
+  1246→                ? "Global access — all regions visible (Super Admin)."
+  1247→                : "None — country-scoped."}
+  1248→            </p>
+  1249→          ) : (
+  1250→            <>
+  1251→              <div className="flex flex-wrap gap-1">
+  1252→                {s.regionAccess.map((r) => (
+  1253→                  <Badge
+  1254→                    key={r}
+  1255→                    variant="outline"
+  1256→                    className="text-[10px] bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-900/30 dark:text-teal-300 dark:border-teal-800"
+  1257→                  >
+  1258→                    <MapPinned className="size-3 mr-1" /> {r}
+  1259→                  </Badge>
+  1260→                ))}
+  1261→              </div>
+  1262→              <p className="text-xs text-muted-foreground">
+  1263→                Sees {summary.countryCount}{" "}
+  1264→                {summary.countryCount === 1 ? "country" : "countries"} in total
+  1265→                (assigned countries + all countries in selected regions).
+  1266→              </p>
+  1267→            </>
+  1268→          )}
+  1269→        </DetailSection>
+  1270→
+  1271→        {/* Permissions */}
+  1272→        <DetailSection title={`Permissions (${s.permissions.length})`}>
+  1273→          {s.permissions.length === 0 ? (
+  1274→            <p className="text-xs text-muted-foreground">No explicit permission keys assigned.</p>
+  1275→          ) : (
+  1276→            <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto pr-1">
+  1277→              {s.permissions.map((p) => (
+  1278→                <Badge key={p} variant="outline" className="text-[10px] font-mono">
+  1279→                  {p}
+  1280→                </Badge>
+  1281→              ))}
+  1282→            </div>
+  1283→          )}
+  1284→        </DetailSection>
+  1285→
+  1286→        {/* Notes */}
+  1287→        {s.notes && (
+  1288→          <DetailSection title="Notes">
+  1289→            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{s.notes}</p>
+  1290→          </DetailSection>
+  1291→        )}
+  1292→
+  1293→        <Separator />
+  1294→
+  1295→        <div className="flex flex-col gap-2">
+  1296→          {onEdit && (
+  1297→            <Button onClick={onEdit} variant="outline" className="w-full">
+  1298→              <Pencil className="size-4" /> Edit profile
+  1299→            </Button>
+  1300→          )}
+  1301→          <Button onClick={onAuditHistory} variant="ghost" className="w-full text-emerald-700">
+  1302→            <ScrollText className="size-4" /> View audit history
+  1303→          </Button>
+  1304→        </div>
+  1305→      </div>
+  1306→    </>
+  1307→  );
+  1308→}
+  1309→
+  1310→function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  1311→  return (
+  1312→    <section className="space-y-2">
+  1313→      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+  1314→        <Globe2 className="size-3 text-emerald-600" /> {title}
+  1315→      </h3>
+  1316→      <div className="space-y-1.5">{children}</div>
+  1317→    </section>
+  1318→  );
+  1319→}
+  1320→
+  1321→function DetailRow({
+  1322→  icon: Icon,
+  1323→  label,
+  1324→  value,
+  1325→}: {
+  1326→  icon: React.ComponentType<{ className?: string }>;
+  1327→  label: string;
+  1328→  value: React.ReactNode;
+  1329→}) {
+  1330→  return (
+  1331→    <div className="flex items-start gap-2.5 text-sm">
+  1332→      <Icon className="size-4 text-muted-foreground shrink-0 mt-0.5" />
+  1333→      <div className="min-w-0 flex-1">
+  1334→        <div className="text-xs text-muted-foreground">{label}</div>
+  1335→        <div className="text-foreground break-words">{value}</div>
+  1336→      </div>
+  1337→    </div>
+  1338→  );
+  1339→}
+  1340→
+  1341→/* Re-exported so the unused-import linter doesn't strip StaffStatus — kept for
+  1342→   callers that may want to type narrow statuses. */
+  1343→export type { StaffStatus };
+  1344→

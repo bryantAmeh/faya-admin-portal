@@ -1,0 +1,964 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Users (Consumers) View (spec §2)
+     5→ *
+     6→ * Lists every consumer (Faya Pay app user) the current staff can see, with:
+     7→ *   - Stat cards (Total / Active / Pending KYC / Restricted / Suspended)
+     8→ *   - Search + multi-filters (country, KYC status, account status, KYC tier, risk level)
+     9→ *   - Sortable table with all key fields
+    10→ *   - Row click → detail Sheet (personal, contact, KYC, platforms, wallet, tx stats, notes)
+    11→ *   - Row actions dropdown:
+    12→ *       View profile · Restrict · Suspend (confirm) · Reactivate · Add note
+    13→ *
+    14→ * Scope: getVisibleConsumers(staff, countries, consumers) + an optional Region filter.
+    15→ * All mutations flow through adminData.updateConsumer + logAudit("consumer.*").
+    16→ *
+    17→ * Accent: emerald (no indigo/blue primary).
+    18→ */
+    19→import { useMemo, useState } from "react";
+    20→import {
+    21→  Users,
+    22→  Search,
+    23→  Filter,
+    24→  MoreHorizontal,
+    25→  Eye,
+    26→  Ban,
+    27→  PauseCircle,
+    28→  PlayCircle,
+    29→  StickyNote,
+    30→  ShieldCheck,
+    31→  Layers,
+    32→  Wallet,
+    33→  Mail,
+    34→  Phone,
+    35→  Globe2,
+    36→  Calendar,
+    37→  Hash,
+    38→  Activity,
+    39→  TrendingUp,
+    40→  Info,
+    41→} from "lucide-react";
+    42→import { toast } from "sonner";
+    43→
+    44→import { ViewHeader, ViewContainer, StatCard, EmptyState } from "@/components/portal/view-helpers";
+    45→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    46→import { Badge } from "@/components/ui/badge";
+    47→import { Button } from "@/components/ui/button";
+    48→import { Input } from "@/components/ui/input";
+    49→import {
+    50→  TableBody,
+    51→  TableCell,
+    52→  TableHead,
+    53→  TableHeader,
+    54→  TableRow,
+    55→} from "@/components/ui/table";
+    56→import {
+    57→  Select,
+    58→  SelectContent,
+    59→  SelectItem,
+    60→  SelectTrigger,
+    61→  SelectValue,
+    62→} from "@/components/ui/select";
+    63→import {
+    64→  Sheet,
+    65→  SheetContent,
+    66→  SheetDescription,
+    67→  SheetFooter,
+    68→  SheetHeader,
+    69→  SheetTitle,
+    70→} from "@/components/ui/sheet";
+    71→import {
+    72→  AlertDialog,
+    73→  AlertDialogAction,
+    74→  AlertDialogCancel,
+    75→  AlertDialogContent,
+    76→  AlertDialogDescription,
+    77→  AlertDialogFooter,
+    78→  AlertDialogHeader,
+    79→  AlertDialogTitle,
+    80→} from "@/components/ui/alert-dialog";
+    81→import {
+    82→  DropdownMenu,
+    83→  DropdownMenuContent,
+    84→  DropdownMenuItem,
+    85→  DropdownMenuLabel,
+    86→  DropdownMenuSeparator,
+    87→  DropdownMenuTrigger,
+    88→} from "@/components/ui/dropdown-menu";
+    89→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+    90→
+    91→import { useAuth } from "@/hooks/use-auth";
+    92→import { adminData, logAudit } from "@/lib/admin-data";
+    93→import {
+    94→  getVisibleConsumers,
+    95→  getVisibleCountries,
+    96→  getVisibleRegions,
+    97→  getScopeLabel,
+    98→} from "@/lib/access-scope";
+    99→import {
+   100→  formatCurrency,
+   101→  formatNumber,
+   102→  formatCompact,
+   103→  formatDateTime,
+   104→  timeAgo,
+   105→  statusBadge,
+   106→} from "@/lib/formatters";
+   107→import { PLATFORM_LABELS } from "@/lib/types";
+   108→import type {
+   109→  Consumer,
+   110→  CountryConfig,
+   111→  ConsumerStatus,
+   112→  KycStatus,
+   113→  KycTier,
+   114→  RiskLevel,
+   115→  PlatformKey,
+   116→} from "@/lib/types";
+   117→import { cn } from "@/lib/utils";
+   118→
+   119→interface UsersViewProps {
+   120→  consumers: Consumer[];
+   121→  countries: CountryConfig[];
+   122→}
+   123→
+   124→/* ----------------------------- Style tables ----------------------------- */
+   125→
+   126→const CONSUMER_STATUS_STYLES: Record<ConsumerStatus, { label: string; className: string }> = {
+   127→  pending_kyc: { label: "Pending KYC", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   128→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   129→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   130→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   131→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   132→};
+   133→
+   134→const KYC_TIER_STYLES: Record<KycTier, { label: string; className: string }> = {
+   135→  tier_1: { label: "Tier 1", className: "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800" },
+   136→  tier_2: { label: "Tier 2", className: "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800" },
+   137→  tier_3: { label: "Tier 3", className: "text-orange-700 border-orange-300 bg-orange-50 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800" },
+   138→};
+   139→
+   140→const KYC_STATUS_OPTIONS = [
+   141→  { value: "all", label: "All KYC statuses" },
+   142→  { value: "pending", label: "Pending" },
+   143→  { value: "in_review", label: "In Review" },
+   144→  { value: "approved", label: "Approved" },
+   145→  { value: "rejected", label: "Rejected" },
+   146→  { value: "escalated", label: "Escalated" },
+   147→] as const;
+   148→
+   149→const ACCOUNT_STATUS_OPTIONS = [
+   150→  { value: "all", label: "All account statuses" },
+   151→  { value: "pending_kyc", label: "Pending KYC" },
+   152→  { value: "active", label: "Active" },
+   153→  { value: "restricted", label: "Restricted" },
+   154→  { value: "suspended", label: "Suspended" },
+   155→  { value: "closed", label: "Closed" },
+   156→] as const;
+   157→
+   158→const KYC_TIER_OPTIONS = [
+   159→  { value: "all", label: "All KYC tiers" },
+   160→  { value: "tier_1", label: "Tier 1" },
+   161→  { value: "tier_2", label: "Tier 2" },
+   162→  { value: "tier_3", label: "Tier 3" },
+   163→] as const;
+   164→
+   165→const RISK_LEVEL_OPTIONS = [
+   166→  { value: "all", label: "All risk levels" },
+   167→  { value: "low", label: "Low" },
+   168→  { value: "medium", label: "Medium" },
+   169→  { value: "high", label: "High" },
+   170→  { value: "critical", label: "Critical" },
+   171→] as const;
+   172→
+   173→/* --------- Map numeric riskScore (0-100) to a RiskLevel band --------- */
+   174→function riskScoreToLevel(score: number): RiskLevel {
+   175→  if (score >= 80) return "critical";
+   176→  if (score >= 60) return "high";
+   177→  if (score >= 30) return "medium";
+   178→  return "low";
+   179→}
+   180→
+   181→function riskScoreClass(score: number): string {
+   182→  if (score >= 80) return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
+   183→  if (score >= 60) return "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300";
+   184→  if (score >= 30) return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
+   185→  return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300";
+   186→}
+   187→
+   188→/* ============================ UsersView ============================ */
+   189→
+   190→export function UsersView({ consumers, countries }: UsersViewProps) {
+   191→  const { staff: currentStaff } = useAuth();
+   192→
+   193→  /* -------- Scope: visible consumers + visible regions/countries -------- */
+   194→  const visibleRegions = useMemo(
+   195→    () => getVisibleRegions(currentStaff, countries),
+   196→    [currentStaff, countries],
+   197→  );
+   198→  const scopedCountries = useMemo(
+   199→    () => getVisibleCountries(currentStaff, countries),
+   200→    [currentStaff, countries],
+   201→  );
+   202→
+   203→  const [selectedRegion, setSelectedRegion] = useState<string>("all");
+   204→
+   205→  // Region-aware country list (feeds the Country filter dropdown).
+   206→  const regionCountries = useMemo(() => {
+   207→    if (selectedRegion === "all") return scopedCountries;
+   208→    return scopedCountries.filter((c) => c.region === selectedRegion);
+   209→  }, [scopedCountries, selectedRegion]);
+   210→
+   211→  const regionCountryCodes = useMemo(
+   212→    () => new Set(regionCountries.map((c) => c.countryCode)),
+   213→    [regionCountries],
+   214→  );
+   215→
+   216→  // 1) Apply staff scope, then 2) narrow to selected region.
+   217→  const visibleConsumers = useMemo(() => {
+   218→    const scoped = getVisibleConsumers(currentStaff, countries, consumers);
+   219→    if (selectedRegion === "all") return scoped;
+   220→    return scoped.filter((c) => regionCountryCodes.has(c.countryCode));
+   221→  }, [currentStaff, countries, consumers, selectedRegion, regionCountryCodes]);
+   222→
+   223→  /* ------------------------------ Filters ------------------------------ */
+   224→  const [search, setSearch] = useState("");
+   225→  const [countryFilter, setCountryFilter] = useState<string>("all");
+   226→  const [kycStatusFilter, setKycStatusFilter] = useState<string>("all");
+   227→  const [accountStatusFilter, setAccountStatusFilter] = useState<string>("all");
+   228→  const [tierFilter, setTierFilter] = useState<string>("all");
+   229→  const [riskFilter, setRiskFilter] = useState<string>("all");
+   230→
+   231→  const filteredConsumers = useMemo(() => {
+   232→    let list = visibleConsumers;
+   233→    if (countryFilter !== "all") list = list.filter((c) => c.countryCode === countryFilter);
+   234→    if (kycStatusFilter !== "all") list = list.filter((c) => c.status === kycStatusFilter);
+   235→    if (accountStatusFilter !== "all") list = list.filter((c) => c.status === accountStatusFilter);
+   236→    if (tierFilter !== "all") list = list.filter((c) => c.kycTier === tierFilter);
+   237→    if (riskFilter !== "all") {
+   238→      list = list.filter((c) => riskScoreToLevel(c.riskScore) === riskFilter);
+   239→    }
+   240→    if (search.trim()) {
+   241→      const q = search.trim().toLowerCase();
+   242→      list = list.filter((c) =>
+   243→        `${c.firstName} ${c.lastName}`.toLowerCase().includes(q) ||
+   244→        c.email.toLowerCase().includes(q) ||
+   245→        c.phone.toLowerCase().includes(q) ||
+   246→        c.consumerCode.toLowerCase().includes(q),
+   247→      );
+   248→    }
+   249→    return list;
+   250→  }, [visibleConsumers, countryFilter, kycStatusFilter, accountStatusFilter, tierFilter, riskFilter, search]);
+   251→
+   252→  /* ------------------------------ Stat cards --------------------------- */
+   253→  const stats = useMemo(() => {
+   254→    const acc = {
+   255→      total: visibleConsumers.length,
+   256→      active: 0,
+   257→      pendingKyc: 0,
+   258→      restricted: 0,
+   259→      suspended: 0,
+   260→    };
+   261→    for (const c of visibleConsumers) {
+   262→      if (c.status === "active") acc.active += 1;
+   263→      else if (c.status === "pending_kyc") acc.pendingKyc += 1;
+   264→      else if (c.status === "restricted") acc.restricted += 1;
+   265→      else if (c.status === "suspended") acc.suspended += 1;
+   266→    }
+   267→    return acc;
+   268→  }, [visibleConsumers]);
+   269→
+   270→  /* ------------------------ Detail sheet + suspend --------------------- */
+   271→  const [selectedConsumer, setSelectedConsumer] = useState<Consumer | null>(null);
+   272→  const [suspendTarget, setSuspendTarget] = useState<Consumer | null>(null);
+   273→
+   274→  /* ----------------------------- Audit actor --------------------------- */
+   275→  const actor = useMemo(() => {
+   276→    if (!currentStaff) return null;
+   277→    return {
+   278→      staffId: currentStaff.id,
+   279→      staffName: `${currentStaff.firstName} ${currentStaff.lastName}`,
+   280→      department: currentStaff.departmentId,
+   281→      role: currentStaff.roleId,
+   282→    };
+   283→  }, [currentStaff]);
+   284→
+   285→  /* ------------------------------ Mutations ---------------------------- */
+   286→  function restrictConsumer(c: Consumer) {
+   287→    if (!actor) return;
+   288→    adminData.updateConsumer(c.id, { status: "restricted", updatedAt: Date.now() });
+   289→    logAudit(actor, "consumer.restrict", "consumer", c.id, {
+   290→      countryCode: c.countryCode,
+   291→      beforeValue: c.status,
+   292→      afterValue: "restricted",
+   293→    });
+   294→    toast.warning(`Restricted ${c.firstName} ${c.lastName}`, {
+   295→      description: `${c.consumerCode} · wallet access limited. Mirrored to Faya Pay app in real-time.`,
+   296→    });
+   297→    if (selectedConsumer?.id === c.id) {
+   298→      setSelectedConsumer({ ...c, status: "restricted", updatedAt: Date.now() });
+   299→    }
+   300→  }
+   301→
+   302→  function suspendConsumer(c: Consumer) {
+   303→    if (!actor) return;
+   304→    adminData.updateConsumer(c.id, { status: "suspended", updatedAt: Date.now() });
+   305→    logAudit(actor, "consumer.suspend", "consumer", c.id, {
+   306→      countryCode: c.countryCode,
+   307→      beforeValue: c.status,
+   308→      afterValue: "suspended",
+   309→      reason: "Manual suspension by admin",
+   310→    });
+   311→    toast.error(`Suspended ${c.firstName} ${c.lastName}`, {
+   312→      description: `${c.consumerCode} · login blocked. Mirrored to Faya Pay app in real-time.`,
+   313→    });
+   314→    if (selectedConsumer?.id === c.id) {
+   315→      setSelectedConsumer({ ...c, status: "suspended", updatedAt: Date.now() });
+   316→    }
+   317→  }
+   318→
+   319→  function reactivateConsumer(c: Consumer) {
+   320→    if (!actor) return;
+   321→    adminData.updateConsumer(c.id, { status: "active", updatedAt: Date.now() });
+   322→    logAudit(actor, "consumer.reactivate", "consumer", c.id, {
+   323→      countryCode: c.countryCode,
+   324→      beforeValue: c.status,
+   325→      afterValue: "active",
+   326→    });
+   327→    toast.success(`Reactivated ${c.firstName} ${c.lastName}`, {
+   328→      description: `${c.consumerCode} · full access restored. Mirrored to Faya Pay app in real-time.`,
+   329→    });
+   330→    if (selectedConsumer?.id === c.id) {
+   331→      setSelectedConsumer({ ...c, status: "active", updatedAt: Date.now() });
+   332→    }
+   333→  }
+   334→
+   335→  function addNote(c: Consumer) {
+   336→    if (!actor) return;
+   337→    logAudit(actor, "consumer.note", "consumer", c.id, {
+   338→      countryCode: c.countryCode,
+   339→    });
+   340→    toast.info(`Note composer opened for ${c.firstName} ${c.lastName}`, {
+   341→      description: `${c.consumerCode} · quick-note shortcut logged in audit trail.`,
+   342→    });
+   343→  }
+   344→
+   345→  /* --------------------------- Lookups/helpers ------------------------- */
+   346→  function countryName(code: string): string {
+   347→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   348→  }
+   349→
+   350→  function consumerStatusBadge(status: ConsumerStatus) {
+   351→    const s = CONSUMER_STATUS_STYLES[status] ?? { label: status, className: "bg-slate-100 text-slate-700" };
+   352→    return (
+   353→      <Badge variant="secondary" className={cn("text-[10px]", s.className)}>
+   354→        {s.label}
+   355→      </Badge>
+   356→    );
+   357→  }
+   358→
+   359→  function kycStatusBadge(status: KycStatus) {
+   360→    const b = statusBadge("kyc", status);
+   361→    return (
+   362→      <Badge variant="secondary" className={cn("text-[10px]", b.className)}>
+   363→        {b.label}
+   364→      </Badge>
+   365→    );
+   366→  }
+   367→
+   368→  function tierChip(tier: KycTier) {
+   369→    const t = KYC_TIER_STYLES[tier];
+   370→    return (
+   371→      <Badge variant="outline" className={cn("text-[10px] font-medium px-1.5 py-0", t.className)}>
+   372→        <Layers className="size-2.5 mr-0.5" />
+   373→        {t.label}
+   374→      </Badge>
+   375→    );
+   376→  }
+   377→
+   378→  function riskScoreChip(score: number) {
+   379→    return (
+   380→      <Badge
+   381→        variant="secondary"
+   382→        className={cn("text-[10px] font-semibold tabular-nums px-1.5", riskScoreClass(score))}
+   383→      >
+   384→        {score}
+   385→      </Badge>
+   386→    );
+   387→  }
+   388→
+   389→  function platformChips(platforms: PlatformKey[]) {
+   390→    if (!platforms || platforms.length === 0) {
+   391→      return <span className="text-xs text-muted-foreground">—</span>;
+   392→    }
+   393→    return (
+   394→      <div className="flex flex-wrap gap-1">
+   395→        {platforms.map((p) => (
+   396→          <Badge key={p} variant="outline" className="text-[10px] font-normal px-1.5 py-0">
+   397→            {PLATFORM_LABELS[p].label}
+   398→          </Badge>
+   399→        ))}
+   400→      </div>
+   401→    );
+   402→  }
+   403→
+   404→  /* ------------------------------ Render ------------------------------- */
+   405→  return (
+   406→    <>
+   407→      <ViewHeader
+   408→        title="Users (Consumers)"
+   409→        description={`Faya Pay consumers — KYC, wallet, cards, transactions. Scope: ${getScopeLabel(currentStaff)}`}
+   410→        icon={Users}
+   411→        actions={
+   412→          <>
+   413→            {visibleRegions.length > 1 && (
+   414→              <Select value={selectedRegion} onValueChange={setSelectedRegion}>
+   415→                <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   416→                  <Filter className="size-3 mr-1 text-emerald-600" />
+   417→                  <SelectValue placeholder="Region" />
+   418→                </SelectTrigger>
+   419→                <SelectContent>
+   420→                  <SelectItem value="all">All regions</SelectItem>
+   421→                  {visibleRegions.map((r) => (
+   422→                    <SelectItem key={r} value={r}>
+   423→                      {r}
+   424→                    </SelectItem>
+   425→                  ))}
+   426→                </SelectContent>
+   427→              </Select>
+   428→            )}
+   429→          </>
+   430→        }
+   431→      />
+   432→      <ViewContainer>
+   433→        {/* Live-sync banner */}
+   434→        <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+   435→          <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+   436→          <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+   437→            <span className="font-medium">Live entity sync:</span> status changes (restrict,
+   438→            suspend, reactivate) flow to the Faya Pay consumer app in real-time via the shared
+   439→            Firestore database. The consumer is notified and their wallet access updates immediately.
+   440→          </div>
+   441→        </div>
+   442→
+   443→        {/* Stat cards */}
+   444→        <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+   445→          <StatCard label="Total Consumers" value={formatNumber(stats.total)} hint="across visible countries" icon={Users} tone="info" />
+   446→          <StatCard label="Active" value={formatNumber(stats.active)} hint="full access" icon={ShieldCheck} tone="success" />
+   447→          <StatCard label="Pending KYC" value={formatNumber(stats.pendingKyc)} hint="awaiting review" icon={ShieldCheck} tone="warning" />
+   448→          <StatCard label="Restricted" value={formatNumber(stats.restricted)} hint="limited access" icon={Ban} tone="warning" />
+   449→          <StatCard label="Suspended" value={formatNumber(stats.suspended)} hint="login blocked" icon={PauseCircle} tone="danger" />
+   450→        </div>
+   451→
+   452→        {/* Consumer table card */}
+   453→        <Card>
+   454→          <CardHeader className="pb-3">
+   455→            <CardTitle className="text-sm flex items-center gap-2">
+   456→              <Users className="size-4 text-emerald-600" />
+   457→              Consumers
+   458→              <Badge variant="secondary" className="text-[10px]">
+   459→                {formatNumber(filteredConsumers.length)}
+   460→              </Badge>
+   461→            </CardTitle>
+   462→            <div className="flex flex-wrap items-center gap-2 pt-1">
+   463→              <div className="relative">
+   464→                <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   465→                <Input
+   466→                  placeholder="Search name, email, phone, code..."
+   467→                  value={search}
+   468→                  onChange={(e) => setSearch(e.target.value)}
+   469→                  className="pl-7 h-8 w-64 text-xs"
+   470→                />
+   471→              </div>
+   472→              <Select value={countryFilter} onValueChange={setCountryFilter}>
+   473→                <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   474→                  <Filter className="size-3 mr-1 text-muted-foreground" />
+   475→                  <SelectValue placeholder="Country" />
+   476→                </SelectTrigger>
+   477→                <SelectContent>
+   478→                  <SelectItem value="all">All countries</SelectItem>
+   479→                  {regionCountries.map((c) => (
+   480→                    <SelectItem key={c.countryCode} value={c.countryCode}>
+   481→                      {c.countryCode} · {c.countryName}
+   482→                    </SelectItem>
+   483→                  ))}
+   484→                </SelectContent>
+   485→              </Select>
+   486→              <Select value={kycStatusFilter} onValueChange={setKycStatusFilter}>
+   487→                <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   488→                  <SelectValue placeholder="KYC status" />
+   489→                </SelectTrigger>
+   490→                <SelectContent>
+   491→                  {KYC_STATUS_OPTIONS.map((o) => (
+   492→                    <SelectItem key={o.value} value={o.value}>
+   493→                      {o.label}
+   494→                    </SelectItem>
+   495→                  ))}
+   496→                </SelectContent>
+   497→              </Select>
+   498→              <Select value={accountStatusFilter} onValueChange={setAccountStatusFilter}>
+   499→                <SelectTrigger size="sm" className="w-40 text-xs h-8">
+   500→                  <SelectValue placeholder="Account status" />
+   501→                </SelectTrigger>
+   502→                <SelectContent>
+   503→                  {ACCOUNT_STATUS_OPTIONS.map((o) => (
+   504→                    <SelectItem key={o.value} value={o.value}>
+   505→                      {o.label}
+   506→                    </SelectItem>
+   507→                  ))}
+   508→                </SelectContent>
+   509→              </Select>
+   510→              <Select value={tierFilter} onValueChange={setTierFilter}>
+   511→                <SelectTrigger size="sm" className="w-32 text-xs h-8">
+   512→                  <SelectValue placeholder="KYC tier" />
+   513→                </SelectTrigger>
+   514→                <SelectContent>
+   515→                  {KYC_TIER_OPTIONS.map((o) => (
+   516→                    <SelectItem key={o.value} value={o.value}>
+   517→                      {o.label}
+   518→                    </SelectItem>
+   519→                  ))}
+   520→                </SelectContent>
+   521→              </Select>
+   522→              <Select value={riskFilter} onValueChange={setRiskFilter}>
+   523→                <SelectTrigger size="sm" className="w-32 text-xs h-8">
+   524→                  <SelectValue placeholder="Risk level" />
+   525→                </SelectTrigger>
+   526→                <SelectContent>
+   527→                  {RISK_LEVEL_OPTIONS.map((o) => (
+   528→                    <SelectItem key={o.value} value={o.value}>
+   529→                      {o.label}
+   530→                    </SelectItem>
+   531→                  ))}
+   532→                </SelectContent>
+   533→              </Select>
+   534→              {(search ||
+   535→                countryFilter !== "all" ||
+   536→                kycStatusFilter !== "all" ||
+   537→                accountStatusFilter !== "all" ||
+   538→                tierFilter !== "all" ||
+   539→                riskFilter !== "all") && (
+   540→                <Button
+   541→                  variant="ghost"
+   542→                  size="sm"
+   543→                  className="h-8 text-xs text-muted-foreground"
+   544→                  onClick={() => {
+   545→                    setSearch("");
+   546→                    setCountryFilter("all");
+   547→                    setKycStatusFilter("all");
+   548→                    setAccountStatusFilter("all");
+   549→                    setTierFilter("all");
+   550→                    setRiskFilter("all");
+   551→                  }}
+   552→                >
+   553→                  Clear filters
+   554→                </Button>
+   555→              )}
+   556→            </div>
+   557→          </CardHeader>
+   558→          <CardContent className="p-0">
+   559→            {filteredConsumers.length === 0 ? (
+   560→              <EmptyState
+   561→                icon={Users}
+   562→                title="No consumers match"
+   563→                description="Adjust the filters above or expand your country/region access."
+   564→              />
+   565→            ) : (
+   566→              <ScrollTable>
+   567→                <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   568→                  <TableRow>
+   569→                    <TableHead className="pl-4">Consumer Code</TableHead>
+   570→                    <TableHead>Name</TableHead>
+   571→                    <TableHead className="hidden md:table-cell">Email</TableHead>
+   572→                    <TableHead className="hidden lg:table-cell">Phone</TableHead>
+   573→                    <TableHead>Country</TableHead>
+   574→                    <TableHead>KYC</TableHead>
+   575→                    <TableHead className="hidden md:table-cell">Tier</TableHead>
+   576→                    <TableHead>Risk</TableHead>
+   577→                    <TableHead>Account</TableHead>
+   578→                    <TableHead className="hidden lg:table-cell">Wallet</TableHead>
+   579→                    <TableHead className="hidden xl:table-cell text-right">Txns</TableHead>
+   580→                    <TableHead className="hidden lg:table-cell">Last activity</TableHead>
+   581→                    <TableHead className="text-right pr-4">Actions</TableHead>
+   582→                  </TableRow>
+   583→                </TableHeader>
+   584→                <TableBody>
+   585→                  {filteredConsumers.map((c) => {
+   586→                    return (
+   587→                      <TableRow
+   588→                        key={c.id}
+   589→                        className="cursor-pointer"
+   590→                        onClick={() => setSelectedConsumer(c)}
+   591→                      >
+   592→                        <TableCell className="pl-4 font-mono text-xs">{c.consumerCode}</TableCell>
+   593→                        <TableCell className="font-medium">
+   594→                          <div className="flex flex-col gap-0.5">
+   595→                            <span>{c.firstName} {c.lastName}</span>
+   596→                            <span className="text-[10px] text-muted-foreground md:hidden truncate max-w-[180px]">{c.email}</span>
+   597→                          </div>
+   598→                        </TableCell>
+   599→                        <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{c.email}</TableCell>
+   600→                        <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">{c.phone}</TableCell>
+   601→                        <TableCell className="text-xs">
+   602→                          <span className="font-mono">{c.countryCode}</span>
+   603→                        </TableCell>
+   604→                        <TableCell>{kycStatusBadge(c.kycStatus)}</TableCell>
+   605→                        <TableCell className="hidden md:table-cell">{tierChip(c.kycTier)}</TableCell>
+   606→                        <TableCell>{riskScoreChip(c.riskScore)}</TableCell>
+   607→                        <TableCell>{consumerStatusBadge(c.status)}</TableCell>
+   608→                        <TableCell className="hidden lg:table-cell text-xs tabular-nums">
+   609→                          {formatCurrency(c.walletBalance, c.currency)}
+   610→                        </TableCell>
+   611→                        <TableCell className="hidden xl:table-cell text-xs tabular-nums text-right">
+   612→                          {formatCompact(c.transactionCount)}
+   613→                        </TableCell>
+   614→                        <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
+   615→                          {timeAgo(c.updatedAt)}
+   616→                        </TableCell>
+   617→                        <TableCell className="text-right pr-4">
+   618→                          <DropdownMenu>
+   619→                            <DropdownMenuTrigger asChild>
+   620→                              <Button
+   621→                                variant="ghost"
+   622→                                size="icon"
+   623→                                className="size-8 shrink-0"
+   624→                                onClick={(e) => e.stopPropagation()}
+   625→                                aria-label={`Actions for ${c.firstName} ${c.lastName}`}
+   626→                              >
+   627→                                <MoreHorizontal className="size-4" />
+   628→                              </Button>
+   629→                            </DropdownMenuTrigger>
+   630→                            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+   631→                              <DropdownMenuLabel>{c.firstName} {c.lastName}</DropdownMenuLabel>
+   632→                              <DropdownMenuSeparator />
+   633→                              <DropdownMenuItem onClick={() => setSelectedConsumer(c)}>
+   634→                                <Eye className="size-4" /> View profile
+   635→                              </DropdownMenuItem>
+   636→                              <DropdownMenuSeparator />
+   637→                              {(c.status === "active" || c.status === "pending_kyc") && (
+   638→                                <DropdownMenuItem
+   639→                                  variant="destructive"
+   640→                                  onClick={() => restrictConsumer(c)}
+   641→                                >
+   642→                                  <Ban className="size-4" /> Restrict
+   643→                                </DropdownMenuItem>
+   644→                              )}
+   645→                              {(c.status === "active" || c.status === "pending_kyc" || c.status === "restricted") && (
+   646→                                <DropdownMenuItem
+   647→                                  variant="destructive"
+   648→                                  onClick={() => setSuspendTarget(c)}
+   649→                                >
+   650→                                  <PauseCircle className="size-4" /> Suspend
+   651→                                </DropdownMenuItem>
+   652→                              )}
+   653→                              {(c.status === "restricted" || c.status === "suspended") && (
+   654→                                <DropdownMenuItem
+   655→                                  onClick={() => reactivateConsumer(c)}
+   656→                                  className="text-emerald-700 focus:text-emerald-800 dark:text-emerald-400"
+   657→                                >
+   658→                                  <PlayCircle className="size-4" /> Reactivate
+   659→                                </DropdownMenuItem>
+   660→                              )}
+   661→                              <DropdownMenuItem onClick={() => addNote(c)}>
+   662→                                <StickyNote className="size-4" /> Add note
+   663→                              </DropdownMenuItem>
+   664→                            </DropdownMenuContent>
+   665→                          </DropdownMenu>
+   666→                        </TableCell>
+   667→                      </TableRow>
+   668→                    );
+   669→                  })}
+   670→                </TableBody>
+   671→              </ScrollTable>
+   672→            )}
+   673→          </CardContent>
+   674→        </Card>
+   675→      </ViewContainer>
+   676→
+   677→      {/* ------------------- Consumer detail Sheet ------------------- */}
+   678→      <Sheet open={!!selectedConsumer} onOpenChange={(o) => !o && setSelectedConsumer(null)}>
+   679→        <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col">
+   680→          {selectedConsumer && (
+   681→            <ConsumerDetailSheet
+   682→              consumer={selectedConsumer}
+   683→              countryName={countryName}
+   684→              consumerStatusBadge={consumerStatusBadge}
+   685→              kycStatusBadge={kycStatusBadge}
+   686→              tierChip={tierChip}
+   687→              riskScoreChip={riskScoreChip}
+   688→              platformChips={platformChips}
+   689→              onClose={() => setSelectedConsumer(null)}
+   690→              onRestrict={() => restrictConsumer(selectedConsumer)}
+   691→              onSuspend={() => setSuspendTarget(selectedConsumer)}
+   692→              onReactivate={() => reactivateConsumer(selectedConsumer)}
+   693→              onAddNote={() => addNote(selectedConsumer)}
+   694→            />
+   695→          )}
+   696→        </SheetContent>
+   697→      </Sheet>
+   698→
+   699→      {/* ----------------- Suspend confirmation ----------------- */}
+   700→      <AlertDialog open={!!suspendTarget} onOpenChange={(o) => !o && setSuspendTarget(null)}>
+   701→        <AlertDialogContent>
+   702→          <AlertDialogHeader>
+   703→            <AlertDialogTitle>Suspend consumer?</AlertDialogTitle>
+   704→            <AlertDialogDescription>
+   705→              You are about to suspend <strong>{suspendTarget?.firstName} {suspendTarget?.lastName}</strong>{" "}
+   706→              ({suspendTarget?.consumerCode}). This blocks login to the Faya Pay app, freezes wallet
+   707→              spending, and is recorded in the audit log. The consumer will be notified. This action
+   708→              can be reversed via Reactivate.
+   709→            </AlertDialogDescription>
+   710→          </AlertDialogHeader>
+   711→          <AlertDialogFooter>
+   712→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   713→            <AlertDialogAction
+   714→              className="bg-red-600 hover:bg-red-700 text-white"
+   715→              onClick={() => {
+   716→                if (suspendTarget) suspendConsumer(suspendTarget);
+   717→                setSuspendTarget(null);
+   718→              }}
+   719→            >
+   720→              <PauseCircle className="size-4" /> Suspend consumer
+   721→            </AlertDialogAction>
+   722→          </AlertDialogFooter>
+   723→        </AlertDialogContent>
+   724→      </AlertDialog>
+   725→
+   726→      <SonnerToaster richColors closeButton position="bottom-right" />
+   727→    </>
+   728→  );
+   729→}
+   730→
+   731→/* ============================ Sub-components ============================ */
+   732→
+   733→/**
+   734→ * Scrollable table wrapper with sticky-header support and custom scrollbar.
+   735→ * Uses a raw <table> (not the Table primitive) so the <thead> can stick to
+   736→ * this outer vertical-scroll viewport instead of the inner overflow-x div.
+   737→ */
+   738→function ScrollTable({ children }: { children: React.ReactNode }) {
+   739→  return (
+   740→    <div
+   741→      className={
+   742→        "max-h-[60vh] overflow-auto " +
+   743→        "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+   744→        "[&::-webkit-scrollbar-thumb]:rounded-full " +
+   745→        "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+   746→        "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+   747→      }
+   748→    >
+   749→      <table className="w-full caption-bottom text-sm">{children}</table>
+   750→    </div>
+   751→  );
+   752→}
+   753→
+   754→function DetailRow({ label, value, icon: Icon }: { label: string; value: React.ReactNode; icon?: React.ComponentType<{ className?: string }> }) {
+   755→  return (
+   756→    <div className="flex items-start justify-between gap-3 py-1.5">
+   757→      <span className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+   758→        {Icon && <Icon className="size-3" />}
+   759→        {label}
+   760→      </span>
+   761→      <span className="text-sm text-right min-w-0">{value}</span>
+   762→    </div>
+   763→  );
+   764→}
+   765→
+   766→function ConsumerDetailSheet({
+   767→  consumer,
+   768→  countryName,
+   769→  consumerStatusBadge,
+   770→  kycStatusBadge,
+   771→  tierChip,
+   772→  riskScoreChip,
+   773→  platformChips,
+   774→  onClose,
+   775→  onRestrict,
+   776→  onSuspend,
+   777→  onReactivate,
+   778→  onAddNote,
+   779→}: {
+   780→  consumer: Consumer;
+   781→  countryName: (code: string) => string;
+   782→  consumerStatusBadge: (s: ConsumerStatus) => React.ReactNode;
+   783→  kycStatusBadge: (s: KycStatus) => React.ReactNode;
+   784→  tierChip: (t: KycTier) => React.ReactNode;
+   785→  riskScoreChip: (s: number) => React.ReactNode;
+   786→  platformChips: (p: PlatformKey[]) => React.ReactNode;
+   787→  onClose: () => void;
+   788→  onRestrict: () => void;
+   789→  onSuspend: () => void;
+   790→  onReactivate: () => void;
+   791→  onAddNote: () => void;
+   792→}) {
+   793→  const status = CONSUMER_STATUS_STYLES[consumer.status];
+   794→  const canRestrict = consumer.status === "active" || consumer.status === "pending_kyc";
+   795→  const canSuspend = consumer.status === "active" || consumer.status === "pending_kyc" || consumer.status === "restricted";
+   796→  const canReactivate = consumer.status === "restricted" || consumer.status === "suspended";
+   797→
+   798→  return (
+   799→    <>
+   800→      <SheetHeader>
+   801→        <SheetDescription className="text-[11px] font-mono">{consumer.consumerCode}</SheetDescription>
+   802→        <SheetTitle className="text-lg flex items-center gap-2">
+   803→          <Users className="size-5 text-emerald-600" />
+   804→          {consumer.firstName} {consumer.lastName}
+   805→        </SheetTitle>
+   806→        <div className="flex flex-wrap items-center gap-2 mt-1">
+   807→          {consumerStatusBadge(consumer.status)}
+   808→          {kycStatusBadge(consumer.kycStatus)}
+   809→          {tierChip(consumer.kycTier)}
+   810→          {riskScoreChip(consumer.riskScore)}
+   811→          <Badge variant="outline" className="text-[10px] font-mono">
+   812→            {consumer.countryCode} · {countryName(consumer.countryCode)}
+   813→          </Badge>
+   814→        </div>
+   815→      </SheetHeader>
+   816→
+   817→      <div className="flex-1 overflow-y-auto px-4 space-y-4 text-sm">
+   818→        {/* Personal details */}
+   819→        <div>
+   820→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   821→            <Users className="size-3" /> Personal details
+   822→          </div>
+   823→          <div className="rounded-md border divide-y">
+   824→            <DetailRow label="Full name" value={`${consumer.firstName} ${consumer.lastName}`} />
+   825→            <DetailRow label="Date of birth" value={consumer.dateOfBirth} icon={Calendar} />
+   826→            <DetailRow label="Nationality" value={consumer.nationality} icon={Globe2} />
+   827→            <DetailRow label="Consumer code" value={<span className="font-mono text-xs">{consumer.consumerCode}</span>} icon={Hash} />
+   828→          </div>
+   829→        </div>
+   830→
+   831→        {/* Contact */}
+   832→        <div>
+   833→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   834→            <Mail className="size-3" /> Contact
+   835→          </div>
+   836→          <div className="rounded-md border divide-y">
+   837→            <DetailRow label="Email" value={<span className="text-xs">{consumer.email}</span>} icon={Mail} />
+   838→            <DetailRow label="Phone" value={<span className="text-xs">{consumer.phone}</span>} icon={Phone} />
+   839→          </div>
+   840→        </div>
+   841→
+   842→        {/* KYC details */}
+   843→        <div>
+   844→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   845→            <ShieldCheck className="size-3" /> KYC details
+   846→          </div>
+   847→          <div className="rounded-md border divide-y">
+   848→            <DetailRow label="KYC status" value={kycStatusBadge(consumer.kycStatus)} />
+   849→            <DetailRow label="KYC tier" value={tierChip(consumer.kycTier)} />
+   850→            <DetailRow label="Risk score" value={riskScoreChip(consumer.riskScore)} />
+   851→            <DetailRow
+   852→              label="Linked KYC case"
+   853→              value={
+   854→                consumer.kycCaseId ? (
+   855→                  <span className="font-mono text-xs">{consumer.kycCaseId}</span>
+   856→                ) : (
+   857→                  <span className="text-xs text-muted-foreground italic">No linked case</span>
+   858→                )
+   859→              }
+   860→              icon={Hash}
+   861→            />
+   862→          </div>
+   863→        </div>
+   864→
+   865→        {/* Platforms used */}
+   866→        <div>
+   867→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   868→            <Layers className="size-3" /> Platforms used
+   869→          </div>
+   870→          <div className="rounded-md border p-3">
+   871→            {platformChips(consumer.platforms)}
+   872→            <p className="text-[11px] text-muted-foreground mt-2">
+   873→              The consumer can transact on each enabled platform. Country rules (KYC, limits, risk) apply across all of them.
+   874→            </p>
+   875→          </div>
+   876→        </div>
+   877→
+   878→        {/* Wallet info */}
+   879→        <div>
+   880→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   881→            <Wallet className="size-3" /> Wallet
+   882→          </div>
+   883→          <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
+   884→            <DetailRow label="Balance" value={<span className="font-semibold tabular-nums">{formatCurrency(consumer.walletBalance, consumer.currency)}</span>} icon={Wallet} />
+   885→            <DetailRow label="Currency" value={<span className="font-mono text-xs">{consumer.currency}</span>} />
+   886→          </div>
+   887→        </div>
+   888→
+   889→        {/* Transaction stats */}
+   890→        <div>
+   891→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   892→            <Activity className="size-3" /> Transaction stats
+   893→          </div>
+   894→          <div className="rounded-md border divide-y">
+   895→            <DetailRow label="Lifetime volume" value={<span className="tabular-nums">{formatCurrency(consumer.lifetimeVolume, consumer.currency)}</span>} icon={TrendingUp} />
+   896→            <DetailRow label="Monthly volume" value={<span className="tabular-nums">{formatCurrency(consumer.monthlyVolume, consumer.currency)}</span>} icon={TrendingUp} />
+   897→            <DetailRow label="Transaction count" value={<span className="tabular-nums">{formatNumber(consumer.transactionCount)}</span>} icon={Hash} />
+   898→            <DetailRow label="Last activity" value={<span className="text-xs">{formatDateTime(consumer.updatedAt)}</span>} icon={Calendar} />
+   899→          </div>
+   900→        </div>
+   901→
+   902→        {/* Notes */}
+   903→        {consumer.notes && (
+   904→          <div>
+   905→            <div className="text-xs font-medium text-muted-foreground uppercase mb-1 flex items-center gap-1">
+   906→              <StickyNote className="size-3" /> Notes
+   907→            </div>
+   908→            <p className="text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-md p-3 text-amber-900 dark:text-amber-200">
+   909→              {consumer.notes}
+   910→            </p>
+   911→          </div>
+   912→        )}
+   913→
+   914→        {/* Created / updated */}
+   915→        <div className="text-[11px] text-muted-foreground flex items-center justify-between border-t pt-2">
+   916→          <span>Created {formatDateTime(consumer.createdAt)}</span>
+   917→          <span>Updated {formatDateTime(consumer.updatedAt)}</span>
+   918→        </div>
+   919→      </div>
+   920→
+   921→      <SheetFooter className="flex flex-col gap-2 items-stretch">
+   922→        {/* Action buttons — emerald accent, status-aware */}
+   923→        <div className="grid grid-cols-2 gap-2">
+   924→          {canReactivate ? (
+   925→            <Button
+   926→              onClick={onReactivate}
+   927→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   928→            >
+   929→              <PlayCircle className="size-4" /> Reactivate
+   930→            </Button>
+   931→          ) : (
+   932→            <Button
+   933→              onClick={onRestrict}
+   934→              variant="outline"
+   935→              className="text-orange-700 border-orange-300 hover:bg-orange-50 dark:text-orange-300 dark:border-orange-800 dark:hover:bg-orange-900/20"
+   936→              disabled={!canRestrict}
+   937→            >
+   938→              <Ban className="size-4" /> Restrict
+   939→            </Button>
+   940→          )}
+   941→          <Button
+   942→            onClick={onSuspend}
+   943→            variant="destructive"
+   944→            disabled={!canSuspend}
+   945→          >
+   946→            <PauseCircle className="size-4" /> Suspend
+   947→          </Button>
+   948→        </div>
+   949→        <div className="grid grid-cols-2 gap-2">
+   950→          <Button onClick={onAddNote} variant="outline">
+   951→            <StickyNote className="size-4" /> Add note
+   952→          </Button>
+   953→          <Button variant="ghost" onClick={onClose}>
+   954→            Close
+   955→          </Button>
+   956→        </div>
+   957→        <div className="text-[11px] text-muted-foreground text-center pt-1">
+   958→          Status: <span className={cn("font-medium", status.className.replace("bg-", "text-").split(" ")[0])}>{status.label}</span> · changes mirror to Faya Pay app in real-time.
+   959→        </div>
+   960→      </SheetFooter>
+   961→    </>
+   962→  );
+   963→}
+   964→

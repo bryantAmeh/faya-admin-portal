@@ -1,0 +1,752 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Disputes & Chargebacks View (§11.7)
+     5→ *
+     6→ * Tabs (each pre-filters Dispute.status):
+     7→ *   - New Disputes         : status="new"
+     8→ *   - Awaiting Evidence    : status="awaiting_evidence"
+     9→ *   - Evidence Submitted   : status="evidence_submitted"
+    10→ *   - Under Review         : status="under_review"
+    11→ *   - Won/Lost             : status in ["won","lost"]
+    12→ *   - Expired              : status="expired"
+    13→ *   - All                  : no status filter
+    14→ *
+    15→ * Country scoping: Super Admin sees all countries; other staff see only the
+    16→ * country codes listed on their `staff.countries` access record.
+    17→ *
+    18→ * Every mutation is mirrored to the audit log via `logAudit(...)` with the
+    19→ * action keys: dispute.request_evidence / dispute.upload_evidence /
+    20→ * dispute.update_status / dispute.escalate_fraud. dispute.add_note is
+    21→ * toast-only per spec.
+    22→ */
+    23→import { useMemo, useState } from "react";
+    24→import {
+    25→  Scale,
+    26→  Search,
+    27→  Filter,
+    28→  Clock,
+    29→  AlertTriangle,
+    30→  Trophy,
+    31→  CheckCircle2,
+    32→  XCircle,
+    33→  ShieldAlert,
+    34→  FileText,
+    35→  Upload,
+    36→  MoreHorizontal,
+    37→  StickyNote,
+    38→  RefreshCw,
+    39→  Wallet,
+    40→  Gavel,
+    41→} from "lucide-react";
+    42→import { toast } from "sonner";
+    43→import {
+    44→  ViewHeader,
+    45→  ViewContainer,
+    46→  EmptyState,
+    47→  StatCard,
+    48→} from "@/components/portal/view-helpers";
+    49→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    50→import { Badge } from "@/components/ui/badge";
+    51→import { Button } from "@/components/ui/button";
+    52→import { Input } from "@/components/ui/input";
+    53→import { Label } from "@/components/ui/label";
+    54→import {
+    55→  TableBody,
+    56→  TableCell,
+    57→  TableHead,
+    58→  TableHeader,
+    59→  TableRow,
+    60→} from "@/components/ui/table";
+    61→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    62→import {
+    63→  Select,
+    64→  SelectContent,
+    65→  SelectItem,
+    66→  SelectTrigger,
+    67→  SelectValue,
+    68→} from "@/components/ui/select";
+    69→import {
+    70→  Dialog,
+    71→  DialogContent,
+    72→  DialogDescription,
+    73→  DialogFooter,
+    74→  DialogHeader,
+    75→  DialogTitle,
+    76→} from "@/components/ui/dialog";
+    77→import {
+    78→  DropdownMenu,
+    79→  DropdownMenuContent,
+    80→  DropdownMenuItem,
+    81→  DropdownMenuLabel,
+    82→  DropdownMenuSeparator,
+    83→  DropdownMenuTrigger,
+    84→} from "@/components/ui/dropdown-menu";
+    85→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+    86→import { useAuth } from "@/hooks/use-auth";
+    87→import { adminData, logAudit } from "@/lib/admin-data";
+    88→import { formatCurrency, formatDate, formatCompact, timeAgo } from "@/lib/formatters";
+    89→import type { Dispute, CountryConfig } from "@/lib/types";
+    90→import { cn } from "@/lib/utils";
+    91→
+    92→interface DisputesViewProps {
+    93→  disputes: Dispute[];
+    94→  countries: CountryConfig[];
+    95→}
+    96→
+    97→const SUPER_ADMIN_DEPT = "dept_super_admin";
+    98→
+    99→const DISPUTE_STATUS_STYLES: Record<
+   100→  Dispute["status"],
+   101→  { label: string; className: string }
+   102→> = {
+   103→  new: {
+   104→    label: "New",
+   105→    className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+   106→  },
+   107→  awaiting_evidence: {
+   108→    label: "Awaiting Evidence",
+   109→    className: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+   110→  },
+   111→  evidence_submitted: {
+   112→    label: "Evidence Submitted",
+   113→    className: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
+   114→  },
+   115→  under_review: {
+   116→    label: "Under Review",
+   117→    className: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300",
+   118→  },
+   119→  won: {
+   120→    label: "Won",
+   121→    className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+   122→  },
+   123→  lost: {
+   124→    label: "Lost",
+   125→    className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+   126→  },
+   127→  expired: {
+   128→    label: "Expired",
+   129→    className: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+   130→  },
+   131→};
+   132→
+   133→const STATUS_LABELS: { value: Dispute["status"]; label: string }[] = [
+   134→  { value: "new", label: "New" },
+   135→  { value: "awaiting_evidence", label: "Awaiting Evidence" },
+   136→  { value: "evidence_submitted", label: "Evidence Submitted" },
+   137→  { value: "under_review", label: "Under Review" },
+   138→  { value: "won", label: "Won" },
+   139→  { value: "lost", label: "Lost" },
+   140→  { value: "expired", label: "Expired" },
+   141→];
+   142→
+   143→type DisputeTab =
+   144→  | "new"
+   145→  | "awaiting_evidence"
+   146→  | "evidence_submitted"
+   147→  | "under_review"
+   148→  | "won_lost"
+   149→  | "expired"
+   150→  | "all";
+   151→
+   152→export function DisputesView({ disputes, countries }: DisputesViewProps) {
+   153→  const { staff: currentStaff } = useAuth();
+   154→  const [activeTab, setActiveTab] = useState<DisputeTab>("new");
+   155→
+   156→  /* ----------------------- Country scoping ----------------------- */
+   157→  const visibleCountryCodes = useMemo(() => {
+   158→    if (!currentStaff) return new Set<string>();
+   159→    if (currentStaff.departmentId === SUPER_ADMIN_DEPT) {
+   160→      return new Set(countries.map((c) => c.countryCode));
+   161→    }
+   162→    return new Set(currentStaff.countries.map((c) => c.countryCode));
+   163→  }, [currentStaff, countries]);
+   164→
+   165→  const isSuperAdmin = currentStaff?.departmentId === SUPER_ADMIN_DEPT;
+   166→
+   167→  const visibleDisputes = useMemo(
+   168→    () => disputes.filter((d) => visibleCountryCodes.has(d.countryCode)),
+   169→    [disputes, visibleCountryCodes],
+   170→  );
+   171→
+   172→  const filterableCountries = useMemo(
+   173→    () =>
+   174→      isSuperAdmin
+   175→        ? countries
+   176→        : countries.filter((c) => visibleCountryCodes.has(c.countryCode)),
+   177→    [countries, isSuperAdmin, visibleCountryCodes],
+   178→  );
+   179→
+   180→  /* --------------------------- Filters --------------------------- */
+   181→  const [countryFilter, setCountryFilter] = useState<string>("all");
+   182→  const [search, setSearch] = useState("");
+   183→
+   184→  const filtered = useMemo(() => {
+   185→    let list = visibleDisputes;
+   186→
+   187→    // Tab pre-filter
+   188→    if (activeTab === "won_lost") {
+   189→      list = list.filter((d) => d.status === "won" || d.status === "lost");
+   190→    } else if (activeTab !== "all") {
+   191→      list = list.filter((d) => d.status === activeTab);
+   192→    }
+   193→
+   194→    if (countryFilter !== "all") list = list.filter((d) => d.countryCode === countryFilter);
+   195→    if (search.trim()) {
+   196→      const q = search.trim().toLowerCase();
+   197→      list = list.filter(
+   198→        (d) =>
+   199→          d.merchantName.toLowerCase().includes(q) ||
+   200→          d.customerName.toLowerCase().includes(q) ||
+   201→          d.id.toLowerCase().includes(q) ||
+   202→          d.reason.toLowerCase().includes(q),
+   203→      );
+   204→    }
+   205→
+   206→    // Sort: deadline closest first (most urgent on top)
+   207→    return [...list].sort((a, b) => a.deadline - b.deadline);
+   208→  }, [visibleDisputes, activeTab, countryFilter, search]);
+   209→
+   210→  /* --------------------- Derived KPI buckets --------------------- */
+   211→  const stats = useMemo(() => {
+   212→    const total = visibleDisputes.length;
+   213→    const awaiting = visibleDisputes.filter(
+   214→      (d) => d.status === "awaiting_evidence",
+   215→    ).length;
+   216→    const won = visibleDisputes.filter((d) => d.status === "won").length;
+   217→    const lost = visibleDisputes.filter((d) => d.status === "lost").length;
+   218→    const decided = won + lost;
+   219→    const wonRate = decided > 0 ? (won / decided) * 100 : null;
+   220→    // Total disputed amount — disputes use multiple currencies, so we report a
+   221→    // currency-neutral sum and the count of distinct currencies in the hint.
+   222→    const totalAmount = visibleDisputes.reduce((s, d) => s + d.amount, 0);
+   223→    const currencies = new Set(visibleDisputes.map((d) => d.currency));
+   224→    return {
+   225→      total,
+   226→      awaiting,
+   227→      won,
+   228→      lost,
+   229→      wonRate,
+   230→      totalAmount,
+   231→      currencyCount: currencies.size,
+   232→    };
+   233→  }, [visibleDisputes]);
+   234→
+   235→  /* --------------------- Update-status dialog -------------------- */
+   236→  const [statusTarget, setStatusTarget] = useState<Dispute | null>(null);
+   237→  const [pendingStatus, setPendingStatus] = useState<Dispute["status"] | "">("");
+   238→
+   239→  /* --------------------------- Audit actor ----------------------- */
+   240→  const actor = useMemo(() => {
+   241→    if (!currentStaff) return null;
+   242→    return {
+   243→      staffId: currentStaff.id,
+   244→      staffName: `${currentStaff.firstName} ${currentStaff.lastName}`,
+   245→      department: currentStaff.departmentId,
+   246→      role: currentStaff.roleId,
+   247→    };
+   248→  }, [currentStaff]);
+   249→
+   250→  function countryName(code: string): string {
+   251→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   252→  }
+   253→
+   254→  /* ----------------------- Dispute mutations --------------------- */
+   255→  function requestEvidence(d: Dispute) {
+   256→    if (!actor) return;
+   257→    adminData.updateDispute(d.id, { status: "awaiting_evidence" });
+   258→    logAudit(actor, "dispute.request_evidence", "dispute", d.id, {
+   259→      countryCode: d.countryCode,
+   260→      beforeValue: d.status,
+   261→      afterValue: "awaiting_evidence",
+   262→    });
+   263→    toast.info("Evidence requested", {
+   264→      description: `${d.id} · ${d.merchantName} notified to submit evidence.`,
+   265→    });
+   266→  }
+   267→
+   268→  function uploadEvidence(d: Dispute) {
+   269→    if (!actor) return;
+   270→    adminData.updateDispute(d.id, { status: "evidence_submitted" });
+   271→    logAudit(actor, "dispute.upload_evidence", "dispute", d.id, {
+   272→      countryCode: d.countryCode,
+   273→      beforeValue: d.status,
+   274→      afterValue: "evidence_submitted",
+   275→    });
+   276→    toast.success("Evidence uploaded", {
+   277→      description: `${d.id} · Marked as evidence_submitted for card scheme review.`,
+   278→    });
+   279→  }
+   280→
+   281→  function openUpdateStatus(d: Dispute) {
+   282→    setStatusTarget(d);
+   283→    setPendingStatus(d.status);
+   284→  }
+   285→
+   286→  function confirmUpdateStatus() {
+   287→    if (!statusTarget || !actor || !pendingStatus) return;
+   288→    if (pendingStatus === statusTarget.status) {
+   289→      toast.message("No change", { description: "Status is already set to that value." });
+   290→      setStatusTarget(null);
+   291→      return;
+   292→    }
+   293→    adminData.updateDispute(statusTarget.id, { status: pendingStatus });
+   294→    logAudit(actor, "dispute.update_status", "dispute", statusTarget.id, {
+   295→      countryCode: statusTarget.countryCode,
+   296→      beforeValue: statusTarget.status,
+   297→      afterValue: pendingStatus,
+   298→    });
+   299→    toast.success("Dispute status updated", {
+   300→      description: `${statusTarget.id} → ${DISPUTE_STATUS_STYLES[pendingStatus].label}`,
+   301→    });
+   302→    setStatusTarget(null);
+   303→  }
+   304→
+   305→  function escalateFraud(d: Dispute) {
+   306→    if (!actor) return;
+   307→    logAudit(actor, "dispute.escalate_fraud", "dispute", d.id, {
+   308→      countryCode: d.countryCode,
+   309→      beforeValue: d.status,
+   310→      afterValue: "fraud_team_review",
+   311→      reason: d.reason,
+   312→    });
+   313→    toast.warning("Escalated to fraud team", {
+   314→      description: `${d.id} · ${d.merchantName} — fraud team will investigate.`,
+   315→    });
+   316→  }
+   317→
+   318→  function addNote(d: Dispute) {
+   319→    if (!actor) return;
+   320→    toast.info("Internal note saved", {
+   321→      description: `Note attached to ${d.id} (visible to staff only).`,
+   322→    });
+   323→  }
+   324→
+   325→  /* ------------------------- Badge helpers ----------------------- */
+   326→  function statusBadgeNode(s: Dispute["status"]): React.ReactNode {
+   327→    const b = DISPUTE_STATUS_STYLES[s];
+   328→    return (
+   329→      <Badge variant="secondary" className={cn("text-[10px] font-medium", b.className)}>
+   330→        {b.label}
+   331→      </Badge>
+   332→    );
+   333→  }
+   334→
+   335→  function deadlineBadge(d: Dispute): React.ReactNode {
+   336→    if (d.status === "won" || d.status === "lost" || d.status === "expired") {
+   337→      return (
+   338→        <span className="text-xs text-muted-foreground">{formatDate(d.deadline)}</span>
+   339→      );
+   340→    }
+   341→    const diff = d.deadline - Date.now();
+   342→    if (diff < 0) {
+   343→      return (
+   344→        <Badge
+   345→          variant="secondary"
+   346→          className="text-[10px] gap-1 bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+   347→        >
+   348→          <AlertTriangle className="size-2.5" />
+   349→          Overdue
+   350→        </Badge>
+   351→      );
+   352→    }
+   353→    const days = Math.floor(diff / (24 * 60 * 60 * 1000));
+   354→    const hrs = Math.floor(diff / (60 * 60 * 1000));
+   355→    const isUrgent = days < 2;
+   356→    return (
+   357→      <Badge
+   358→        variant="secondary"
+   359→        className={cn(
+   360→          "text-[10px] gap-1",
+   361→          isUrgent
+   362→            ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+   363→            : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+   364→        )}
+   365→      >
+   366→        <Clock className="size-2.5" />
+   367→        {days >= 1 ? `${days}d left` : `${hrs}h left`}
+   368→      </Badge>
+   369→    );
+   370→  }
+   371→
+   372→  function clearFilters() {
+   373→    setCountryFilter("all");
+   374→    setSearch("");
+   375→  }
+   376→
+   377→  const hasActiveFilters = countryFilter !== "all" || search.trim() !== "";
+   378→
+   379→  /* ----------------------------- Render -------------------------- */
+   380→  return (
+   381→    <>
+   382→      <ViewHeader
+   383→        title="Disputes & Chargebacks"
+   384→        description={
+   385→          isSuperAdmin
+   386→            ? "Manage chargeback disputes, evidence cycles, card-scheme timelines and win/loss outcomes across all countries."
+   387→            : `Scoped to your countries: ${[...visibleCountryCodes].join(", ") || "—"}`
+   388→        }
+   389→        icon={Scale}
+   390→      />
+   391→      <ViewContainer>
+   392→        {/* KPI strip */}
+   393→        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+   394→          <StatCard
+   395→            label="Total Disputes"
+   396→            value={stats.total}
+   397→            hint="across visible countries"
+   398→            icon={Scale}
+   399→            tone="warning"
+   400→          />
+   401→          <StatCard
+   402→            label="Awaiting Evidence"
+   403→            value={stats.awaiting}
+   404→            hint="merchant action required"
+   405→            icon={FileText}
+   406→            tone="warning"
+   407→          />
+   408→          <StatCard
+   409→            label="Win Rate"
+   410→            value={stats.wonRate === null ? "—" : `${stats.wonRate.toFixed(1)}%`}
+   411→            hint={`${stats.won} won · ${stats.lost} lost`}
+   412→            icon={Trophy}
+   413→            tone={stats.wonRate === null ? "default" : stats.wonRate >= 50 ? "success" : "danger"}
+   414→          />
+   415→          <StatCard
+   416→            label="Disputed Amount"
+   417→            value={formatCompact(stats.totalAmount)}
+   418→            hint={`across ${stats.currencyCount} ${stats.currencyCount === 1 ? "currency" : "currencies"}`}
+   419→            icon={Wallet}
+   420→            tone="danger"
+   421→          />
+   422→        </div>
+   423→
+   424→        <Tabs
+   425→          value={activeTab}
+   426→          onValueChange={(v) => setActiveTab(v as DisputeTab)}
+   427→          className="w-full"
+   428→        >
+   429→          <TabsList className="h-auto flex-wrap justify-start gap-1">
+   430→            <TabsTrigger value="new" className="text-xs">
+   431→              <AlertTriangle className="size-3.5" /> New
+   432→            </TabsTrigger>
+   433→            <TabsTrigger value="awaiting_evidence" className="text-xs">
+   434→              <FileText className="size-3.5" /> Awaiting Evidence
+   435→            </TabsTrigger>
+   436→            <TabsTrigger value="evidence_submitted" className="text-xs">
+   437→              <Upload className="size-3.5" /> Evidence Submitted
+   438→            </TabsTrigger>
+   439→            <TabsTrigger value="under_review" className="text-xs">
+   440→              <Gavel className="size-3.5" /> Under Review
+   441→            </TabsTrigger>
+   442→            <TabsTrigger value="won_lost" className="text-xs">
+   443→              <Trophy className="size-3.5" /> Won/Lost
+   444→            </TabsTrigger>
+   445→            <TabsTrigger value="expired" className="text-xs">
+   446→              <Clock className="size-3.5" /> Expired
+   447→            </TabsTrigger>
+   448→            <TabsTrigger value="all" className="text-xs">
+   449→              <Scale className="size-3.5" /> All
+   450→            </TabsTrigger>
+   451→          </TabsList>
+   452→
+   453→          {(
+   454→            [
+   455→              "new",
+   456→              "awaiting_evidence",
+   457→              "evidence_submitted",
+   458→              "under_review",
+   459→              "won_lost",
+   460→              "expired",
+   461→              "all",
+   462→            ] as const
+   463→          ).map((tab) => (
+   464→            <TabsContent key={tab} value={tab}>
+   465→              <Card>
+   466→                <CardHeader className="pb-3">
+   467→                  <div className="flex flex-wrap items-center justify-between gap-2">
+   468→                    <CardTitle className="text-sm flex items-center gap-2">
+   469→                      <Scale className="size-4 text-emerald-600" />
+   470→                      {TAB_LABELS[tab]}
+   471→                      <Badge variant="secondary" className="text-[10px]">
+   472→                        {filtered.length}
+   473→                      </Badge>
+   474→                    </CardTitle>
+   475→                    {hasActiveFilters && (
+   476→                      <Button
+   477→                        variant="ghost"
+   478→                        size="sm"
+   479→                        onClick={clearFilters}
+   480→                        className="h-7 text-xs text-emerald-700"
+   481→                      >
+   482→                        Clear filters
+   483→                      </Button>
+   484→                    )}
+   485→                  </div>
+   486→                  <div className="flex flex-wrap items-center gap-2 pt-1">
+   487→                    <div className="relative">
+   488→                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   489→                      <Input
+   490→                        placeholder="Search merchant / customer / reason / ID..."
+   491→                        value={search}
+   492→                        onChange={(e) => setSearch(e.target.value)}
+   493→                        className="pl-7 h-8 w-64 text-xs"
+   494→                      />
+   495→                    </div>
+   496→                    <Select value={countryFilter} onValueChange={setCountryFilter}>
+   497→                      <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   498→                        <Filter className="size-3 mr-1 text-muted-foreground" />
+   499→                        <SelectValue placeholder="Country" />
+   500→                      </SelectTrigger>
+   501→                      <SelectContent>
+   502→                        <SelectItem value="all">All countries</SelectItem>
+   503→                        {filterableCountries.map((c) => (
+   504→                          <SelectItem key={c.countryCode} value={c.countryCode}>
+   505→                            {c.countryCode} · {c.countryName}
+   506→                          </SelectItem>
+   507→                        ))}
+   508→                      </SelectContent>
+   509→                    </Select>
+   510→                  </div>
+   511→                </CardHeader>
+   512→                <CardContent className="p-0">
+   513→                  {filtered.length === 0 ? (
+   514→                    <EmptyState
+   515→                      icon={Scale}
+   516→                      title="No disputes match"
+   517→                      description="Adjust the filters above or switch tabs to see other dispute stages."
+   518→                    />
+   519→                  ) : (
+   520→                    <ScrollTable>
+   521→                      <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   522→                        <TableRow>
+   523→                          <TableHead className="pl-4">Dispute ID</TableHead>
+   524→                          <TableHead className="hidden md:table-cell">Country</TableHead>
+   525→                          <TableHead>Merchant</TableHead>
+   526→                          <TableHead className="hidden lg:table-cell">Customer</TableHead>
+   527→                          <TableHead>Amount</TableHead>
+   528→                          <TableHead className="hidden xl:table-cell">Reason</TableHead>
+   529→                          <TableHead>Status</TableHead>
+   530→                          <TableHead>Deadline</TableHead>
+   531→                          <TableHead className="hidden md:table-cell">Created</TableHead>
+   532→                          <TableHead className="text-right pr-4">Actions</TableHead>
+   533→                        </TableRow>
+   534→                      </TableHeader>
+   535→                      <TableBody>
+   536→                        {filtered.map((d) => (
+   537→                          <TableRow key={d.id}>
+   538→                            <TableCell className="pl-4 font-mono text-xs">
+   539→                              {d.id}
+   540→                            </TableCell>
+   541→                            <TableCell className="hidden md:table-cell text-xs">
+   542→                              <span className="font-mono">{d.countryCode}</span>
+   543→                              <span className="block text-[10px] text-muted-foreground">
+   544→                                {countryName(d.countryCode)}
+   545→                              </span>
+   546→                            </TableCell>
+   547→                            <TableCell className="text-sm font-medium">
+   548→                              {d.merchantName}
+   549→                              <span className="block text-[11px] text-muted-foreground lg:hidden">
+   550→                                {d.customerName}
+   551→                              </span>
+   552→                            </TableCell>
+   553→                            <TableCell className="hidden lg:table-cell text-xs">
+   554→                              {d.customerName}
+   555→                            </TableCell>
+   556→                            <TableCell className="text-xs font-semibold tabular-nums">
+   557→                              {formatCurrency(d.amount, d.currency)}
+   558→                              <span className="block text-[10px] font-normal text-muted-foreground">
+   559→                                {d.currency}
+   560→                              </span>
+   561→                            </TableCell>
+   562→                            <TableCell className="hidden xl:table-cell max-w-[220px] text-xs text-muted-foreground line-clamp-2">
+   563→                              {d.reason}
+   564→                            </TableCell>
+   565→                            <TableCell>{statusBadgeNode(d.status)}</TableCell>
+   566→                            <TableCell>{deadlineBadge(d)}</TableCell>
+   567→                            <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+   568→                              {timeAgo(d.createdAt)}
+   569→                            </TableCell>
+   570→                            <TableCell className="text-right pr-4">
+   571→                              <DisputeActions
+   572→                                dispute={d}
+   573→                                onRequestEvidence={() => requestEvidence(d)}
+   574→                                onUploadEvidence={() => uploadEvidence(d)}
+   575→                                onUpdateStatus={() => openUpdateStatus(d)}
+   576→                                onEscalateFraud={() => escalateFraud(d)}
+   577→                                onNote={() => addNote(d)}
+   578→                              />
+   579→                            </TableCell>
+   580→                          </TableRow>
+   581→                        ))}
+   582→                      </TableBody>
+   583→                    </ScrollTable>
+   584→                  )}
+   585→                </CardContent>
+   586→              </Card>
+   587→            </TabsContent>
+   588→          ))}
+   589→        </Tabs>
+   590→      </ViewContainer>
+   591→
+   592→      {/* ---------------- Update Status Dialog ---------------- */}
+   593→      <Dialog open={!!statusTarget} onOpenChange={(o) => !o && setStatusTarget(null)}>
+   594→        <DialogContent className="sm:max-w-md">
+   595→          <DialogHeader>
+   596→            <DialogTitle>Update dispute status</DialogTitle>
+   597→            <DialogDescription>
+   598→              {statusTarget && (
+   599→                <>
+   600→                  <span className="font-mono">{statusTarget.id}</span> ·{" "}
+   601→                  {statusTarget.merchantName} ·{" "}
+   602→                  {formatCurrency(statusTarget.amount, statusTarget.currency)}
+   603→                </>
+   604→              )}
+   605→            </DialogDescription>
+   606→          </DialogHeader>
+   607→          <div className="space-y-2 py-2">
+   608→            <Label
+   609→              htmlFor="dispute-status"
+   610→              className="text-xs font-medium text-muted-foreground uppercase"
+   611→            >
+   612→              New status
+   613→            </Label>
+   614→            <Select
+   615→              value={pendingStatus || undefined}
+   616→              onValueChange={(v) => setPendingStatus(v as Dispute["status"])}
+   617→            >
+   618→              <SelectTrigger id="dispute-status" className="w-full">
+   619→                <SelectValue placeholder="Select a status..." />
+   620→              </SelectTrigger>
+   621→              <SelectContent>
+   622→                {STATUS_LABELS.map((s) => (
+   623→                  <SelectItem key={s.value} value={s.value}>
+   624→                    {s.label}
+   625→                  </SelectItem>
+   626→                ))}
+   627→              </SelectContent>
+   628→            </Select>
+   629→            <p className="text-[11px] text-muted-foreground">
+   630→              The card scheme timeline and any open SLAs may be affected by this change.
+   631→              This action is recorded in the audit log.
+   632→            </p>
+   633→          </div>
+   634→          <DialogFooter className="gap-2">
+   635→            <Button variant="outline" onClick={() => setStatusTarget(null)}>
+   636→              Cancel
+   637→            </Button>
+   638→            <Button
+   639→              onClick={confirmUpdateStatus}
+   640→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   641→              disabled={!pendingStatus}
+   642→            >
+   643→              <RefreshCw className="size-4" /> Update status
+   644→            </Button>
+   645→          </DialogFooter>
+   646→        </DialogContent>
+   647→      </Dialog>
+   648→
+   649→      <SonnerToaster richColors closeButton position="bottom-right" />
+   650→    </>
+   651→  );
+   652→}
+   653→
+   654→/* ============================ Sub-components ============================ */
+   655→
+   656→const TAB_LABELS: Record<DisputeTab, string> = {
+   657→  new: "New Disputes",
+   658→  awaiting_evidence: "Awaiting Evidence",
+   659→  evidence_submitted: "Evidence Submitted",
+   660→  under_review: "Under Review",
+   661→  won_lost: "Won / Lost",
+   662→  expired: "Expired",
+   663→  all: "All Disputes",
+   664→};
+   665→
+   666→/**
+   667→ * Scrollable table wrapper with sticky-header support and custom scrollbar.
+   668→ * Uses a raw <table> (not the Table primitive) so the <thead> can stick
+   669→ * inside this vertical-scroll viewport.
+   670→ */
+   671→function ScrollTable({ children }: { children: React.ReactNode }) {
+   672→  return (
+   673→    <div
+   674→      className={
+   675→        "max-h-[60vh] overflow-auto " +
+   676→        "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+   677→        "[&::-webkit-scrollbar-thumb]:rounded-full " +
+   678→        "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+   679→        "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+   680→      }
+   681→    >
+   682→      <table className="w-full caption-bottom text-sm">{children}</table>
+   683→    </div>
+   684→  );
+   685→}
+   686→
+   687→function DisputeActions({
+   688→  dispute,
+   689→  onRequestEvidence,
+   690→  onUploadEvidence,
+   691→  onUpdateStatus,
+   692→  onEscalateFraud,
+   693→  onNote,
+   694→}: {
+   695→  dispute: Dispute;
+   696→  onRequestEvidence: () => void;
+   697→  onUploadEvidence: () => void;
+   698→  onUpdateStatus: () => void;
+   699→  onEscalateFraud: () => void;
+   700→  onNote: () => void;
+   701→}) {
+   702→  const isTerminal =
+   703→    dispute.status === "won" || dispute.status === "lost" || dispute.status === "expired";
+   704→  return (
+   705→    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+   706→      <DropdownMenu>
+   707→        <DropdownMenuTrigger asChild>
+   708→          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+   709→            <MoreHorizontal className="size-4" />
+   710→            <span className="sr-only">Open dispute actions</span>
+   711→          </Button>
+   712→        </DropdownMenuTrigger>
+   713→        <DropdownMenuContent align="end" className="w-56">
+   714→          <DropdownMenuLabel className="text-[11px] text-muted-foreground uppercase tracking-wide">
+   715→            {dispute.id}
+   716→          </DropdownMenuLabel>
+   717→          <DropdownMenuSeparator />
+   718→          <DropdownMenuItem
+   719→            onClick={onRequestEvidence}
+   720→            disabled={dispute.status === "awaiting_evidence" || isTerminal}
+   721→          >
+   722→            <FileText className="size-4" /> Request evidence
+   723→          </DropdownMenuItem>
+   724→          <DropdownMenuItem
+   725→            onClick={onUploadEvidence}
+   726→            disabled={dispute.status === "evidence_submitted" || isTerminal}
+   727→          >
+   728→            <Upload className="size-4" /> Upload evidence
+   729→          </DropdownMenuItem>
+   730→          <DropdownMenuItem onClick={onUpdateStatus}>
+   731→            <RefreshCw className="size-4" /> Update status…
+   732→          </DropdownMenuItem>
+   733→          <DropdownMenuItem onClick={onEscalateFraud} disabled={isTerminal}>
+   734→            <ShieldAlert className="size-4" /> Escalate fraud
+   735→          </DropdownMenuItem>
+   736→          <DropdownMenuItem onClick={onNote}>
+   737→            <StickyNote className="size-4" /> Add note
+   738→          </DropdownMenuItem>
+   739→          {isTerminal && (
+   740→            <>
+   741→              <DropdownMenuSeparator />
+   742→              <div className="px-2 py-1 text-[11px] text-muted-foreground">
+   743→                Terminal status — limited actions available.
+   744→              </div>
+   745→            </>
+   746→          )}
+   747→        </DropdownMenuContent>
+   748→      </DropdownMenu>
+   749→    </div>
+   750→  );
+   751→}
+   752→

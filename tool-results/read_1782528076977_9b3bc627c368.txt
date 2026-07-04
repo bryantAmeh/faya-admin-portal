@@ -1,0 +1,1036 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Faya Admin Portal — Merchants View (spec §3)
+     5→ *
+     6→ * Lists every merchant (Faya Business app user) the current staff can see, with:
+     7→ *   - Stat cards (Total / Active / Onboarding / Restricted / Suspended)
+     8→ *   - Search + multi-filters (country, KYB status, account status, risk category)
+     9→ *   - Sortable table with all key fields
+    10→ *   - Row click → detail Sheet (business profile, owner, contact, KYB,
+    11→ *     platforms, terminal stats, tx stats, settlement, notes)
+    12→ *   - Row actions dropdown:
+    13→ *       View profile · Approve KYB · Reject KYB · Restrict · Suspend (confirm) ·
+    14→ *       Reactivate · Add note
+    15→ *
+    16→ * Scope: getVisibleMerchants(staff, countries, merchants) + an optional Region filter.
+    17→ * All mutations flow through adminData.updateMerchant + logAudit("merchant.*").
+    18→ *
+    19→ * Accent: emerald (no indigo/blue primary).
+    20→ */
+    21→import { useMemo, useState } from "react";
+    22→import {
+    23→  Store,
+    24→  Search,
+    25→  Filter,
+    26→  MoreHorizontal,
+    27→  Eye,
+    28→  Ban,
+    29→  PauseCircle,
+    30→  PlayCircle,
+    31→  StickyNote,
+    32→  ShieldCheck,
+    33→  Check,
+    34→  X,
+    35→  Layers,
+    36→  Smartphone,
+    37→  Mail,
+    38→  Phone,
+    39→  MapPin,
+    40→  Building2,
+    41→  User,
+    42→  Hash,
+    43→  Activity,
+    44→  TrendingUp,
+    45→  Info,
+    46→  CreditCard,
+    47→} from "lucide-react";
+    48→import { toast } from "sonner";
+    49→
+    50→import { ViewHeader, ViewContainer, StatCard, EmptyState } from "@/components/portal/view-helpers";
+    51→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    52→import { Badge } from "@/components/ui/badge";
+    53→import { Button } from "@/components/ui/button";
+    54→import { Input } from "@/components/ui/input";
+    55→import {
+    56→  TableBody,
+    57→  TableCell,
+    58→  TableHead,
+    59→  TableHeader,
+    60→  TableRow,
+    61→} from "@/components/ui/table";
+    62→import {
+    63→  Select,
+    64→  SelectContent,
+    65→  SelectItem,
+    66→  SelectTrigger,
+    67→  SelectValue,
+    68→} from "@/components/ui/select";
+    69→import {
+    70→  Sheet,
+    71→  SheetContent,
+    72→  SheetDescription,
+    73→  SheetFooter,
+    74→  SheetHeader,
+    75→  SheetTitle,
+    76→} from "@/components/ui/sheet";
+    77→import {
+    78→  AlertDialog,
+    79→  AlertDialogAction,
+    80→  AlertDialogCancel,
+    81→  AlertDialogContent,
+    82→  AlertDialogDescription,
+    83→  AlertDialogFooter,
+    84→  AlertDialogHeader,
+    85→  AlertDialogTitle,
+    86→} from "@/components/ui/alert-dialog";
+    87→import {
+    88→  DropdownMenu,
+    89→  DropdownMenuContent,
+    90→  DropdownMenuItem,
+    91→  DropdownMenuLabel,
+    92→  DropdownMenuSeparator,
+    93→  DropdownMenuTrigger,
+    94→} from "@/components/ui/dropdown-menu";
+    95→import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+    96→
+    97→import { useAuth } from "@/hooks/use-auth";
+    98→import { adminData, logAudit } from "@/lib/admin-data";
+    99→import {
+   100→  getVisibleMerchants,
+   101→  getVisibleCountries,
+   102→  getVisibleRegions,
+   103→  getScopeLabel,
+   104→} from "@/lib/access-scope";
+   105→import {
+   106→  formatCurrency,
+   107→  formatNumber,
+   108→  formatCompact,
+   109→  formatDateTime,
+   110→  timeAgo,
+   111→  statusBadge,
+   112→} from "@/lib/formatters";
+   113→import { PLATFORM_LABELS } from "@/lib/types";
+   114→import type {
+   115→  Merchant,
+   116→  CountryConfig,
+   117→  MerchantStatus,
+   118→  KybStatus,
+   119→  RiskLevel,
+   120→  PlatformKey,
+   121→} from "@/lib/types";
+   122→import { cn } from "@/lib/utils";
+   123→
+   124→interface MerchantsViewProps {
+   125→  merchants: Merchant[];
+   126→  countries: CountryConfig[];
+   127→}
+   128→
+   129→/* ----------------------------- Style tables ----------------------------- */
+   130→
+   131→const MERCHANT_STATUS_STYLES: Record<MerchantStatus, { label: string; className: string }> = {
+   132→  onboarding: { label: "Onboarding", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
+   133→  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" },
+   134→  restricted: { label: "Restricted", className: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+   135→  suspended: { label: "Suspended", className: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" },
+   136→  closed: { label: "Closed", className: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400" },
+   137→};
+   138→
+   139→const KYB_STATUS_OPTIONS = [
+   140→  { value: "all", label: "All KYB statuses" },
+   141→  { value: "pending", label: "Pending" },
+   142→  { value: "in_review", label: "In Review" },
+   143→  { value: "approved", label: "Approved" },
+   144→  { value: "rejected", label: "Rejected" },
+   145→  { value: "escalated", label: "Escalated" },
+   146→] as const;
+   147→
+   148→const ACCOUNT_STATUS_OPTIONS = [
+   149→  { value: "all", label: "All account statuses" },
+   150→  { value: "onboarding", label: "Onboarding" },
+   151→  { value: "active", label: "Active" },
+   152→  { value: "restricted", label: "Restricted" },
+   153→  { value: "suspended", label: "Suspended" },
+   154→  { value: "closed", label: "Closed" },
+   155→] as const;
+   156→
+   157→const RISK_CATEGORY_OPTIONS = [
+   158→  { value: "all", label: "All risk categories" },
+   159→  { value: "low", label: "Low" },
+   160→  { value: "medium", label: "Medium" },
+   161→  { value: "high", label: "High" },
+   162→  { value: "critical", label: "Critical" },
+   163→] as const;
+   164→
+   165→/* ============================ MerchantsView ============================ */
+   166→
+   167→export function MerchantsView({ merchants, countries }: MerchantsViewProps) {
+   168→  const { staff: currentStaff } = useAuth();
+   169→
+   170→  /* -------- Scope: visible merchants + visible regions/countries -------- */
+   171→  const visibleRegions = useMemo(
+   172→    () => getVisibleRegions(currentStaff, countries),
+   173→    [currentStaff, countries],
+   174→  );
+   175→  const scopedCountries = useMemo(
+   176→    () => getVisibleCountries(currentStaff, countries),
+   177→    [currentStaff, countries],
+   178→  );
+   179→
+   180→  const [selectedRegion, setSelectedRegion] = useState<string>("all");
+   181→
+   182→  const regionCountries = useMemo(() => {
+   183→    if (selectedRegion === "all") return scopedCountries;
+   184→    return scopedCountries.filter((c) => c.region === selectedRegion);
+   185→  }, [scopedCountries, selectedRegion]);
+   186→
+   187→  const regionCountryCodes = useMemo(
+   188→    () => new Set(regionCountries.map((c) => c.countryCode)),
+   189→    [regionCountries],
+   190→  );
+   191→
+   192→  // 1) Staff scope, 2) region filter.
+   193→  const visibleMerchants = useMemo(() => {
+   194→    const scoped = getVisibleMerchants(currentStaff, countries, merchants);
+   195→    if (selectedRegion === "all") return scoped;
+   196→    return scoped.filter((m) => regionCountryCodes.has(m.countryCode));
+   197→  }, [currentStaff, countries, merchants, selectedRegion, regionCountryCodes]);
+   198→
+   199→  /* ------------------------------ Filters ------------------------------ */
+   200→  const [search, setSearch] = useState("");
+   201→  const [countryFilter, setCountryFilter] = useState<string>("all");
+   202→  const [kybStatusFilter, setKybStatusFilter] = useState<string>("all");
+   203→  const [accountStatusFilter, setAccountStatusFilter] = useState<string>("all");
+   204→  const [riskFilter, setRiskFilter] = useState<string>("all");
+   205→
+   206→  const filteredMerchants = useMemo(() => {
+   207→    let list = visibleMerchants;
+   208→    if (countryFilter !== "all") list = list.filter((m) => m.countryCode === countryFilter);
+   209→    if (kybStatusFilter !== "all") list = list.filter((m) => m.kybStatus === kybStatusFilter);
+   210→    if (accountStatusFilter !== "all") list = list.filter((m) => m.status === accountStatusFilter);
+   211→    if (riskFilter !== "all") list = list.filter((m) => m.riskCategory === riskFilter);
+   212→    if (search.trim()) {
+   213→      const q = search.trim().toLowerCase();
+   214→      list = list.filter((m) =>
+   215→        m.legalName.toLowerCase().includes(q) ||
+   216→        m.tradingName.toLowerCase().includes(q) ||
+   217→        m.merchantCode.toLowerCase().includes(q) ||
+   218→        m.ownerName.toLowerCase().includes(q),
+   219→      );
+   220→    }
+   221→    return list;
+   222→  }, [visibleMerchants, countryFilter, kybStatusFilter, accountStatusFilter, riskFilter, search]);
+   223→
+   224→  /* ------------------------------ Stat cards --------------------------- */
+   225→  const stats = useMemo(() => {
+   226→    const acc = {
+   227→      total: visibleMerchants.length,
+   228→      active: 0,
+   229→      onboarding: 0,
+   230→      restricted: 0,
+   231→      suspended: 0,
+   232→    };
+   233→    for (const m of visibleMerchants) {
+   234→      if (m.status === "active") acc.active += 1;
+   235→      else if (m.status === "onboarding") acc.onboarding += 1;
+   236→      else if (m.status === "restricted") acc.restricted += 1;
+   237→      else if (m.status === "suspended") acc.suspended += 1;
+   238→    }
+   239→    return acc;
+   240→  }, [visibleMerchants]);
+   241→
+   242→  /* --------------------- Detail sheet + suspend ----------------------- */
+   243→  const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
+   244→  const [suspendTarget, setSuspendTarget] = useState<Merchant | null>(null);
+   245→
+   246→  /* ----------------------------- Audit actor --------------------------- */
+   247→  const actor = useMemo(() => {
+   248→    if (!currentStaff) return null;
+   249→    return {
+   250→      staffId: currentStaff.id,
+   251→      staffName: `${currentStaff.firstName} ${currentStaff.lastName}`,
+   252→      department: currentStaff.departmentId,
+   253→      role: currentStaff.roleId,
+   254→    };
+   255→  }, [currentStaff]);
+   256→
+   257→  /* ------------------------------ Mutations ---------------------------- */
+   258→  function approveKyb(m: Merchant) {
+   259→    if (!actor) return;
+   260→    adminData.updateMerchant(m.id, {
+   261→      kybStatus: "approved",
+   262→      status: "active",
+   263→      updatedAt: Date.now(),
+   264→    });
+   265→    logAudit(actor, "merchant.kyb_approve", "merchant", m.id, {
+   266→      countryCode: m.countryCode,
+   267→      beforeValue: `${m.kybStatus} / ${m.status}`,
+   268→      afterValue: "approved / active",
+   269→    });
+   270→    toast.success(`KYB approved: ${m.tradingName}`, {
+   271→      description: `${m.merchantCode} · merchant activated. Mirrored to Faya Business app in real-time.`,
+   272→    });
+   273→    if (selectedMerchant?.id === m.id) {
+   274→      setSelectedMerchant({ ...m, kybStatus: "approved", status: "active", updatedAt: Date.now() });
+   275→    }
+   276→  }
+   277→
+   278→  function rejectKyb(m: Merchant) {
+   279→    if (!actor) return;
+   280→    adminData.updateMerchant(m.id, {
+   281→      kybStatus: "rejected",
+   282→      status: "restricted",
+   283→      updatedAt: Date.now(),
+   284→    });
+   285→    logAudit(actor, "merchant.kyb_reject", "merchant", m.id, {
+   286→      countryCode: m.countryCode,
+   287→      beforeValue: `${m.kybStatus} / ${m.status}`,
+   288→      afterValue: "rejected / restricted",
+   289→    });
+   290→    toast.error(`KYB rejected: ${m.tradingName}`, {
+   291→      description: `${m.merchantCode} · merchant restricted. Mirrored to Faya Business app in real-time.`,
+   292→    });
+   293→    if (selectedMerchant?.id === m.id) {
+   294→      setSelectedMerchant({ ...m, kybStatus: "rejected", status: "restricted", updatedAt: Date.now() });
+   295→    }
+   296→  }
+   297→
+   298→  function restrictMerchant(m: Merchant) {
+   299→    if (!actor) return;
+   300→    adminData.updateMerchant(m.id, { status: "restricted", updatedAt: Date.now() });
+   301→    logAudit(actor, "merchant.restrict", "merchant", m.id, {
+   302→      countryCode: m.countryCode,
+   303→      beforeValue: m.status,
+   304→      afterValue: "restricted",
+   305→    });
+   306→    toast.warning(`Restricted ${m.tradingName}`, {
+   307→      description: `${m.merchantCode} · settlements paused. Mirrored to Faya Business app in real-time.`,
+   308→    });
+   309→    if (selectedMerchant?.id === m.id) {
+   310→      setSelectedMerchant({ ...m, status: "restricted", updatedAt: Date.now() });
+   311→    }
+   312→  }
+   313→
+   314→  function suspendMerchant(m: Merchant) {
+   315→    if (!actor) return;
+   316→    adminData.updateMerchant(m.id, { status: "suspended", updatedAt: Date.now() });
+   317→    logAudit(actor, "merchant.suspend", "merchant", m.id, {
+   318→      countryCode: m.countryCode,
+   319→      beforeValue: m.status,
+   320→      afterValue: "suspended",
+   321→      reason: "Manual suspension by admin",
+   322→    });
+   323→    toast.error(`Suspended ${m.tradingName}`, {
+   324→      description: `${m.merchantCode} · login + settlements blocked. Mirrored to Faya Business app in real-time.`,
+   325→    });
+   326→    if (selectedMerchant?.id === m.id) {
+   327→      setSelectedMerchant({ ...m, status: "suspended", updatedAt: Date.now() });
+   328→    }
+   329→  }
+   330→
+   331→  function reactivateMerchant(m: Merchant) {
+   332→    if (!actor) return;
+   333→    adminData.updateMerchant(m.id, { status: "active", updatedAt: Date.now() });
+   334→    logAudit(actor, "merchant.reactivate", "merchant", m.id, {
+   335→      countryCode: m.countryCode,
+   336→      beforeValue: m.status,
+   337→      afterValue: "active",
+   338→    });
+   339→    toast.success(`Reactivated ${m.tradingName}`, {
+   340→      description: `${m.merchantCode} · full access restored. Mirrored to Faya Business app in real-time.`,
+   341→    });
+   342→    if (selectedMerchant?.id === m.id) {
+   343→      setSelectedMerchant({ ...m, status: "active", updatedAt: Date.now() });
+   344→    }
+   345→  }
+   346→
+   347→  function addNote(m: Merchant) {
+   348→    if (!actor) return;
+   349→    logAudit(actor, "merchant.note", "merchant", m.id, {
+   350→      countryCode: m.countryCode,
+   351→    });
+   352→    toast.info(`Note composer opened for ${m.tradingName}`, {
+   353→      description: `${m.merchantCode} · quick-note shortcut logged in audit trail.`,
+   354→    });
+   355→  }
+   356→
+   357→  /* --------------------------- Lookups/helpers ------------------------- */
+   358→  function countryName(code: string): string {
+   359→    return countries.find((c) => c.countryCode === code)?.countryName ?? code;
+   360→  }
+   361→
+   362→  function merchantStatusBadge(status: MerchantStatus) {
+   363→    const s = MERCHANT_STATUS_STYLES[status] ?? { label: status, className: "bg-slate-100 text-slate-700" };
+   364→    return (
+   365→      <Badge variant="secondary" className={cn("text-[10px]", s.className)}>
+   366→        {s.label}
+   367→      </Badge>
+   368→    );
+   369→  }
+   370→
+   371→  function kybStatusBadge(status: KybStatus) {
+   372→    const b = statusBadge("kyb", status);
+   373→    return (
+   374→      <Badge variant="secondary" className={cn("text-[10px]", b.className)}>
+   375→        {b.label}
+   376→      </Badge>
+   377→    );
+   378→  }
+   379→
+   380→  function riskCategoryBadge(cat: RiskLevel) {
+   381→    const b = statusBadge("risk", cat);
+   382→    return (
+   383→      <Badge variant="secondary" className={cn("text-[10px] capitalize", b.className)}>
+   384→        {b.label}
+   385→      </Badge>
+   386→    );
+   387→  }
+   388→
+   389→  function platformChips(platforms: PlatformKey[]) {
+   390→    if (!platforms || platforms.length === 0) {
+   391→      return <span className="text-xs text-muted-foreground">—</span>;
+   392→    }
+   393→    return (
+   394→      <div className="flex flex-wrap gap-1">
+   395→        {platforms.map((p) => (
+   396→          <Badge key={p} variant="outline" className="text-[10px] font-normal px-1.5 py-0">
+   397→            {PLATFORM_LABELS[p].label}
+   398→          </Badge>
+   399→        ))}
+   400→      </div>
+   401→    );
+   402→  }
+   403→
+   404→  /* ------------------------------ Render ------------------------------- */
+   405→  return (
+   406→    <>
+   407→      <ViewHeader
+   408→        title="Merchants"
+   409→        description={`Faya Business merchants — KYB, terminals, settlements, chargebacks. Scope: ${getScopeLabel(currentStaff)}`}
+   410→        icon={Store}
+   411→        actions={
+   412→          <>
+   413→            {visibleRegions.length > 1 && (
+   414→              <Select value={selectedRegion} onValueChange={setSelectedRegion}>
+   415→                <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   416→                  <Filter className="size-3 mr-1 text-emerald-600" />
+   417→                  <SelectValue placeholder="Region" />
+   418→                </SelectTrigger>
+   419→                <SelectContent>
+   420→                  <SelectItem value="all">All regions</SelectItem>
+   421→                  {visibleRegions.map((r) => (
+   422→                    <SelectItem key={r} value={r}>
+   423→                      {r}
+   424→                    </SelectItem>
+   425→                  ))}
+   426→                </SelectContent>
+   427→              </Select>
+   428→            )}
+   429→          </>
+   430→        }
+   431→      />
+   432→      <ViewContainer>
+   433→        {/* Live-sync banner */}
+   434→        <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20 p-3 flex items-start gap-2 text-xs">
+   435→          <Info className="size-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+   436→          <div className="text-emerald-900 dark:text-emerald-200 leading-relaxed">
+   437→            <span className="font-medium">Live entity sync:</span> KYB approvals/restrictions and
+   438→            status changes flow to the Faya Business merchant app in real-time via the shared
+   439→            Firestore database. Settlements pause immediately on restrict/suspend.
+   440→          </div>
+   441→        </div>
+   442→
+   443→        {/* Stat cards */}
+   444→        <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+   445→          <StatCard label="Total Merchants" value={formatNumber(stats.total)} hint="across visible countries" icon={Store} tone="info" />
+   446→          <StatCard label="Active" value={formatNumber(stats.active)} hint="accepting payments" icon={ShieldCheck} tone="success" />
+   447→          <StatCard label="Onboarding" value={formatNumber(stats.onboarding)} hint="KYB in progress" icon={Building2} tone="warning" />
+   448→          <StatCard label="Restricted" value={formatNumber(stats.restricted)} hint="settlements paused" icon={Ban} tone="warning" />
+   449→          <StatCard label="Suspended" value={formatNumber(stats.suspended)} hint="login blocked" icon={PauseCircle} tone="danger" />
+   450→        </div>
+   451→
+   452→        {/* Merchant table card */}
+   453→        <Card>
+   454→          <CardHeader className="pb-3">
+   455→            <CardTitle className="text-sm flex items-center gap-2">
+   456→              <Store className="size-4 text-emerald-600" />
+   457→              Merchants
+   458→              <Badge variant="secondary" className="text-[10px]">
+   459→                {formatNumber(filteredMerchants.length)}
+   460→              </Badge>
+   461→            </CardTitle>
+   462→            <div className="flex flex-wrap items-center gap-2 pt-1">
+   463→              <div className="relative">
+   464→                <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+   465→                <Input
+   466→                  placeholder="Search trading, legal, code, owner..."
+   467→                  value={search}
+   468→                  onChange={(e) => setSearch(e.target.value)}
+   469→                  className="pl-7 h-8 w-72 text-xs"
+   470→                />
+   471→              </div>
+   472→              <Select value={countryFilter} onValueChange={setCountryFilter}>
+   473→                <SelectTrigger size="sm" className="w-44 text-xs h-8">
+   474→                  <Filter className="size-3 mr-1 text-muted-foreground" />
+   475→                  <SelectValue placeholder="Country" />
+   476→                </SelectTrigger>
+   477→                <SelectContent>
+   478→                  <SelectItem value="all">All countries</SelectItem>
+   479→                  {regionCountries.map((c) => (
+   480→                    <SelectItem key={c.countryCode} value={c.countryCode}>
+   481→                      {c.countryCode} · {c.countryName}
+   482→                    </SelectItem>
+   483→                  ))}
+   484→                </SelectContent>
+   485→              </Select>
+   486→              <Select value={kybStatusFilter} onValueChange={setKybStatusFilter}>
+   487→                <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   488→                  <SelectValue placeholder="KYB status" />
+   489→                </SelectTrigger>
+   490→                <SelectContent>
+   491→                  {KYB_STATUS_OPTIONS.map((o) => (
+   492→                    <SelectItem key={o.value} value={o.value}>
+   493→                      {o.label}
+   494→                    </SelectItem>
+   495→                  ))}
+   496→                </SelectContent>
+   497→              </Select>
+   498→              <Select value={accountStatusFilter} onValueChange={setAccountStatusFilter}>
+   499→                <SelectTrigger size="sm" className="w-40 text-xs h-8">
+   500→                  <SelectValue placeholder="Account status" />
+   501→                </SelectTrigger>
+   502→                <SelectContent>
+   503→                  {ACCOUNT_STATUS_OPTIONS.map((o) => (
+   504→                    <SelectItem key={o.value} value={o.value}>
+   505→                      {o.label}
+   506→                    </SelectItem>
+   507→                  ))}
+   508→                </SelectContent>
+   509→              </Select>
+   510→              <Select value={riskFilter} onValueChange={setRiskFilter}>
+   511→                <SelectTrigger size="sm" className="w-36 text-xs h-8">
+   512→                  <SelectValue placeholder="Risk category" />
+   513→                </SelectTrigger>
+   514→                <SelectContent>
+   515→                  {RISK_CATEGORY_OPTIONS.map((o) => (
+   516→                    <SelectItem key={o.value} value={o.value}>
+   517→                      {o.label}
+   518→                    </SelectItem>
+   519→                  ))}
+   520→                </SelectContent>
+   521→              </Select>
+   522→              {(search ||
+   523→                countryFilter !== "all" ||
+   524→                kybStatusFilter !== "all" ||
+   525→                accountStatusFilter !== "all" ||
+   526→                riskFilter !== "all") && (
+   527→                <Button
+   528→                  variant="ghost"
+   529→                  size="sm"
+   530→                  className="h-8 text-xs text-muted-foreground"
+   531→                  onClick={() => {
+   532→                    setSearch("");
+   533→                    setCountryFilter("all");
+   534→                    setKybStatusFilter("all");
+   535→                    setAccountStatusFilter("all");
+   536→                    setRiskFilter("all");
+   537→                  }}
+   538→                >
+   539→                  Clear filters
+   540→                </Button>
+   541→              )}
+   542→            </div>
+   543→          </CardHeader>
+   544→          <CardContent className="p-0">
+   545→            {filteredMerchants.length === 0 ? (
+   546→              <EmptyState
+   547→                icon={Store}
+   548→                title="No merchants match"
+   549→                description="Adjust the filters above or expand your country/region access."
+   550→              />
+   551→            ) : (
+   552→              <ScrollTable>
+   553→                <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">
+   554→                  <TableRow>
+   555→                    <TableHead className="pl-4">Merchant Code</TableHead>
+   556→                    <TableHead>Trading Name</TableHead>
+   557→                    <TableHead className="hidden lg:table-cell">Legal Name</TableHead>
+   558→                    <TableHead>Country</TableHead>
+   559→                    <TableHead className="hidden md:table-cell">Business Type</TableHead>
+   560→                    <TableHead>KYB</TableHead>
+   561→                    <TableHead>Risk</TableHead>
+   562→                    <TableHead>Account</TableHead>
+   563→                    <TableHead className="hidden xl:table-cell text-right">Terminals</TableHead>
+   564→                    <TableHead className="hidden xl:table-cell text-right">Phone POS</TableHead>
+   565→                    <TableHead className="hidden lg:table-cell text-right">Monthly Vol.</TableHead>
+   566→                    <TableHead className="text-right pr-4">Actions</TableHead>
+   567→                  </TableRow>
+   568→                </TableHeader>
+   569→                <TableBody>
+   570→                  {filteredMerchants.map((m) => {
+   571→                    return (
+   572→                      <TableRow
+   573→                        key={m.id}
+   574→                        className="cursor-pointer"
+   575→                        onClick={() => setSelectedMerchant(m)}
+   576→                      >
+   577→                        <TableCell className="pl-4 font-mono text-xs">{m.merchantCode}</TableCell>
+   578→                        <TableCell className="font-medium">
+   579→                          <div className="flex flex-col gap-0.5">
+   580→                            <span>{m.tradingName}</span>
+   581→                            <span className="text-[10px] text-muted-foreground lg:hidden truncate max-w-[180px]">{m.legalName}</span>
+   582→                          </div>
+   583→                        </TableCell>
+   584→                        <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">{m.legalName}</TableCell>
+   585→                        <TableCell className="text-xs">
+   586→                          <span className="font-mono">{m.countryCode}</span>
+   587→                        </TableCell>
+   588→                        <TableCell className="hidden md:table-cell text-xs capitalize">
+   589→                          {m.businessType.replace(/_/g, " ")}
+   590→                        </TableCell>
+   591→                        <TableCell>{kybStatusBadge(m.kybStatus)}</TableCell>
+   592→                        <TableCell>{riskCategoryBadge(m.riskCategory)}</TableCell>
+   593→                        <TableCell>{merchantStatusBadge(m.status)}</TableCell>
+   594→                        <TableCell className="hidden xl:table-cell text-xs tabular-nums text-right">
+   595→                          {formatNumber(m.terminalCount)}
+   596→                        </TableCell>
+   597→                        <TableCell className="hidden xl:table-cell text-xs tabular-nums text-right">
+   598→                          {formatNumber(m.phonePosCount)}
+   599→                        </TableCell>
+   600→                        <TableCell className="hidden lg:table-cell text-xs tabular-nums text-right">
+   601→                          {formatCurrency(m.monthlyVolume, m.settlementCurrency)}
+   602→                        </TableCell>
+   603→                        <TableCell className="text-right pr-4">
+   604→                          <DropdownMenu>
+   605→                            <DropdownMenuTrigger asChild>
+   606→                              <Button
+   607→                                variant="ghost"
+   608→                                size="icon"
+   609→                                className="size-8 shrink-0"
+   610→                                onClick={(e) => e.stopPropagation()}
+   611→                                aria-label={`Actions for ${m.tradingName}`}
+   612→                              >
+   613→                                <MoreHorizontal className="size-4" />
+   614→                              </Button>
+   615→                            </DropdownMenuTrigger>
+   616→                            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+   617→                              <DropdownMenuLabel>{m.tradingName}</DropdownMenuLabel>
+   618→                              <DropdownMenuSeparator />
+   619→                              <DropdownMenuItem onClick={() => setSelectedMerchant(m)}>
+   620→                                <Eye className="size-4" /> View profile
+   621→                              </DropdownMenuItem>
+   622→                              {(m.kybStatus === "pending" || m.kybStatus === "in_review") && (
+   623→                                <>
+   624→                                  <DropdownMenuSeparator />
+   625→                                  <DropdownMenuItem
+   626→                                    onClick={() => approveKyb(m)}
+   627→                                    className="text-emerald-700 focus:text-emerald-800 dark:text-emerald-400"
+   628→                                  >
+   629→                                    <Check className="size-4" /> Approve KYB
+   630→                                  </DropdownMenuItem>
+   631→                                  <DropdownMenuItem
+   632→                                    variant="destructive"
+   633→                                    onClick={() => rejectKyb(m)}
+   634→                                  >
+   635→                                    <X className="size-4" /> Reject KYB
+   636→                                  </DropdownMenuItem>
+   637→                                </>
+   638→                              )}
+   639→                              <DropdownMenuSeparator />
+   640→                              {(m.status === "active" || m.status === "onboarding") && (
+   641→                                <DropdownMenuItem
+   642→                                  variant="destructive"
+   643→                                  onClick={() => restrictMerchant(m)}
+   644→                                >
+   645→                                  <Ban className="size-4" /> Restrict
+   646→                                </DropdownMenuItem>
+   647→                              )}
+   648→                              {(m.status === "active" || m.status === "onboarding" || m.status === "restricted") && (
+   649→                                <DropdownMenuItem
+   650→                                  variant="destructive"
+   651→                                  onClick={() => setSuspendTarget(m)}
+   652→                                >
+   653→                                  <PauseCircle className="size-4" /> Suspend
+   654→                                </DropdownMenuItem>
+   655→                              )}
+   656→                              {(m.status === "restricted" || m.status === "suspended") && (
+   657→                                <DropdownMenuItem
+   658→                                  onClick={() => reactivateMerchant(m)}
+   659→                                  className="text-emerald-700 focus:text-emerald-800 dark:text-emerald-400"
+   660→                                >
+   661→                                  <PlayCircle className="size-4" /> Reactivate
+   662→                                </DropdownMenuItem>
+   663→                              )}
+   664→                              <DropdownMenuItem onClick={() => addNote(m)}>
+   665→                                <StickyNote className="size-4" /> Add note
+   666→                              </DropdownMenuItem>
+   667→                            </DropdownMenuContent>
+   668→                          </DropdownMenu>
+   669→                        </TableCell>
+   670→                      </TableRow>
+   671→                    );
+   672→                  })}
+   673→                </TableBody>
+   674→              </ScrollTable>
+   675→            )}
+   676→          </CardContent>
+   677→        </Card>
+   678→      </ViewContainer>
+   679→
+   680→      {/* ------------------- Merchant detail Sheet ------------------- */}
+   681→      <Sheet open={!!selectedMerchant} onOpenChange={(o) => !o && setSelectedMerchant(null)}>
+   682→        <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col">
+   683→          {selectedMerchant && (
+   684→            <MerchantDetailSheet
+   685→              merchant={selectedMerchant}
+   686→              countryName={countryName}
+   687→              merchantStatusBadge={merchantStatusBadge}
+   688→              kybStatusBadge={kybStatusBadge}
+   689→              riskCategoryBadge={riskCategoryBadge}
+   690→              platformChips={platformChips}
+   691→              onClose={() => setSelectedMerchant(null)}
+   692→              onApproveKyb={() => approveKyb(selectedMerchant)}
+   693→              onRejectKyb={() => rejectKyb(selectedMerchant)}
+   694→              onRestrict={() => restrictMerchant(selectedMerchant)}
+   695→              onSuspend={() => setSuspendTarget(selectedMerchant)}
+   696→              onReactivate={() => reactivateMerchant(selectedMerchant)}
+   697→              onAddNote={() => addNote(selectedMerchant)}
+   698→            />
+   699→          )}
+   700→        </SheetContent>
+   701→      </Sheet>
+   702→
+   703→      {/* ----------------- Suspend confirmation ----------------- */}
+   704→      <AlertDialog open={!!suspendTarget} onOpenChange={(o) => !o && setSuspendTarget(null)}>
+   705→        <AlertDialogContent>
+   706→          <AlertDialogHeader>
+   707→            <AlertDialogTitle>Suspend merchant?</AlertDialogTitle>
+   708→            <AlertDialogDescription>
+   709→              You are about to suspend <strong>{suspendTarget?.tradingName}</strong>{" "}
+   710→              ({suspendTarget?.merchantCode}). This blocks merchant login to the Faya Business app,
+   711→              pauses all pending settlements, and deactivates terminal acceptance. The merchant
+   712→              will be notified. This action is recorded in the audit log and can be reversed via
+   713→              Reactivate.
+   714→            </AlertDialogDescription>
+   715→          </AlertDialogHeader>
+   716→          <AlertDialogFooter>
+   717→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   718→            <AlertDialogAction
+   719→              className="bg-red-600 hover:bg-red-700 text-white"
+   720→              onClick={() => {
+   721→                if (suspendTarget) suspendMerchant(suspendTarget);
+   722→                setSuspendTarget(null);
+   723→              }}
+   724→            >
+   725→              <PauseCircle className="size-4" /> Suspend merchant
+   726→            </AlertDialogAction>
+   727→          </AlertDialogFooter>
+   728→        </AlertDialogContent>
+   729→      </AlertDialog>
+   730→
+   731→      <SonnerToaster richColors closeButton position="bottom-right" />
+   732→    </>
+   733→  );
+   734→}
+   735→
+   736→/* ============================ Sub-components ============================ */
+   737→
+   738→/**
+   739→ * Scrollable table wrapper with sticky-header support and custom scrollbar.
+   740→ * Uses a raw <table> so the <thead> can stick to this outer vertical scroll
+   741→ * viewport instead of the Table primitive's inner overflow-x div.
+   742→ */
+   743→function ScrollTable({ children }: { children: React.ReactNode }) {
+   744→  return (
+   745→    <div
+   746→      className={
+   747→        "max-h-[60vh] overflow-auto " +
+   748→        "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent " +
+   749→        "[&::-webkit-scrollbar-thumb]:rounded-full " +
+   750→        "[&::-webkit-scrollbar-thumb]:bg-slate-300 " +
+   751→        "dark:[&::-webkit-scrollbar-thumb]:bg-slate-700"
+   752→      }
+   753→    >
+   754→      <table className="w-full caption-bottom text-sm">{children}</table>
+   755→    </div>
+   756→  );
+   757→}
+   758→
+   759→function DetailRow({
+   760→  label,
+   761→  value,
+   762→  icon: Icon,
+   763→}: {
+   764→  label: string;
+   765→  value: React.ReactNode;
+   766→  icon?: React.ComponentType<{ className?: string }>;
+   767→}) {
+   768→  return (
+   769→    <div className="flex items-start justify-between gap-3 py-1.5">
+   770→      <span className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+   771→        {Icon && <Icon className="size-3" />}
+   772→        {label}
+   773→      </span>
+   774→      <span className="text-sm text-right min-w-0">{value}</span>
+   775→    </div>
+   776→  );
+   777→}
+   778→
+   779→function MerchantDetailSheet({
+   780→  merchant,
+   781→  countryName,
+   782→  merchantStatusBadge,
+   783→  kybStatusBadge,
+   784→  riskCategoryBadge,
+   785→  platformChips,
+   786→  onClose,
+   787→  onApproveKyb,
+   788→  onRejectKyb,
+   789→  onRestrict,
+   790→  onSuspend,
+   791→  onReactivate,
+   792→  onAddNote,
+   793→}: {
+   794→  merchant: Merchant;
+   795→  countryName: (code: string) => string;
+   796→  merchantStatusBadge: (s: MerchantStatus) => React.ReactNode;
+   797→  kybStatusBadge: (s: KybStatus) => React.ReactNode;
+   798→  riskCategoryBadge: (c: RiskLevel) => React.ReactNode;
+   799→  platformChips: (p: PlatformKey[]) => React.ReactNode;
+   800→  onClose: () => void;
+   801→  onApproveKyb: () => void;
+   802→  onRejectKyb: () => void;
+   803→  onRestrict: () => void;
+   804→  onSuspend: () => void;
+   805→  onReactivate: () => void;
+   806→  onAddNote: () => void;
+   807→}) {
+   808→  const status = MERCHANT_STATUS_STYLES[merchant.status];
+   809→  const canKybAct = merchant.kybStatus === "pending" || merchant.kybStatus === "in_review";
+   810→  const canRestrict = merchant.status === "active" || merchant.status === "onboarding";
+   811→  const canSuspend = merchant.status === "active" || merchant.status === "onboarding" || merchant.status === "restricted";
+   812→  const canReactivate = merchant.status === "restricted" || merchant.status === "suspended";
+   813→
+   814→  return (
+   815→    <>
+   816→      <SheetHeader>
+   817→        <SheetDescription className="text-[11px] font-mono">{merchant.merchantCode}</SheetDescription>
+   818→        <SheetTitle className="text-lg flex items-center gap-2">
+   819→          <Store className="size-5 text-emerald-600" />
+   820→          {merchant.tradingName}
+   821→        </SheetTitle>
+   822→        <div className="flex flex-wrap items-center gap-2 mt-1">
+   823→          {merchantStatusBadge(merchant.status)}
+   824→          {kybStatusBadge(merchant.kybStatus)}
+   825→          {riskCategoryBadge(merchant.riskCategory)}
+   826→          <Badge variant="outline" className="text-[10px] font-mono">
+   827→            {merchant.countryCode} · {countryName(merchant.countryCode)}
+   828→          </Badge>
+   829→        </div>
+   830→      </SheetHeader>
+   831→
+   832→      <div className="flex-1 overflow-y-auto px-4 space-y-4 text-sm">
+   833→        {/* Business profile */}
+   834→        <div>
+   835→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   836→            <Building2 className="size-3" /> Business profile
+   837→          </div>
+   838→          <div className="rounded-md border divide-y">
+   839→            <DetailRow label="Legal name" value={merchant.legalName} icon={Building2} />
+   840→            <DetailRow label="Trading name" value={merchant.tradingName} />
+   841→            <DetailRow label="Business type" value={<span className="capitalize">{merchant.businessType.replace(/_/g, " ")}</span>} />
+   842→            <DetailRow label="Industry" value={merchant.industry} />
+   843→            <DetailRow label="Merchant code" value={<span className="font-mono text-xs">{merchant.merchantCode}</span>} icon={Hash} />
+   844→          </div>
+   845→        </div>
+   846→
+   847→        {/* Owner details */}
+   848→        <div>
+   849→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   850→            <User className="size-3" /> Owner details
+   851→          </div>
+   852→          <div className="rounded-md border divide-y">
+   853→            <DetailRow label="Owner name" value={merchant.ownerName} icon={User} />
+   854→            <DetailRow label="Owner email" value={<span className="text-xs">{merchant.ownerEmail}</span>} icon={Mail} />
+   855→            <DetailRow label="Owner phone" value={<span className="text-xs">{merchant.ownerPhone}</span>} icon={Phone} />
+   856→          </div>
+   857→        </div>
+   858→
+   859→        {/* Contact */}
+   860→        <div>
+   861→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   862→            <Mail className="size-3" /> Contact
+   863→          </div>
+   864→          <div className="rounded-md border divide-y">
+   865→            <DetailRow label="Email" value={<span className="text-xs">{merchant.contactEmail}</span>} icon={Mail} />
+   866→            <DetailRow label="Phone" value={<span className="text-xs">{merchant.contactPhone}</span>} icon={Phone} />
+   867→            <DetailRow label="Address" value={<span className="text-xs">{merchant.address}</span>} icon={MapPin} />
+   868→            <DetailRow label="City" value={<span className="text-xs">{merchant.city}</span>} icon={MapPin} />
+   869→          </div>
+   870→        </div>
+   871→
+   872→        {/* KYB details */}
+   873→        <div>
+   874→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   875→            <ShieldCheck className="size-3" /> KYB details
+   876→          </div>
+   877→          <div className="rounded-md border divide-y">
+   878→            <DetailRow label="KYB status" value={kybStatusBadge(merchant.kybStatus)} />
+   879→            <DetailRow label="Risk category" value={riskCategoryBadge(merchant.riskCategory)} />
+   880→            <DetailRow
+   881→              label="Linked KYB case"
+   882→              value={
+   883→                merchant.kybCaseId ? (
+   884→                  <span className="font-mono text-xs">{merchant.kybCaseId}</span>
+   885→                ) : (
+   886→                  <span className="text-xs text-muted-foreground italic">No linked case</span>
+   887→                )
+   888→              }
+   889→              icon={Hash}
+   890→            />
+   891→          </div>
+   892→        </div>
+   893→
+   894→        {/* Platforms used */}
+   895→        <div>
+   896→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   897→            <Layers className="size-3" /> Platforms used
+   898→          </div>
+   899→          <div className="rounded-md border p-3">
+   900→            {platformChips(merchant.platforms)}
+   901→            <p className="text-[11px] text-muted-foreground mt-2">
+   902→              The merchant can accept payments on each enabled platform. Country rules (KYB, risk, settlement) apply across all of them.
+   903→            </p>
+   904→          </div>
+   905→        </div>
+   906→
+   907→        {/* Terminal stats */}
+   908→        <div>
+   909→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   910→            <Smartphone className="size-3" /> Terminal stats
+   911→          </div>
+   912→          <div className="rounded-md border divide-y">
+   913→            <DetailRow label="Physical terminals" value={<span className="tabular-nums">{formatNumber(merchant.terminalCount)}</span>} icon={Smartphone} />
+   914→            <DetailRow label="Phone POS (SoftPOS)" value={<span className="tabular-nums">{formatNumber(merchant.phonePosCount)}</span>} icon={Smartphone} />
+   915→          </div>
+   916→        </div>
+   917→
+   918→        {/* Transaction stats */}
+   919→        <div>
+   920→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   921→            <Activity className="size-3" /> Transaction stats
+   922→          </div>
+   923→          <div className="rounded-md border divide-y">
+   924→            <DetailRow label="Lifetime volume" value={<span className="tabular-nums">{formatCurrency(merchant.lifetimeVolume, merchant.settlementCurrency)}</span>} icon={TrendingUp} />
+   925→            <DetailRow label="Monthly volume" value={<span className="tabular-nums">{formatCurrency(merchant.monthlyVolume, merchant.settlementCurrency)}</span>} icon={TrendingUp} />
+   926→            <DetailRow label="Transaction count" value={<span className="tabular-nums">{formatNumber(merchant.transactionCount)}</span>} icon={Hash} />
+   927→            <DetailRow
+   928→              label="Chargeback rate"
+   929→              value={
+   930→                <Badge
+   931→                  variant="outline"
+   932→                  className={cn(
+   933→                    "text-[10px] font-semibold tabular-nums px-1.5",
+   934→                    merchant.chargebackRate >= 2.5
+   935→                      ? "text-red-700 border-red-300 bg-red-50 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800"
+   936→                      : merchant.chargebackRate >= 1
+   937→                        ? "text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800"
+   938→                        : "text-emerald-700 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800",
+   939→                  )}
+   940→                >
+   941→                  {merchant.chargebackRate.toFixed(2)}%
+   942→                </Badge>
+   943→              }
+   944→            />
+   945→            <DetailRow label="Last activity" value={<span className="text-xs">{formatDateTime(merchant.updatedAt)}</span>} icon={Activity} />
+   946→          </div>
+   947→        </div>
+   948→
+   949→        {/* Settlement info */}
+   950→        <div>
+   951→          <div className="text-xs font-medium text-muted-foreground uppercase mb-2 flex items-center gap-1">
+   952→            <CreditCard className="size-3" /> Settlement
+   953→          </div>
+   954→          <div className="rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-900/10 divide-y">
+   955→            <DetailRow label="Settlement currency" value={<span className="font-mono text-xs">{merchant.settlementCurrency}</span>} icon={CreditCard} />
+   956→          </div>
+   957→        </div>
+   958→
+   959→        {/* Notes */}
+   960→        {merchant.notes && (
+   961→          <div>
+   962→            <div className="text-xs font-medium text-muted-foreground uppercase mb-1 flex items-center gap-1">
+   963→              <StickyNote className="size-3" /> Notes
+   964→            </div>
+   965→            <p className="text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-md p-3 text-amber-900 dark:text-amber-200">
+   966→              {merchant.notes}
+   967→            </p>
+   968→          </div>
+   969→        )}
+   970→
+   971→        {/* Created / updated */}
+   972→        <div className="text-[11px] text-muted-foreground flex items-center justify-between border-t pt-2">
+   973→          <span>Created {formatDateTime(merchant.createdAt)}</span>
+   974→          <span>Updated {formatDateTime(merchant.updatedAt)}</span>
+   975→        </div>
+   976→      </div>
+   977→
+   978→      <SheetFooter className="flex flex-col gap-2 items-stretch">
+   979→        {/* KYB actions (only if pending/in_review) */}
+   980→        {canKybAct && (
+   981→          <div className="grid grid-cols-2 gap-2">
+   982→            <Button
+   983→              onClick={onApproveKyb}
+   984→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   985→            >
+   986→              <Check className="size-4" /> Approve KYB
+   987→            </Button>
+   988→            <Button onClick={onRejectKyb} variant="destructive">
+   989→              <X className="size-4" /> Reject KYB
+   990→            </Button>
+   991→          </div>
+   992→        )}
+   993→
+   994→        {/* Status actions */}
+   995→        <div className="grid grid-cols-2 gap-2">
+   996→          {canReactivate ? (
+   997→            <Button
+   998→              onClick={onReactivate}
+   999→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1000→            >
+  1001→              <PlayCircle className="size-4" /> Reactivate
+  1002→            </Button>
+  1003→          ) : (
+  1004→            <Button
+  1005→              onClick={onRestrict}
+  1006→              variant="outline"
+  1007→              className="text-orange-700 border-orange-300 hover:bg-orange-50 dark:text-orange-300 dark:border-orange-800 dark:hover:bg-orange-900/20"
+  1008→              disabled={!canRestrict}
+  1009→            >
+  1010→              <Ban className="size-4" /> Restrict
+  1011→            </Button>
+  1012→          )}
+  1013→          <Button
+  1014→            onClick={onSuspend}
+  1015→            variant="destructive"
+  1016→            disabled={!canSuspend}
+  1017→          >
+  1018→            <PauseCircle className="size-4" /> Suspend
+  1019→          </Button>
+  1020→        </div>
+  1021→        <div className="grid grid-cols-2 gap-2">
+  1022→          <Button onClick={onAddNote} variant="outline">
+  1023→            <StickyNote className="size-4" /> Add note
+  1024→          </Button>
+  1025→          <Button variant="ghost" onClick={onClose}>
+  1026→            Close
+  1027→          </Button>
+  1028→        </div>
+  1029→        <div className="text-[11px] text-muted-foreground text-center pt-1">
+  1030→          Status: <span className="font-medium">{status.label}</span> · changes mirror to Faya Business app in real-time.
+  1031→        </div>
+  1032→      </SheetFooter>
+  1033→    </>
+  1034→  );
+  1035→}
+  1036→

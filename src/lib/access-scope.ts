@@ -57,8 +57,9 @@ export function getVisibleMerchants(
   countries: CountryConfig[],
   merchants: Merchant[],
 ): Merchant[] {
+  if (isGlobalScope(staff)) return merchants;
   const codes = getVisibleCountryCodes(staff, countries);
-  return merchants.filter((m) => codes.has(m.countryCode));
+  return merchants.filter((m) => codes.has(m.countryCode || ""));
 }
 
 export function getVisibleConsumers(

@@ -1,0 +1,708 @@
+     1→/**
+     2→ * Faya Admin Portal — Firestore data access layer
+     3→ *
+     4→ * Provides typed CRUD + real-time subscriptions for all admin collections.
+     5→ * Attempts Firestore first; on permission-denied (or any access error) falls
+     6→ * back transparently to a local in-memory + localStorage store seeded from
+     7→ * the spec reference data. This means the portal works out of the box without
+     8→ * requiring Firestore security rule configuration, while still using real
+     9→ * Firebase wiring once permissions are granted.
+    10→ *
+    11→ * All collections are prefixed with `faya_admin_` to namespace within the
+    12→ * shared Firebase project (fayapay-ece98).
+    13→ */
+    14→import {
+    15→  collection,
+    16→  doc,
+    17→  getDocs,
+    18→  setDoc,
+    19→  updateDoc,
+    20→  deleteDoc,
+    21→  onSnapshot,
+    22→  query,
+    23→  orderBy,
+    24→  writeBatch,
+    25→  serverTimestamp,
+    26→  type Unsubscribe,
+    27→  type DocumentData,
+    28→  type QueryConstraint,
+    29→} from "firebase/firestore";
+    30→import { db } from "./firebase";
+    31→import { localStore, LOCAL_COLLECTION_MAP } from "./local-store";
+    32→import type {
+    33→  Department,
+    34→  Role,
+    35→  Permission,
+    36→  CountryConfig,
+    37→  AdminStaff,
+    38→  KycCase,
+    39→  KybCase,
+    40→  FraudAlert,
+    41→  Settlement,
+    42→  SupportTicket,
+    43→  Dispute,
+    44→  Terminal,
+    45→  AuditLog,
+    46→  ApprovalRequest,
+    47→  Merchant,
+    48→  Consumer,
+    49→  PosStaff,
+    50→  Card,
+    51→  Wallet,
+    52→  Transaction,
+    53→  UserDocument,
+    54→  LegalPolicy,
+    55→  AppContent,
+    56→  NotificationCampaign,
+    57→  Fee,
+    58→  Limit,
+    59→  ProviderLog,
+    60→  WebhookLog,
+    61→} from "./types";
+    62→import {
+    63→  SEED_DEPARTMENTS,
+    64→  SEED_ROLES,
+    65→  SEED_PERMISSIONS,
+    66→  SEED_COUNTRIES,
+    67→  SEED_STAFF,
+    68→  SEED_KYC_CASES,
+    69→  SEED_KYB_CASES,
+    70→  SEED_FRAUD_ALERTS,
+    71→  SEED_SETTLEMENTS,
+    72→  SEED_TICKETS,
+    73→  SEED_DISPUTES,
+    74→  SEED_TERMINALS,
+    75→  SEED_AUDIT_LOGS,
+    76→  SEED_APPROVALS,
+    77→  SEED_MERCHANTS,
+    78→  SEED_CONSUMERS,
+    79→  SEED_POS_STAFF,
+    80→  SEED_CARDS,
+    81→  SEED_WALLETS,
+    82→  SEED_TRANSACTIONS,
+    83→  SEED_DOCUMENTS,
+    84→  SEED_POLICIES,
+    85→  SEED_APP_CONTENT,
+    86→  SEED_NOTIFICATIONS,
+    87→  SEED_FEES,
+    88→  SEED_LIMITS,
+    89→  SEED_PROVIDER_LOGS,
+    90→  SEED_WEBHOOK_LOGS,
+    91→} from "./seed-data";
+    92→
+    93→const PREFIX = "faya_admin_";
+    94→
+    95→export const COLLECTIONS = {
+    96→  departments: `${PREFIX}departments`,
+    97→  roles: `${PREFIX}roles`,
+    98→  permissions: `${PREFIX}permissions`,
+    99→  staff: `${PREFIX}staff`,
+   100→  countries: `${PREFIX}countries`,
+   101→  kycCases: `${PREFIX}kyc_cases`,
+   102→  kybCases: `${PREFIX}kyb_cases`,
+   103→  fraudAlerts: `${PREFIX}fraud_alerts`,
+   104→  settlements: `${PREFIX}settlements`,
+   105→  tickets: `${PREFIX}tickets`,
+   106→  disputes: `${PREFIX}disputes`,
+   107→  terminals: `${PREFIX}terminals`,
+   108→  auditLogs: `${PREFIX}audit_logs`,
+   109→  approvals: `${PREFIX}approvals`,
+   110→  merchants: `${PREFIX}merchants`,
+   111→  consumers: `${PREFIX}consumers`,
+   112→  posStaff: `${PREFIX}pos_staff`,
+   113→  cards: `${PREFIX}cards`,
+   114→  wallets: `${PREFIX}wallets`,
+   115→  transactions: `${PREFIX}transactions`,
+   116→  documents: `${PREFIX}documents`,
+   117→  policies: `${PREFIX}policies`,
+   118→  appContent: `${PREFIX}app_content`,
+   119→  notifications: `${PREFIX}notifications`,
+   120→  fees: `${PREFIX}fees`,
+   121→  limits: `${PREFIX}limits`,
+   122→  providerLogs: `${PREFIX}provider_logs`,
+   123→  webhookLogs: `${PREFIX}webhook_logs`,
+   124→  systemSettings: `${PREFIX}system_settings`,
+   125→  meta: `${PREFIX}meta`,
+   126→} as const;
+   127→
+   128→/**
+   129→ * Tracks whether we've fallen back to local mode.
+   130→ * Once true, all subsequent operations use the local store.
+   131→ */
+   132→let useLocalMode = false;
+   133→let firestoreCheckPromise: Promise<boolean> | null = null;
+   134→
+   135→/**
+   136→ * Check whether Firestore is accessible. Returns true if Firestore works,
+   137→ * false if we should use local mode. Result is cached.
+   138→ */
+   139→async function checkFirestoreAccess(): Promise<boolean> {
+   140→  if (useLocalMode) return false;
+   141→  if (firestoreCheckPromise) return firestoreCheckPromise;
+   142→  firestoreCheckPromise = (async () => {
+   143→    const d = db();
+   144→    if (!d) {
+   145→      useLocalMode = true;
+   146→      localStore.active = true;
+   147→      return false;
+   148→    }
+   149→    try {
+   150→      // Try a tiny read — if it fails with permission-denied, fall back.
+   151→      await getDocs(collection(d, COLLECTIONS.meta));
+   152→      return true;
+   153→    } catch (e) {
+   154→      const code = (e as { code?: string })?.code ?? "";
+   155→      if (
+   156→        code === "permission-denied" ||
+   157→        code === "unavailable" ||
+   158→        code === "unimplemented" ||
+   159→        code.includes("permission")
+   160→      ) {
+   161→        console.warn(
+   162→          "[admin-data] Firestore access denied — switching to local mode. Configure Firestore security rules to enable cloud sync.",
+   163→          code,
+   164→        );
+   165→        useLocalMode = true;
+   166→        localStore.active = true;
+   167→        return false;
+   168→      }
+   169→      // Other errors — also fall back to keep the portal usable
+   170→      console.warn("[admin-data] Firestore check failed, using local mode:", code || e);
+   171→      useLocalMode = true;
+   172→      localStore.active = true;
+   173→      return false;
+   174→    }
+   175→  })();
+   176→  return firestoreCheckPromise;
+   177→}
+   178→
+   179→let seedPromise: Promise<void> | null = null;
+   180→
+   181→/**
+   182→ * Seed all reference collections if they are empty.
+   183→ * In local mode, this is a no-op (the local store seeds itself).
+   184→ */
+   185→export async function ensureSeedData(): Promise<void> {
+   186→  // Always run the access check first
+   187→  const ok = await checkFirestoreAccess();
+   188→  if (!ok) {
+   189→    // Local mode — store self-seeds from SEED_* on first read
+   190→    return;
+   191→  }
+   192→  if (seedPromise) return seedPromise;
+   193→  seedPromise = (async () => {
+   194→    try {
+   195→      const d = db();
+   196→      if (!d) return;
+   197→      const metaSnap = await getDocs(collection(d, COLLECTIONS.meta));
+   198→      const existing = metaSnap.docs.find((doc) => doc.id === "seed_status");
+   199→      if (existing?.data()?.seeded) return;
+   200→
+   201→      const seedBatch = async <T extends { id: string }>(
+   202→        colName: string,
+   203→        items: T[],
+   204→      ) => {
+   205→        const batch = writeBatch(d);
+   206→        for (const item of items) {
+   207→          const ref = doc(d, colName, item.id);
+   208→          batch.set(ref, { ...item, _serverTime: serverTimestamp() }, { merge: false });
+   209→        }
+   210→        await batch.commit();
+   211→      };
+   212→
+   213→      await seedBatch(COLLECTIONS.departments, SEED_DEPARTMENTS);
+   214→      await seedBatch(COLLECTIONS.roles, SEED_ROLES);
+   215→      await seedBatch(COLLECTIONS.permissions, SEED_PERMISSIONS);
+   216→      await seedBatch(COLLECTIONS.countries, SEED_COUNTRIES);
+   217→      await seedBatch(COLLECTIONS.staff, SEED_STAFF);
+   218→      await seedBatch(COLLECTIONS.kycCases, SEED_KYC_CASES);
+   219→      await seedBatch(COLLECTIONS.kybCases, SEED_KYB_CASES);
+   220→      await seedBatch(COLLECTIONS.fraudAlerts, SEED_FRAUD_ALERTS);
+   221→      await seedBatch(COLLECTIONS.settlements, SEED_SETTLEMENTS);
+   222→      await seedBatch(COLLECTIONS.tickets, SEED_TICKETS);
+   223→      await seedBatch(COLLECTIONS.disputes, SEED_DISPUTES);
+   224→      await seedBatch(COLLECTIONS.terminals, SEED_TERMINALS);
+   225→      await seedBatch(COLLECTIONS.auditLogs, SEED_AUDIT_LOGS);
+   226→      await seedBatch(COLLECTIONS.approvals, SEED_APPROVALS);
+   227→      await seedBatch(COLLECTIONS.merchants, SEED_MERCHANTS);
+   228→      await seedBatch(COLLECTIONS.consumers, SEED_CONSUMERS);
+   229→      await seedBatch(COLLECTIONS.posStaff, SEED_POS_STAFF);
+   230→      await seedBatch(COLLECTIONS.cards, SEED_CARDS);
+   231→      await seedBatch(COLLECTIONS.wallets, SEED_WALLETS);
+   232→      await seedBatch(COLLECTIONS.transactions, SEED_TRANSACTIONS);
+   233→      await seedBatch(COLLECTIONS.documents, SEED_DOCUMENTS);
+   234→      await seedBatch(COLLECTIONS.policies, SEED_POLICIES);
+   235→      await seedBatch(COLLECTIONS.appContent, SEED_APP_CONTENT);
+   236→      await seedBatch(COLLECTIONS.notifications, SEED_NOTIFICATIONS);
+   237→      await seedBatch(COLLECTIONS.fees, SEED_FEES);
+   238→      await seedBatch(COLLECTIONS.limits, SEED_LIMITS);
+   239→      await seedBatch(COLLECTIONS.providerLogs, SEED_PROVIDER_LOGS);
+   240→      await seedBatch(COLLECTIONS.webhookLogs, SEED_WEBHOOK_LOGS);
+   241→
+   242→      await setDoc(doc(d, COLLECTIONS.meta, "seed_status"), {
+   243→        seeded: true,
+   244→        seededAt: serverTimestamp(),
+   245→      });
+   246→    } catch (e) {
+   247→      seedPromise = null;
+   248→      console.error("[ensureSeedData] failed:", e);
+   249→      throw e;
+   250→    }
+   251→  })();
+   252→  return seedPromise;
+   253→}
+   254→
+   255→/* ----------------------------- Generic helpers ---------------------------- */
+   256→
+   257→/**
+   258→ * Subscribe to a collection with optional query constraints.
+   259→ * Falls back to local store on Firestore access failure.
+   260→ */
+   261→export function subscribe<T extends { id: string }>(
+   262→  colName: string,
+   263→  cb: (items: T[]) => void,
+   264→  ...constraints: QueryConstraint[]
+   265→): Unsubscribe {
+   266→  const localCol = LOCAL_COLLECTION_MAP[colName];
+   267→  if (!localCol) {
+   268→    console.error(`[subscribe] unknown collection: ${colName}`);
+   269→    return () => {};
+   270→  }
+   271→
+   272→  // If we already know we're in local mode, subscribe locally immediately
+   273→  if (useLocalMode) {
+   274→    return localStore.subscribe<T>(localCol, cb);
+   275→  }
+   276→
+   277→  // Otherwise try Firestore; on error, switch to local
+   278→  let unsub: Unsubscribe | null = null;
+   279→  let switchedToLocal = false;
+   280→
+   281→  const d = db();
+   282→  if (!d) {
+   283→    useLocalMode = true;
+   284→    localStore.active = true;
+   285→    return localStore.subscribe<T>(localCol, cb);
+   286→  }
+   287→
+   288→  try {
+   289→    const q =
+   290→      constraints.length
+   291→        ? query(collection(d, colName), ...constraints)
+   292→        : collection(d, colName);
+   293→    unsub = onSnapshot(
+   294→      q,
+   295→      (snap) => {
+   296→        const items = snap.docs.map((d) => {
+   297→          const data = d.data() as DocumentData;
+   298→          const { _serverTime, ...rest } = data as Record<string, unknown>;
+   299→          return { ...(rest as T), id: (rest.id as string) ?? d.id };
+   300→        });
+   301→        cb(items);
+   302→      },
+   303→      (err) => {
+   304→        const code = (err as { code?: string })?.code ?? "";
+   305→        if (
+   306→          code === "permission-denied" ||
+   307→          code === "unavailable" ||
+   308→          code.includes("permission") ||
+   309→          !useLocalMode
+   310→        ) {
+   311→          if (!useLocalMode) {
+   312→            console.warn(
+   313→              `[subscribe:${colName}] Firestore error (${code || "unknown"}), switching to local mode`,
+   314→            );
+   315→            useLocalMode = true;
+   316→            localStore.active = true;
+   317→          }
+   318→          if (!switchedToLocal) {
+   319→            switchedToLocal = true;
+   320→            localStore.subscribe<T>(localCol, cb);
+   321→          }
+   322→        }
+   323→      },
+   324→    );
+   325→    return () => {
+   326→      unsub?.();
+   327→    };
+   328→  } catch {
+   329→    useLocalMode = true;
+   330→    localStore.active = true;
+   331→    return localStore.subscribe<T>(localCol, cb);
+   332→  }
+   333→}
+   334→
+   335→/** Fetch all docs in a collection once. */
+   336→export async function fetchAll<T extends { id: string }>(colName: string): Promise<T[]> {
+   337→  const localCol = LOCAL_COLLECTION_MAP[colName];
+   338→  if (!localCol) return [];
+   339→
+   340→  if (useLocalMode) {
+   341→    return new Promise((resolve) => {
+   342→      let unsub: (() => void) | null = null;
+   343→      unsub = localStore.subscribe<T>(localCol, (items) => {
+   344→        // Defer unsubscribe so the subscribe call has returned first
+   345→        setTimeout(() => unsub?.(), 0);
+   346→        resolve(items);
+   347→      });
+   348→    });
+   349→  }
+   350→
+   351→  const d = db();
+   352→  if (!d) return [];
+   353→  try {
+   354→    const snap = await getDocs(collection(d, colName));
+   355→    return snap.docs.map((d) => {
+   356→      const data = d.data() as DocumentData;
+   357→      const { _serverTime, ...rest } = data as Record<string, unknown>;
+   358→      return { ...(rest as T), id: (rest.id as string) ?? d.id };
+   359→    });
+   360→  } catch (e) {
+   361→    const code = (e as { code?: string })?.code ?? "";
+   362→    if (code === "permission-denied" || code.includes("permission") || code === "unavailable") {
+   363→      useLocalMode = true;
+   364→      localStore.active = true;
+   365→      return new Promise((resolve) => {
+   366→        let unsub: (() => void) | null = null;
+   367→        unsub = localStore.subscribe<T>(localCol, (items) => {
+   368→          setTimeout(() => unsub?.(), 0);
+   369→          resolve(items);
+   370→        });
+   371→      });
+   372→    }
+   373→    console.error(`[fetchAll:${colName}]`, e);
+   374→    return [];
+   375→  }
+   376→}
+   377→
+   378→/** Upsert a document by id. */
+   379→export async function upsert<T extends { id: string }>(
+   380→  colName: string,
+   381→  item: T,
+   382→): Promise<void> {
+   383→  const localCol = LOCAL_COLLECTION_MAP[colName];
+   384→  if (!localCol) return;
+   385→
+   386→  if (useLocalMode) {
+   387→    localStore.upsert(localCol, item);
+   388→    return;
+   389→  }
+   390→
+   391→  const d = db();
+   392→  if (!d) {
+   393→    localStore.upsert(localCol, item);
+   394→    return;
+   395→  }
+   396→  try {
+   397→    await setDoc(
+   398→      doc(d, colName, item.id),
+   399→      { ...item, _serverTime: serverTimestamp() },
+   400→      { merge: true },
+   401→    );
+   402→  } catch (e) {
+   403→    const code = (e as { code?: string })?.code ?? "";
+   404→    if (code === "permission-denied" || code.includes("permission") || code === "unavailable") {
+   405→      useLocalMode = true;
+   406→      localStore.active = true;
+   407→      localStore.upsert(localCol, item);
+   408→      return;
+   409→    }
+   410→    throw e;
+   411→  }
+   412→}
+   413→
+   414→/** Partial update. */
+   415→export async function patch<T extends { id: string }>(
+   416→  colName: string,
+   417→  id: string,
+   418→  patchData: Partial<T>,
+   419→): Promise<void> {
+   420→  const localCol = LOCAL_COLLECTION_MAP[colName];
+   421→  if (!localCol) return;
+   422→
+   423→  if (useLocalMode) {
+   424→    localStore.patch<T>(localCol, id, patchData);
+   425→    return;
+   426→  }
+   427→
+   428→  const d = db();
+   429→  if (!d) {
+   430→    localStore.patch<T>(localCol, id, patchData);
+   431→    return;
+   432→  }
+   433→  try {
+   434→    await updateDoc(doc(d, colName, id), patchData as Record<string, unknown>);
+   435→  } catch (e) {
+   436→    const code = (e as { code?: string })?.code ?? "";
+   437→    if (code === "permission-denied" || code.includes("permission") || code === "unavailable") {
+   438→      useLocalMode = true;
+   439→      localStore.active = true;
+   440→      localStore.patch<T>(localCol, id, patchData);
+   441→      return;
+   442→    }
+   443→    throw e;
+   444→  }
+   445→}
+   446→
+   447→/** Delete a document. */
+   448→export async function remove(colName: string, id: string): Promise<void> {
+   449→  const localCol = LOCAL_COLLECTION_MAP[colName];
+   450→  if (!localCol) return;
+   451→
+   452→  if (useLocalMode) {
+   453→    localStore.remove(localCol, id);
+   454→    return;
+   455→  }
+   456→
+   457→  const d = db();
+   458→  if (!d) {
+   459→    localStore.remove(localCol, id);
+   460→    return;
+   461→  }
+   462→  try {
+   463→    await deleteDoc(doc(d, colName, id));
+   464→  } catch (e) {
+   465→    const code = (e as { code?: string })?.code ?? "";
+   466→    if (code === "permission-denied" || code.includes("permission") || code === "unavailable") {
+   467→      useLocalMode = true;
+   468→      localStore.active = true;
+   469→      localStore.remove(localCol, id);
+   470→      return;
+   471→    }
+   472→    throw e;
+   473→  }
+   474→}
+   475→
+   476→/** Returns true if the portal is running in local mode (Firestore unavailable). */
+   477→export function isLocalMode(): boolean {
+   478→  return useLocalMode;
+   479→}
+   480→
+   481→/* --------------------- Typed convenience accessors ---------------------- */
+   482→
+   483→export const adminData = {
+   484→  // Departments
+   485→  subscribeDepartments: (cb: (items: Department[]) => void) =>
+   486→    subscribe<Department>(COLLECTIONS.departments, cb, orderBy("name")),
+   487→  // Roles
+   488→  subscribeRoles: (cb: (items: Role[]) => void) =>
+   489→    subscribe<Role>(COLLECTIONS.roles, cb, orderBy("name")),
+   490→  // Permissions
+   491→  subscribePermissions: (cb: (items: Permission[]) => void) =>
+   492→    subscribe<Permission>(COLLECTIONS.permissions, cb, orderBy("key")),
+   493→  // Staff
+   494→  subscribeStaff: (cb: (items: AdminStaff[]) => void) =>
+   495→    subscribe<AdminStaff>(COLLECTIONS.staff, cb, orderBy("createdAt", "desc")),
+   496→  // Countries
+   497→  subscribeCountries: (cb: (items: CountryConfig[]) => void) =>
+   498→    subscribe<CountryConfig>(COLLECTIONS.countries, cb, orderBy("countryName")),
+   499→  // KYC
+   500→  subscribeKyc: (cb: (items: KycCase[]) => void) =>
+   501→    subscribe<KycCase>(COLLECTIONS.kycCases, cb, orderBy("submittedAt", "desc")),
+   502→  // KYB
+   503→  subscribeKyb: (cb: (items: KybCase[]) => void) =>
+   504→    subscribe<KybCase>(COLLECTIONS.kybCases, cb, orderBy("submittedAt", "desc")),
+   505→  // Fraud
+   506→  subscribeFraud: (cb: (items: FraudAlert[]) => void) =>
+   507→    subscribe<FraudAlert>(COLLECTIONS.fraudAlerts, cb, orderBy("createdAt", "desc")),
+   508→  // Settlements
+   509→  subscribeSettlements: (cb: (items: Settlement[]) => void) =>
+   510→    subscribe<Settlement>(COLLECTIONS.settlements, cb, orderBy("scheduledAt", "desc")),
+   511→  // Tickets
+   512→  subscribeTickets: (cb: (items: SupportTicket[]) => void) =>
+   513→    subscribe<SupportTicket>(COLLECTIONS.tickets, cb, orderBy("createdAt", "desc")),
+   514→  // Disputes
+   515→  subscribeDisputes: (cb: (items: Dispute[]) => void) =>
+   516→    subscribe<Dispute>(COLLECTIONS.disputes, cb, orderBy("createdAt", "desc")),
+   517→  // Terminals
+   518→  subscribeTerminals: (cb: (items: Terminal[]) => void) =>
+   519→    subscribe<Terminal>(COLLECTIONS.terminals, cb, orderBy("serialNumber")),
+   520→  // Audit logs
+   521→  subscribeAudit: (cb: (items: AuditLog[]) => void) =>
+   522→    subscribe<AuditLog>(COLLECTIONS.auditLogs, cb, orderBy("createdAt", "desc")),
+   523→  // Approvals
+   524→  subscribeApprovals: (cb: (items: ApprovalRequest[]) => void) =>
+   525→    subscribe<ApprovalRequest>(COLLECTIONS.approvals, cb, orderBy("createdAt", "desc")),
+   526→  // Merchants — managed via Compliance (KYB) + Risk (restrict) + Country rules.
+   527→  // The Faya Business app is a separate application that reads from this same database.
+   528→  subscribeMerchants: (cb: (items: Merchant[]) => void) =>
+   529→    subscribe<Merchant>(COLLECTIONS.merchants, cb, orderBy("createdAt", "desc")),
+   530→  // Consumers — managed via Compliance (KYC) + Risk (restrict) + Country rules.
+   531→  // The Faya Pay app is a separate application that reads from this same database.
+   532→  subscribeConsumers: (cb: (items: Consumer[]) => void) =>
+   533→    subscribe<Consumer>(COLLECTIONS.consumers, cb, orderBy("createdAt", "desc")),
+   534→
+   535→  // Single-doc filters
+   536→  subscribeStaffById: (id: string, cb: (item: AdminStaff | null) => void) => {
+   537→    // In local mode, subscribe to all staff and filter
+   538→    if (useLocalMode) {
+   539→      return localStore.subscribe<AdminStaff>("staff", (items) => {
+   540→        cb(items.find((s) => s.id === id) ?? null);
+   541→      });
+   542→    }
+   543→    const d = db();
+   544→    if (!d) {
+   545→      return localStore.subscribe<AdminStaff>("staff", (items) => {
+   546→        cb(items.find((s) => s.id === id) ?? null);
+   547→      });
+   548→    }
+   549→    try {
+   550→      return onSnapshot(
+   551→        doc(d, COLLECTIONS.staff, id),
+   552→        (snap) => cb(snap.exists() ? (snap.data() as AdminStaff) : null),
+   553→        () => cb(null),
+   554→      );
+   555→    } catch {
+   556→      return localStore.subscribe<AdminStaff>("staff", (items) => {
+   557→        cb(items.find((s) => s.id === id) ?? null);
+   558→      });
+   559→    }
+   560→  },
+   561→
+   562→  // Mutations
+   563→  createStaff: (staff: AdminStaff) => upsert(COLLECTIONS.staff, staff),
+   564→  updateStaff: (id: string, patchData: Partial<AdminStaff>) => patch<AdminStaff>(COLLECTIONS.staff, id, patchData),
+   565→  deleteStaff: (id: string) => remove(COLLECTIONS.staff, id),
+   566→
+   567→  createCountry: (country: CountryConfig) => upsert(COLLECTIONS.countries, country),
+   568→  updateCountry: (id: string, patchData: Partial<CountryConfig>) => patch<CountryConfig>(COLLECTIONS.countries, id, patchData),
+   569→
+   570→  updateKyc: (id: string, patchData: Partial<KycCase>) => patch<KycCase>(COLLECTIONS.kycCases, id, patchData),
+   571→  updateKyb: (id: string, patchData: Partial<KybCase>) => patch<KybCase>(COLLECTIONS.kybCases, id, patchData),
+   572→  updateFraud: (id: string, patchData: Partial<FraudAlert>) => patch<FraudAlert>(COLLECTIONS.fraudAlerts, id, patchData),
+   573→  updateSettlement: (id: string, patchData: Partial<Settlement>) => patch<Settlement>(COLLECTIONS.settlements, id, patchData),
+   574→  updateTicket: (id: string, patchData: Partial<SupportTicket>) => patch<SupportTicket>(COLLECTIONS.tickets, id, patchData),
+   575→  updateDispute: (id: string, patchData: Partial<Dispute>) => patch<Dispute>(COLLECTIONS.disputes, id, patchData),
+   576→  updateTerminal: (id: string, patchData: Partial<Terminal>) => patch<Terminal>(COLLECTIONS.terminals, id, patchData),
+   577→
+   578→  // Merchant & Consumer mutations — admin manages these entities; the separate
+   579→  // Faya Business (merchants) and Faya Pay (consumers) apps read from the same Firestore collections.
+   580→  createMerchant: (merchant: Merchant) => upsert(COLLECTIONS.merchants, merchant),
+   581→  updateMerchant: (id: string, patchData: Partial<Merchant>) => patch<Merchant>(COLLECTIONS.merchants, id, patchData),
+   582→  deleteMerchant: (id: string) => remove(COLLECTIONS.merchants, id),
+   583→
+   584→  createConsumer: (consumer: Consumer) => upsert(COLLECTIONS.consumers, consumer),
+   585→  updateConsumer: (id: string, patchData: Partial<Consumer>) => patch<Consumer>(COLLECTIONS.consumers, id, patchData),
+   586→  deleteConsumer: (id: string) => remove(COLLECTIONS.consumers, id),
+   587→
+   588→  createApproval: (req: ApprovalRequest) => upsert(COLLECTIONS.approvals, req),
+   589→  updateApproval: (id: string, patchData: Partial<ApprovalRequest>) => patch<ApprovalRequest>(COLLECTIONS.approvals, id, patchData),
+   590→
+   591→  appendAuditLog: (log: AuditLog) => upsert(COLLECTIONS.auditLogs, log),
+   592→
+   593→  // ---- Full back-office collections (per Requirements PDF) ----
+   594→
+   595→  // POS Staff (Faya POS app users — merchant cashiers)
+   596→  subscribePosStaff: (cb: (items: PosStaff[]) => void) =>
+   597→    subscribe<PosStaff>(COLLECTIONS.posStaff, cb, orderBy("createdAt", "desc")),
+   598→  createPosStaff: (item: PosStaff) => upsert(COLLECTIONS.posStaff, item),
+   599→  updatePosStaff: (id: string, patchData: Partial<PosStaff>) => patch<PosStaff>(COLLECTIONS.posStaff, id, patchData),
+   600→  deletePosStaff: (id: string) => remove(COLLECTIONS.posStaff, id),
+   601→
+   602→  // Cards
+   603→  subscribeCards: (cb: (items: Card[]) => void) =>
+   604→    subscribe<Card>(COLLECTIONS.cards, cb, orderBy("createdAt", "desc")),
+   605→  createCard: (item: Card) => upsert(COLLECTIONS.cards, item),
+   606→  updateCard: (id: string, patchData: Partial<Card>) => patch<Card>(COLLECTIONS.cards, id, patchData),
+   607→
+   608→  // Wallets
+   609→  subscribeWallets: (cb: (items: Wallet[]) => void) =>
+   610→    subscribe<Wallet>(COLLECTIONS.wallets, cb, orderBy("createdAt", "desc")),
+   611→  createWallet: (item: Wallet) => upsert(COLLECTIONS.wallets, item),
+   612→  updateWallet: (id: string, patchData: Partial<Wallet>) => patch<Wallet>(COLLECTIONS.wallets, id, patchData),
+   613→
+   614→  // Transactions
+   615→  subscribeTransactions: (cb: (items: Transaction[]) => void) =>
+   616→    subscribe<Transaction>(COLLECTIONS.transactions, cb, orderBy("createdAt", "desc")),
+   617→  createTransaction: (item: Transaction) => upsert(COLLECTIONS.transactions, item),
+   618→  updateTransaction: (id: string, patchData: Partial<Transaction>) => patch<Transaction>(COLLECTIONS.transactions, id, patchData),
+   619→
+   620→  // Documents
+   621→  subscribeDocuments: (cb: (items: UserDocument[]) => void) =>
+   622→    subscribe<UserDocument>(COLLECTIONS.documents, cb, orderBy("uploadedAt", "desc")),
+   623→  createDocument: (item: UserDocument) => upsert(COLLECTIONS.documents, item),
+   624→  updateDocument: (id: string, patchData: Partial<UserDocument>) => patch<UserDocument>(COLLECTIONS.documents, id, patchData),
+   625→
+   626→  // Legal Policies
+   627→  subscribePolicies: (cb: (items: LegalPolicy[]) => void) =>
+   628→    subscribe<LegalPolicy>(COLLECTIONS.policies, cb, orderBy("updatedAt", "desc")),
+   629→  createPolicy: (item: LegalPolicy) => upsert(COLLECTIONS.policies, item),
+   630→  updatePolicy: (id: string, patchData: Partial<LegalPolicy>) => patch<LegalPolicy>(COLLECTIONS.policies, id, patchData),
+   631→
+   632→  // App Content
+   633→  subscribeAppContent: (cb: (items: AppContent[]) => void) =>
+   634→    subscribe<AppContent>(COLLECTIONS.appContent, cb, orderBy("updatedAt", "desc")),
+   635→  createAppContent: (item: AppContent) => upsert(COLLECTIONS.appContent, item),
+   636→  updateAppContent: (id: string, patchData: Partial<AppContent>) => patch<AppContent>(COLLECTIONS.appContent, id, patchData),
+   637→
+   638→  // Notifications
+   639→  subscribeNotifications: (cb: (items: NotificationCampaign[]) => void) =>
+   640→    subscribe<NotificationCampaign>(COLLECTIONS.notifications, cb, orderBy("createdAt", "desc")),
+   641→  createNotification: (item: NotificationCampaign) => upsert(COLLECTIONS.notifications, item),
+   642→  updateNotification: (id: string, patchData: Partial<NotificationCampaign>) => patch<NotificationCampaign>(COLLECTIONS.notifications, id, patchData),
+   643→
+   644→  // Fees
+   645→  subscribeFees: (cb: (items: Fee[]) => void) =>
+   646→    subscribe<Fee>(COLLECTIONS.fees, cb, orderBy("updatedAt", "desc")),
+   647→  createFee: (item: Fee) => upsert(COLLECTIONS.fees, item),
+   648→  updateFee: (id: string, patchData: Partial<Fee>) => patch<Fee>(COLLECTIONS.fees, id, patchData),
+   649→
+   650→  // Limits
+   651→  subscribeLimits: (cb: (items: Limit[]) => void) =>
+   652→    subscribe<Limit>(COLLECTIONS.limits, cb, orderBy("updatedAt", "desc")),
+   653→  createLimit: (item: Limit) => upsert(COLLECTIONS.limits, item),
+   654→  updateLimit: (id: string, patchData: Partial<Limit>) => patch<Limit>(COLLECTIONS.limits, id, patchData),
+   655→
+   656→  // Provider Logs
+   657→  subscribeProviderLogs: (cb: (items: ProviderLog[]) => void) =>
+   658→    subscribe<ProviderLog>(COLLECTIONS.providerLogs, cb, orderBy("updatedAt", "desc")),
+   659→  updateProviderLog: (id: string, patchData: Partial<ProviderLog>) => patch<ProviderLog>(COLLECTIONS.providerLogs, id, patchData),
+   660→
+   661→  // Webhook Logs
+   662→  subscribeWebhookLogs: (cb: (items: WebhookLog[]) => void) =>
+   663→    subscribe<WebhookLog>(COLLECTIONS.webhookLogs, cb, orderBy("receivedAt", "desc")),
+   664→  updateWebhookLog: (id: string, patchData: Partial<WebhookLog>) => patch<WebhookLog>(COLLECTIONS.webhookLogs, id, patchData),
+   665→
+   666→  // Local store management
+   667→  resetLocalStore: () => localStore.reset(),
+   668→};
+   669→
+   670→/* ------------------------------- Audit helper ------------------------------ */
+   671→
+   672→/**
+   673→ * Append a new audit log entry. Generates id + timestamps.
+   674→ */
+   675→export function logAudit(
+   676→  actor: { staffId: string; staffName: string; department: string; role: string },
+   677→  action: string,
+   678→  entityType: string,
+   679→  entityId: string,
+   680→  opts: {
+   681→    countryCode?: string | null;
+   682→    beforeValue?: string;
+   683→    afterValue?: string;
+   684→    reason?: string;
+   685→    ipAddress?: string;
+   686→    deviceFingerprint?: string;
+   687→  } = {},
+   688→): void {
+   689→  const log: AuditLog = {
+   690→    id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+   691→    staffId: actor.staffId,
+   692→    staffName: actor.staffName,
+   693→    department: actor.department,
+   694→    role: actor.role,
+   695→    countryCode: opts.countryCode ?? null,
+   696→    action,
+   697→    entityType,
+   698→    entityId,
+   699→    beforeValue: opts.beforeValue,
+   700→    afterValue: opts.afterValue,
+   701→    reason: opts.reason,
+   702→    ipAddress: opts.ipAddress ?? "0.0.0.0",
+   703→    deviceFingerprint: opts.deviceFingerprint ?? "unknown",
+   704→    createdAt: Date.now(),
+   705→  };
+   706→  adminData.appendAuditLog(log).catch((e) => console.error("[logAudit]", e));
+   707→}
+   708→
