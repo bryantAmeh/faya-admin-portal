@@ -674,6 +674,7 @@ export interface PosDeviceRequest {
   requestCode: string; // e.g. POS-REQ-NG-00001
   merchantId: string;
   merchantName: string;
+  merchantCode?: string; // e.g. FAY-NG-M-31946 (optional — POS app may omit)
   countryCode: string;
   type: "physical_terminal" | "phone_pos";
   requestedAt: number;
@@ -700,6 +701,9 @@ export interface PosDeviceRequest {
   reviewedAt: number | null;
   declineReason: string | null;
   notes: string;
+  // Provenance: "faya_pos_app" (via API route) | "pos_app_direct" (POS app
+  // wrote directly to Firestore in its own schema) | undefined (legacy)
+  source?: string;
   createdAt: number;
   updatedAt: number;
 }

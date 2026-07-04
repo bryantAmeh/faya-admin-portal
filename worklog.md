@@ -1009,3 +1009,40 @@ Work Log:
 Stage Summary:
 - POS device requests now come from REAL phone data via /api/pos-device-request. The Faya POS app reads device capabilities from hardware APIs (Build.MODEL, Build.VERSION, NFC adapter, KeyguardManager, BatteryManager, Play Integrity) and POSTs them. Hardcoded seed data cleared from Firestore. Admin portal displays real submissions with `source: "faya_pos_app"` provenance.
 - The old SEED_POS_DEVICE_REQUESTS array still exists in seed-data.ts as local-store fallback but is no longer written to Firestore (ensureSeedData is a no-op) and the admin-data.ts import was removed.
+
+---
+Task ID: pos-request-schema-normalizer
+Agent: main
+Task: POS request in merchant still not showing accurate data
+
+Work Log:
+- Root cause discovered: The Faya POS app writes `pos_device_requests` documents DIRECTLY to Firestore in its OWN schema, which is completely different from the admin portal's expected PosDeviceRequest shape:
+  - POS app: `deviceId`, `systemInfo{model,sdk,manufacturer}`, `deviceCheckResults{"Device Integrity":"PASSED",...}`, `nfcAvailable` (flat boolean), `deviceType: "Phone POS"`, `merchantId: "amehbryant_merchant"`
+  - Admin expected: `id`, `deviceInfo{deviceModel,osVersion,...}` (nested), `type: "phone_pos"` (enum), `nfcSupported` (nested boolean), `requestCode`, `canBeApproved`
+  - Result: admin's safeDeviceInfo() fallback kicked in showing "Unknown device" for real submissions.
+- Confirmed via Firestore REST that the real POS app doc exists: merchantId=amehbryant_merchant, merchantName=Ameh Bryant Store, systemInfo.model=SM-S931B, systemInfo.sdk=36, manufacturer=samsung, nfcAvailable=true, deviceCheckResults all PASSED, status=pending.
+- Added normalizePosDeviceRequest(raw, docId) to src/lib/admin-data.ts — bridges BOTH schemas into canonical PosDeviceRequest:
+  - id: raw.id || raw.deviceId || docId
+  - requestCode: raw.requestCode || derived from deviceId
+  - type: maps "Phone POS" → "phone_pos", "Physical Terminal" → "physical_terminal"
+  - deviceInfo.deviceModel: nestedDi.deviceModel || systemInfo.model || raw.deviceModel
+  - deviceInfo.osVersion: nestedDi.osVersion || "Android SDK {sdk}" (from systemInfo.sdk)
+  - deviceInfo.nfcSupported: nested || raw.nfcAvailable || checkResults["NFC Hardware"]==="PASSED"
+  - deviceInfo.deviceIntegrityPassed: nested || checkResults["Device Integrity"]==="PASSED"
+  - deviceInfo.screenLockEnabled: nested || checkResults["Screen Lock"] (default true if absent)
+  - canBeApproved: raw.canBeApproved || nfc || cardReader || swipe
+  - source: raw.source || "pos_app_direct" (provenance marker)
+- Updated subscribePosDeviceRequests to subscribe as Record<string,unknown> and map through normalizePosDeviceRequest, so both Firestore reads AND local-store fallback get normalized.
+- Added optional `merchantCode` and `source` fields to PosDeviceRequest type in types.ts.
+- Browser-verified: merchant "Ameh Bryant Store" → POS Requests tab showed "1" → real device data now displays accurately:
+  - Request code: POS-REQ-2F0A3D7B (derived from POS app's deviceId)
+  - Device model: SM-S931B (real Samsung Build.MODEL from systemInfo.model)
+  - OS: Android SDK 36 (mapped from systemInfo.sdk)
+  - NFC: supported (from nfcAvailable: true)
+  - Integrity: OK (from deviceCheckResults["Device Integrity"]="PASSED")
+  - Screen lock: ON, Can approve: yes
+  - Status: Approved (admin had approved it; reviewedBy + reviewedAt shown)
+- No console errors. Lint clean.
+
+Stage Summary:
+- POS device requests now show REAL device data from the phone regardless of which schema wrote the document. The normalizer handles the Faya POS app's flat schema (systemInfo, deviceCheckResults, nfcAvailable, deviceType, deviceId), the admin nested schema (deviceInfo{...} from /api/pos-device-request), and mixed/partial docs. Verified with the actual Samsung SM-S931B submission — model, OS, NFC, and integrity all display accurately. The previous "Unknown device" fallback no longer triggers for real POS app submissions.

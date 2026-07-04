@@ -411,6 +411,176 @@ export function isLocalMode(): boolean {
   return useLocalMode;
 }
 
+/* --------------- POS Device Request schema normalizer --------------- */
+/**
+ * The Faya POS app writes `pos_device_requests` documents in its OWN schema
+ * (flat fields: `deviceId`, `systemInfo`, `deviceCheckResults`, `nfcAvailable`,
+ * `deviceType`). The admin portal's `PosDeviceRequest` type expects a nested
+ * `deviceInfo` object with typed booleans. This normalizer bridges the two so
+ * the admin can read REAL device data submitted by the phone, regardless of
+ * which schema was used to write it.
+ *
+ * Supports three input shapes:
+ *  1. POS app flat schema  — systemInfo{model,sdk,manufacturer}, deviceCheckResults{...}, nfcAvailable, deviceType, deviceId
+ *  2. Admin nested schema  — deviceInfo{...}, type, requestCode, canBeApproved (from /api/pos-device-request)
+ *  3. Mixed / partial      — gracefully fills gaps with sensible defaults
+ */
+function normalizePosDeviceRequest(
+  raw: Record<string, unknown>,
+  docId: string,
+): PosDeviceRequest {
+  const now = Date.now();
+
+  // ---- id / requestCode ----
+  const id = (raw.id as string) ?? (raw.deviceId as string) ?? docId;
+  const requestCode =
+    (raw.requestCode as string) ?? `POS-REQ-${id.slice(0, 8).toUpperCase()}`;
+
+  // ---- merchant context ----
+  const merchantId = (raw.merchantId as string) ?? "";
+  const merchantName = (raw.merchantName as string) ?? "";
+  const merchantCode = (raw.merchantCode as string) ?? "";
+  const countryCode =
+    (raw.countryCode as string) ?? (raw.country as string) ?? "";
+
+  // ---- type ----
+  const rawType = (raw.type as string) ?? (raw.deviceType as string) ?? "";
+  const type: PosDeviceRequest["type"] =
+    rawType === "physical_terminal" || /physical/i.test(rawType)
+      ? "physical_terminal"
+      : "phone_pos";
+
+  // ---- timestamps ----
+  const requestedAt =
+    typeof raw.requestedAt === "number"
+      ? (raw.requestedAt as number)
+      : typeof raw.createdAt === "number"
+        ? (raw.createdAt as number)
+        : now;
+  const createdAt = typeof raw.createdAt === "number" ? (raw.createdAt as number) : requestedAt;
+  const updatedAt = typeof raw.updatedAt === "number" ? (raw.updatedAt as number) : createdAt;
+
+  // ---- deviceInfo: merge admin-nested + POS-app-flat sources ----
+  const nestedDi = (raw.deviceInfo as Record<string, unknown>) ?? {};
+  const systemInfo = (raw.systemInfo as Record<string, unknown>) ?? {};
+  const checkResults = (raw.deviceCheckResults as Record<string, unknown>) ?? {};
+
+  const deviceModel =
+    (nestedDi.deviceModel as string) ??
+    (systemInfo.model as string) ??
+    (raw.deviceModel as string) ??
+    "Unknown device";
+
+  // OS version: prefer explicit string, else map Android SDK int, else "—"
+  let osVersion =
+    (nestedDi.osVersion as string) ??
+    (raw.osVersion as string) ??
+    "";
+  if (!osVersion) {
+    const sdk = Number(systemInfo.sdk);
+    if (Number.isFinite(sdk)) {
+      osVersion = `Android SDK ${sdk}`;
+    } else {
+      osVersion = "—";
+    }
+  }
+
+  const appVersion =
+    (nestedDi.appVersion as string) ??
+    (raw.appVersion as string) ??
+    (raw.appVersion === "PASSED" ? "—" : "—");
+
+  // Capability booleans: prefer nested, then flat, then derive from check results
+  const nfcSupported =
+    nestedDi.nfcSupported === true ||
+    raw.nfcAvailable === true ||
+    raw.nfcSupported === true ||
+    checkResults["NFC Hardware"] === "PASSED" ||
+    checkResults["NFC"] === "PASSED";
+
+  const cardReaderSupported =
+    nestedDi.cardReaderSupported === true ||
+    raw.cardReaderSupported === true ||
+    raw.cardReaderAvailable === true ||
+    checkResults["Card Reader"] === "PASSED";
+
+  const swipeSupported =
+    nestedDi.swipeSupported === true ||
+    raw.swipeSupported === true ||
+    raw.swipeAvailable === true ||
+    checkResults["Swipe"] === "PASSED";
+
+  const deviceIntegrityPassed =
+    nestedDi.deviceIntegrityPassed === true ||
+    raw.deviceIntegrityPassed === true ||
+    checkResults["Device Integrity"] === "PASSED" ||
+    checkResults["Integrity"] === "PASSED";
+
+  const screenLockEnabled =
+    nestedDi.screenLockEnabled === true ||
+    raw.screenLockEnabled === true ||
+    raw.screenLockOn === true ||
+    // If the POS app ran a screen-lock check, honor it; otherwise assume secure
+    (checkResults["Screen Lock"] === undefined
+      ? true
+      : checkResults["Screen Lock"] === "PASSED");
+
+  const batteryLevelRaw = Number(
+    nestedDi.batteryLevel ?? raw.batteryLevel ?? 0,
+  );
+  const batteryLevel = Number.isFinite(batteryLevelRaw)
+    ? Math.max(0, Math.min(100, Math.round(batteryLevelRaw)))
+    : 0;
+
+  // ---- approval eligibility ----
+  const canBeApproved =
+    typeof raw.canBeApproved === "boolean"
+      ? (raw.canBeApproved as boolean)
+      : nfcSupported || cardReaderSupported || swipeSupported;
+
+  // ---- status / review ----
+  const status = (raw.status as PosDeviceRequest["status"]) ?? "pending";
+  const reviewedBy = (raw.reviewedBy as string | null) ?? null;
+  const reviewedAt =
+    typeof raw.reviewedAt === "number" ? (raw.reviewedAt as number) : null;
+  const declineReason = (raw.declineReason as string | null) ?? null;
+  const notes = (raw.notes as string) ?? "";
+
+  // ---- provenance ----
+  const source = (raw.source as string) ?? "pos_app_direct";
+
+  return {
+    id,
+    requestCode,
+    merchantId,
+    merchantName,
+    merchantCode,
+    countryCode,
+    type,
+    requestedAt,
+    deviceInfo: {
+      deviceModel,
+      osVersion,
+      appVersion,
+      nfcSupported,
+      cardReaderSupported,
+      swipeSupported,
+      deviceIntegrityPassed,
+      screenLockEnabled,
+      batteryLevel,
+    },
+    canBeApproved,
+    status,
+    reviewedBy,
+    reviewedAt,
+    declineReason,
+    notes,
+    source,
+    createdAt,
+    updatedAt,
+  };
+}
+
 /* --------------------- Typed convenience accessors ---------------------- */
 
 export const adminData = {
@@ -589,9 +759,17 @@ export const adminData = {
     subscribe<WebhookLog>(COLLECTIONS.webhookLogs, cb, orderBy("receivedAt", "desc")),
   updateWebhookLog: (id: string, patchData: Partial<WebhookLog>) => patch<WebhookLog>(COLLECTIONS.webhookLogs, id, patchData),
 
-  // POS Device Requests — device binding requests from POS app login
+  // POS Device Requests — device binding requests from POS app login.
+  // Normalizes BOTH the POS app's flat schema (systemInfo, deviceCheckResults,
+  // nfcAvailable, deviceType, deviceId) and the admin nested schema
+  // (deviceInfo{...}) into the canonical PosDeviceRequest shape so the UI
+  // always sees real device data regardless of which app wrote the doc.
   subscribePosDeviceRequests: (cb: (items: PosDeviceRequest[]) => void) =>
-    subscribe<PosDeviceRequest>(COLLECTIONS.posDeviceRequests, cb, orderBy("createdAt", "desc")),
+    subscribe<Record<string, unknown>>(
+      COLLECTIONS.posDeviceRequests,
+      (items) => cb(items.map((it) => normalizePosDeviceRequest(it, it.id as string))),
+      orderBy("createdAt", "desc"),
+    ),
   createPosDeviceRequest: (item: PosDeviceRequest) => upsert(COLLECTIONS.posDeviceRequests, item),
   updatePosDeviceRequest: (id: string, patchData: Partial<PosDeviceRequest>) => patch<PosDeviceRequest>(COLLECTIONS.posDeviceRequests, id, patchData),
 
