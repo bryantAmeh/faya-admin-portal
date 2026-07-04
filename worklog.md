@@ -964,3 +964,24 @@ Firestore now has all infrastructure data the 3 apps need:
 - Faya POS reads: staff (PINs), terminals, pos_device_requests
 - Admin reads: everything + manages countries, fees, limits, policies, stock, staff
 - Real consumer data (moses ayande) from Faya Pay app is visible in admin
+
+---
+Task ID: dual-role-finalize
+Agent: main
+Task: Fix runtime TypeError (deviceInfo undefined) and finalize dual-role (consumer↔merchant) email-based linking
+
+Work Log:
+- Fixed runtime TypeError in merchant-detail-view.tsx PosRequestsTab: `req.deviceInfo` was undefined for some POS device requests, crashing on `d.deviceIntegrityPassed`. Added `EMPTY_DEVICE_INFO` fallback + `safeDeviceInfo(req)` helper; applied to all deviceInfo accesses (map callback, approve toast, decline dialog).
+- Enhanced dual-role linking in user-detail-view.tsx: `linkedMerchant` now matches by Firebase Auth UID first, then falls back to email matching (consumer.email === merchant.ownerEmail || contactEmail). Updated both the main component (line ~323) and the header-card sub-component (line ~541).
+- Enhanced dual-role linking in merchant-detail-view.tsx: added `linkedConsumer` useMemo with same ID-then-email matching strategy. Replaced inline `allConsumers.find((c) => c.id === merchant.id)` with `linkedConsumer`. Fixed navigation bug: `selectUser(merchant.id)` → `selectUser(linkedConsumer.id)` so cross-navigation uses the consumer's actual doc id.
+- Ran `bun run lint` — clean, no errors.
+- Browser-verified end-to-end with agent-browser:
+  - Consumer "moses ameh Ayande" (mosesayande82@gmail.com) profile shows "This consumer is also a Merchant" banner → "moses Store · Status: onboarding · KYB: pending" → "View Merchant Profile" button.
+  - Clicking navigates to merchant profile (FAY-NG-M-31946) which shows "This merchant is also a Consumer" banner → "moses ameh Ayande · mosesayande82@gmail.com" → "View Consumer Profile" button.
+  - Round-trip navigation (consumer → merchant → consumer) works bidirectionally.
+  - No console errors; all Firestore subscriptions live (merchants: 2, cards: 1, kyc: 1).
+
+Stage Summary:
+- Runtime TypeError resolved — PosRequestsTab now defensively handles missing deviceInfo.
+- Dual-role feature complete: one email = two profiles (consumer + merchant), linked by UID or email, with bidirectional cross-navigation banners in both detail views.
+- Verified working with real Firestore data (mosesayande82@gmail.com exists in both `users` and `merchants` collections).

@@ -319,8 +319,17 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
     [consumers, selectedUserId],
   );
 
-  // Check if this consumer is also a merchant (same UID in merchants collection)
-  const linkedMerchant = allMerchants.find((m) => m.id === selectedUserId);
+  // Check if this consumer is also a merchant. Match by Firebase Auth UID
+  // (same doc id in users + merchants) OR by email so a user who registered
+  // with the same address in both Faya Pay and Faya Merchant is linked even
+  // if the merchant app stored the profile under a different document id.
+  const linkedMerchant = allMerchants.find((m) => {
+    if (m.id === selectedUserId) return true;
+    const cEmail = (consumer?.email ?? "").trim().toLowerCase();
+    if (!cEmail) return false;
+    return [m.ownerEmail, m.contactEmail]
+      .some((e) => (e ?? "").trim().toLowerCase() === cEmail);
+  });
 
   function countryName(code: string): string {
     return countries.find((c) => c.countryCode === code)?.countryName ?? code;
@@ -529,8 +538,14 @@ function ProfileHeader({
   useEffect(() => adminData.subscribeDisputes(setDisputes), []);
   useEffect(() => adminData.subscribeMerchants(setMerchants), []);
 
-  // Check if this consumer is also a merchant (same UID in merchants collection)
-  const linkedMerchant = merchants.find((m) => m.id === consumer.id);
+  // Check if this consumer is also a merchant — match by UID or by email.
+  const linkedMerchant = merchants.find((m) => {
+    if (m.id === consumer.id) return true;
+    const cEmail = (consumer.email ?? "").trim().toLowerCase();
+    if (!cEmail) return false;
+    return [m.ownerEmail, m.contactEmail]
+      .some((e) => (e ?? "").trim().toLowerCase() === cEmail);
+  });
 
   const fullName = consumer.fullName || `${consumer.firstName || ""} ${consumer.lastName || ""}`.trim() || consumer.email;
   const consumerCards = cards.filter((c) => c.userId === consumer.id);

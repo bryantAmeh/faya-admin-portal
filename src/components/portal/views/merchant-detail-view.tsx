@@ -531,6 +531,27 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
     return () => unsubs.forEach((u) => u && u());
   }, []);
 
+  /* ---------- Linked consumer (dual-role) ----------
+   * This merchant may also be a consumer (same person, same email, two apps).
+   * Match by Firebase Auth UID first (same doc id in users + merchants), then
+   * fall back to email matching on ownerEmail / contactEmail so a user who
+   * registered with the same address in both Faya Pay and Faya Merchant is
+   * linked even if the merchant app used a different document id. */
+  const linkedConsumer = useMemo(() => {
+    if (!merchant) return null;
+    const byId = allConsumers.find((c) => c.id === merchant.id);
+    if (byId) return byId;
+    const mEmails = [merchant.ownerEmail, merchant.contactEmail]
+      .map((e) => (e ?? "").trim().toLowerCase())
+      .filter(Boolean);
+    if (mEmails.length === 0) return null;
+    return (
+      allConsumers.find((c) =>
+        mEmails.includes((c.email ?? "").trim().toLowerCase()),
+      ) ?? null
+    );
+  }, [allConsumers, merchant]);
+
   /* ---------- Filter each collection to this merchant ---------- */
   const merchantPosStaff = useMemo(
     () => (merchant ? posStaff.filter((s) => s.merchantId === merchant.id) : []),
@@ -802,7 +823,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
       </div>
 
       {/* Dual account banner — if this merchant is also a consumer */}
-      {allConsumers.find((c) => c.id === merchant.id) && (
+      {linkedConsumer && (
         <Card className="border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800">
           <CardContent className="p-3 flex items-center gap-3">
             <div className="size-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
@@ -813,17 +834,14 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
                 This merchant is also a Consumer
               </div>
               <div className="text-xs text-emerald-700 dark:text-emerald-400 truncate">
-                {(() => {
-                  const c = allConsumers.find((c) => c.id === merchant.id);
-                  return c ? `${c.fullName || c.firstName || ""} ${c.lastName || ""} · ${c.email}` : "";
-                })()}
+                {linkedConsumer.fullName || `${linkedConsumer.firstName || ""} ${linkedConsumer.lastName || ""}`.trim()} · {linkedConsumer.email}
               </div>
             </div>
             <Button
               size="sm"
               className="bg-emerald-600 hover:bg-emerald-700 shrink-0"
               onClick={() => {
-                selectUser(merchant.id);
+                selectUser(linkedConsumer.id);
                 setView("user_detail");
               }}
             >
@@ -1612,6 +1630,27 @@ function TerminalsTab({ items }: { items: Terminal[] }) {
 
 /* ============================ TAB: POS Requests ============================ */
 
+/**
+ * Defensive fallback for POS device requests that arrive without a
+ * `deviceInfo` payload (e.g. legacy/malformed docs from the POS app).
+ * Keeps the UI from crashing on `d.deviceIntegrityPassed` etc.
+ */
+const EMPTY_DEVICE_INFO: NonNullable<PosDeviceRequest["deviceInfo"]> = {
+  deviceModel: "Unknown device",
+  osVersion: "—",
+  appVersion: "—",
+  nfcSupported: false,
+  cardReaderSupported: false,
+  swipeSupported: false,
+  deviceIntegrityPassed: false,
+  screenLockEnabled: false,
+  batteryLevel: 0,
+};
+
+function safeDeviceInfo(req: PosDeviceRequest): NonNullable<PosDeviceRequest["deviceInfo"]> {
+  return req.deviceInfo ?? EMPTY_DEVICE_INFO;
+}
+
 function PosRequestsTab({
   items,
 }: {
@@ -1651,7 +1690,7 @@ function PosRequestsTab({
       afterValue: "approved",
     });
     toast.success(`POS device request approved: ${req.requestCode}`, {
-      description: `${req.deviceInfo.deviceModel} · ${req.type === "physical_terminal" ? "Physical terminal" : "Phone POS"}`,
+      description: `${safeDeviceInfo(req).deviceModel} · ${req.type === "physical_terminal" ? "Physical terminal" : "Phone POS"}`,
     });
   }
 
@@ -1719,7 +1758,7 @@ function PosRequestsTab({
       </div>
       <div className="space-y-2">
         {items.map((req) => {
-          const d = req.deviceInfo;
+          const d = safeDeviceInfo(req);
           const style = POS_DEVICE_REQUEST_STATUS_STYLES[req.status];
           const isPending = req.status === "pending";
           const showWarnings =
@@ -1896,7 +1935,7 @@ function PosRequestsTab({
             <DialogDescription>
               {declineTarget && (
                 <>
-                  {declineTarget.requestCode} — {declineTarget.deviceInfo.deviceModel}.
+                  {declineTarget.requestCode} — {safeDeviceInfo(declineTarget).deviceModel}.
                   The merchant will be notified and can re-request with an updated device.
                 </>
               )}
