@@ -57,6 +57,7 @@ import {
   Ban,
   Pause,
   RotateCcw,
+  KeyRound,
   Eye,
   MoreHorizontal,
   ShoppingCart,
@@ -308,6 +309,8 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
     action: "restrict" | "suspend" | "reactivate";
   } | null>(null);
   const [allMerchants, setAllMerchants] = useState<any[]>([]);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
 
   useEffect(() => {
     const unsub = adminData.subscribeMerchants(setAllMerchants);
@@ -371,6 +374,37 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
     toast.success(
       `${c.firstName} ${c.lastName} ${action === "reactivate" ? "reactivated" : action + "ed"} successfully`,
     );
+  }
+
+  async function handleResetPassword() {
+    if (!consumer || !staff) return;
+    setResettingPassword(true);
+    try {
+      const res = await fetch("/api/send-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: consumer.email,
+          role: "consumer",
+          actorStaffId: staff.id,
+          actorStaffName: `${staff.firstName} ${staff.lastName}`,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to send reset email");
+      }
+      toast.success("Password reset email sent", {
+        description: `A secure reset link was sent to ${consumer.email}. The user sets their own new password.`,
+      });
+    } catch (e) {
+      toast.error("Could not send reset email", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setResettingPassword(false);
+      setResetConfirm(false);
+    }
   }
 
   // Not-found fallback
@@ -445,6 +479,8 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
         countryName={countryName}
         staff={staff}
         onAction={(action) => setConfirmAction({ consumer, action })}
+        onResetPassword={() => setResetConfirm(true)}
+        resettingPassword={resettingPassword}
       />
 
       {/* C. Tabs */}
@@ -504,6 +540,34 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Reset password confirmation */}
+      <AlertDialog open={resetConfirm} onOpenChange={setResetConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send password reset email?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This sends a secure password-reset link to{" "}
+              <span className="font-medium text-foreground">
+                {consumer.email}
+              </span>
+              . The consumer sets their own new password — you will not see or
+              set it. The link expires after the standard Firebase window.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resettingPassword}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={resettingPassword}
+              onClick={handleResetPassword}
+            >
+              {resettingPassword ? "Sending…" : "Send reset link"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ViewContainer>
   );
 }
@@ -516,12 +580,16 @@ function ProfileHeader({
   countryName,
   staff,
   onAction,
+  onResetPassword,
+  resettingPassword,
 }: {
   consumer: Consumer;
   countries: CountryConfig[];
   countryName: (code: string) => string;
   staff: ReturnType<typeof useAuth>["staff"];
   onAction: (action: "restrict" | "suspend" | "reactivate") => void;
+  onResetPassword: () => void;
+  resettingPassword: boolean;
 }) {
   // Quick-stat counters — live subscriptions so the header reflects reality
   const [cards, setCards] = useState<CardRecord[]>([]);
@@ -663,6 +731,16 @@ function ProfileHeader({
               disabled={(consumer.status as string) === "active" || !staff}
             >
               <RotateCcw className="size-3.5 mr-1" /> Reactivate
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs border-sky-300 text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-400 dark:hover:bg-sky-900/30"
+              onClick={onResetPassword}
+              disabled={!staff || resettingPassword}
+            >
+              <KeyRound className="size-3.5 mr-1" />
+              {resettingPassword ? "Sending…" : "Reset password"}
             </Button>
           </div>
         </div>

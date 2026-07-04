@@ -1095,3 +1095,34 @@ Work Log:
 
 Stage Summary:
 - Consumer account creation is now a normal, independent registration. A user with a merchant account (amehbryant@gmail.com) can create a consumer account with the SAME email and a DIFFERENT password — fully independent Firebase Auth accounts via plus-addressing (amehbryant+consumer@gmail.com). They go through the full registration flow (email, password, profile, KYC data). The ONLY blocker is if a consumer profile already exists for that email. The admin portal links the two profiles by real email for display only — no auto-account-creation. The Faya Pay app logs in using the plus-addressed email via the Firebase Auth client SDK (password stays on-device).
+
+---
+Task ID: admin-password-reset
+Agent: main
+Task: Admins should be able to reset passwords for both merchants or users, or send reset links (preferred)
+
+Work Log:
+- Chose the secure reset-EMAIL approach (admin triggers, user sets own new password via secure link) over admin-setting-a-password (would require Firebase Admin SDK credentials which aren't available in this env, and is less secure since admin would see the password).
+- Created src/app/api/send-password-reset/route.ts using the Firebase client SDK sendPasswordResetEmail:
+  - Body: { email (real), role: "consumer"|"merchant", actorStaffId, actorStaffName }
+  - For consumers: derives authEmail = deriveAuthEmail(email, "consumer") → amehbryant+consumer@gmail.com (Gmail delivers +consumer to base inbox). For merchants: authEmail = real email as-is.
+  - Calls sendPasswordResetEmail(auth, authEmail) with default action handler (no custom ActionCodeSettings — custom settings caused auth/invalid-continue-uri).
+  - Best-effort audit log to faya_admin_audit_logs with action `${role}.password_reset_email_sent`.
+  - Returns 404 with clear message if no Auth account exists (auth/user-not-found).
+- Added "Reset password" button + AlertDialog confirmation to consumer profile (user-detail-view.tsx ProfileHeader):
+  - Sky-bordered outline button with KeyRound icon, in the action row next to Restrict/Suspend/Reactivate.
+  - AlertDialog confirms: "Send password reset email?" showing the consumer's real email, explains the user sets their own new password.
+  - handleResetPassword() POSTs to /api/send-password-reset with role:"consumer", shows success/error toast.
+  - Added KeyRound to lucide-react imports.
+- Added "Reset password" button + AlertDialog to merchant profile (merchant-detail-view.tsx):
+  - Same sky-bordered button next to Reactivate, uses merchant.ownerEmail || merchant.contactEmail.
+  - AlertDialog confirms with the merchant's email. handleResetPassword() POSTs with role:"merchant".
+- Fixed auth/invalid-continue-uri error by removing the custom ActionCodeSettings { handleCodeInApp: false } — now uses Firebase's default action handler.
+- Verified end-to-end via API + Agent Browser:
+  - API: merchant reset → sent to amehbryant@gmail.com (200). Consumer reset → sent to mosesayande82+consumer@gmail.com (200, plus-addressed). Invalid email → 400.
+  - Browser merchant: Ameh Bryant Store → "Reset password" button → dialog shows amehbryant@gmail.com → "Send reset link" → "Password reset email sent" toast.
+  - Browser consumer: moses Ayande → "Reset password" button → dialog shows mosesayande82@gmail.com → "Send reset link" → "Password reset email sent" toast.
+  - No console errors. Lint clean.
+
+Stage Summary:
+- Admins can now reset passwords for both merchants and consumers from each profile page. A "Reset password" button (sky-bordered, KeyRound icon) sits in the action row alongside Restrict/Suspend/Reactivate. Clicking it opens a confirmation dialog showing the user's email; confirming sends a Firebase password-reset email. The user sets their OWN new password via the secure link — the admin never sees or sets it. Consumer resets correctly target the plus-addressed Auth email (amehbryant+consumer@gmail.com); merchant resets target the real email. Each reset is audit-logged.

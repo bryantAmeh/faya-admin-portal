@@ -488,6 +488,8 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
   const { staff } = useAuth();
   const { selectedMerchantId, setView, selectUser } = usePortalStore();
   const [confirmAction, setConfirmAction] = useState<MerchantAction | null>(null);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
 
   const merchant = useMemo(
     () => merchants.find((m) => m.id === selectedMerchantId) ?? null,
@@ -729,6 +731,37 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
     setConfirmAction(null);
   }
 
+  async function handleResetPassword() {
+    if (!merchant || !staff) return;
+    setResettingPassword(true);
+    try {
+      const res = await fetch("/api/send-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: merchant.ownerEmail || merchant.contactEmail,
+          role: "merchant",
+          actorStaffId: staff.id,
+          actorStaffName: `${staff.firstName} ${staff.lastName}`,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to send reset email");
+      }
+      toast.success("Password reset email sent", {
+        description: `A secure reset link was sent to ${merchant.ownerEmail || merchant.contactEmail}. The merchant sets their own new password.`,
+      });
+    } catch (e) {
+      toast.error("Could not send reset email", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setResettingPassword(false);
+      setResetConfirm(false);
+    }
+  }
+
   function confirmTitle(action: MerchantAction): string {
     if (action === "approve_kyb") return "Approve KYB?";
     if (action === "reject_kyb") return "Reject KYB?";
@@ -955,6 +988,16 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
                   <RotateCcw className="size-3.5 mr-1" /> Reactivate
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs border-sky-300 text-sky-700 hover:bg-sky-50 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-900/20"
+                onClick={() => setResetConfirm(true)}
+                disabled={!staff || resettingPassword}
+              >
+                <KeyRound className="size-3.5 mr-1" />
+                {resettingPassword ? "Sending…" : "Reset password"}
+              </Button>
             </div>
           </div>
 
@@ -1134,6 +1177,34 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
                     : confirmAction === "suspend"
                       ? "Suspend"
                       : "Reactivate"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reset password confirmation */}
+      <AlertDialog open={resetConfirm} onOpenChange={setResetConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send password reset email?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This sends a secure password-reset link to{" "}
+              <span className="font-medium text-foreground">
+                {merchant.ownerEmail || merchant.contactEmail}
+              </span>
+              . The merchant sets their own new password — you will not see or
+              set it. The link expires after the standard Firebase window.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resettingPassword}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={resettingPassword}
+              onClick={handleResetPassword}
+            >
+              {resettingPassword ? "Sending…" : "Send reset link"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
