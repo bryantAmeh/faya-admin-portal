@@ -59,6 +59,7 @@ import {
   CheckCircle2,
   XCircle,
   Users as UsersIcon,
+  Users,
   Smartphone,
   CreditCard,
   Receipt,
@@ -84,6 +85,7 @@ import {
   Globe2,
   Send,
   ArrowRightCircle,
+  ArrowRight,
   BadgeCheck,
   MoreHorizontal,
   ChevronRight,
@@ -178,7 +180,7 @@ import type {
   StockOrderStatus,
   StockItemType,
 } from "@/lib/types";
-import { PLATFORM_LABELS } from "@/lib/types";
+import { PLATFORM_LABELS, type Consumer } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface MerchantDetailViewProps {
@@ -484,7 +486,7 @@ function nameMatchesMerchant(
 
 export function MerchantDetailView({ merchants, countries }: MerchantDetailViewProps) {
   const { staff } = useAuth();
-  const { selectedMerchantId, setView } = usePortalStore();
+  const { selectedMerchantId, setView, selectUser } = usePortalStore();
   const [confirmAction, setConfirmAction] = useState<MerchantAction | null>(null);
 
   const merchant = useMemo(
@@ -505,6 +507,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
   const [fraudAlerts, setFraudAlerts] = useState<FraudAlert[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [stockOrders, setStockOrders] = useState<StockOrder[]>([]);
+  const [allConsumers, setAllConsumers] = useState<Consumer[]>([]);
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
@@ -521,6 +524,7 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
       unsubs.push(adminData.subscribeFraud(setFraudAlerts));
       unsubs.push(adminData.subscribeAudit(setAuditLogs));
       unsubs.push(adminData.subscribeStockOrders(setStockOrders));
+      unsubs.push(adminData.subscribeConsumers(setAllConsumers));
     } catch (e) {
       console.error("[MerchantDetailView] subscription error:", e);
     }
@@ -796,6 +800,38 @@ export function MerchantDetailView({ merchants, countries }: MerchantDetailViewP
           Merchant Profile · <span className="font-mono">{merchant.merchantCode}</span>
         </div>
       </div>
+
+      {/* Dual account banner — if this merchant is also a consumer */}
+      {allConsumers.find((c) => c.id === merchant.id) && (
+        <Card className="border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800">
+          <CardContent className="p-3 flex items-center gap-3">
+            <div className="size-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+              <Users className="size-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+                This merchant is also a Consumer
+              </div>
+              <div className="text-xs text-emerald-700 dark:text-emerald-400 truncate">
+                {(() => {
+                  const c = allConsumers.find((c) => c.id === merchant.id);
+                  return c ? `${c.fullName || c.firstName || ""} ${c.lastName || ""} · ${c.email}` : "";
+                })()}
+              </div>
+            </div>
+            <Button
+              size="sm"
+              className="bg-emerald-600 hover:bg-emerald-700 shrink-0"
+              onClick={() => {
+                selectUser(merchant.id);
+                setView("user_detail");
+              }}
+            >
+              View Consumer Profile <ArrowRight className="size-3.5 ml-1" />
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* B. Profile header card */}
       <Card className="overflow-hidden border-emerald-200 dark:border-emerald-900/50">

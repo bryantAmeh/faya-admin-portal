@@ -63,6 +63,8 @@ import {
   Truck,
   Smartphone,
   Package,
+  Store,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -300,16 +302,25 @@ function kycBadge(s: string) {
 
 export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
   const { staff } = useAuth();
-  const { selectedUserId, setView } = usePortalStore();
+  const { selectedUserId, setView, selectMerchant } = usePortalStore();
   const [confirmAction, setConfirmAction] = useState<{
     consumer: Consumer;
     action: "restrict" | "suspend" | "reactivate";
   } | null>(null);
+  const [allMerchants, setAllMerchants] = useState<any[]>([]);
+
+  useEffect(() => {
+    const unsub = adminData.subscribeMerchants(setAllMerchants);
+    return () => unsub();
+  }, []);
 
   const consumer = useMemo(
     () => consumers.find((c) => c.id === selectedUserId) ?? null,
     [consumers, selectedUserId],
   );
+
+  // Check if this consumer is also a merchant (same UID in merchants collection)
+  const linkedMerchant = allMerchants.find((m) => m.id === selectedUserId);
 
   function countryName(code: string): string {
     return countries.find((c) => c.countryCode === code)?.countryName ?? code;
@@ -387,6 +398,35 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
           Full Profile View
         </Badge>
       </div>
+
+      {/* Dual account banner — if this consumer is also a merchant */}
+      {linkedMerchant && (
+        <Card className="border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800">
+          <CardContent className="p-3 flex items-center gap-3">
+            <div className="size-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+              <Store className="size-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+                This consumer is also a Merchant
+              </div>
+              <div className="text-xs text-emerald-700 dark:text-emerald-400 truncate">
+                {linkedMerchant.tradingName || linkedMerchant.legalName || linkedMerchant.email} · Status: {linkedMerchant.status || "—"} · KYB: {linkedMerchant.kybStatus || "—"}
+              </div>
+            </div>
+            <Button
+              size="sm"
+              className="bg-emerald-600 hover:bg-emerald-700 shrink-0"
+              onClick={() => {
+                selectMerchant(linkedMerchant.id);
+                setView("merchant_detail");
+              }}
+            >
+              View Merchant Profile <ArrowRight className="size-3.5 ml-1" />
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* B. Profile header — keyed by id so all subscriptions/tabs reset on switch */}
       <ProfileHeader
@@ -480,12 +520,17 @@ function ProfileHeader({
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [tickets, setTickets] = useState<TicketRecord[]>([]);
   const [disputes, setDisputes] = useState<DisputeRecord[]>([]);
+  const [merchants, setMerchants] = useState<any[]>([]);
 
   useEffect(() => adminData.subscribeCards(setCards), []);
   useEffect(() => adminData.subscribeWallets(setWallets), []);
   useEffect(() => adminData.subscribeTransactions(setTransactions), []);
   useEffect(() => adminData.subscribeTickets(setTickets), []);
   useEffect(() => adminData.subscribeDisputes(setDisputes), []);
+  useEffect(() => adminData.subscribeMerchants(setMerchants), []);
+
+  // Check if this consumer is also a merchant (same UID in merchants collection)
+  const linkedMerchant = merchants.find((m) => m.id === consumer.id);
 
   const fullName = consumer.fullName || `${consumer.firstName || ""} ${consumer.lastName || ""}`.trim() || consumer.email;
   const consumerCards = cards.filter((c) => c.userId === consumer.id);
