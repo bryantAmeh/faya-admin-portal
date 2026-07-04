@@ -1046,3 +1046,28 @@ Work Log:
 
 Stage Summary:
 - POS device requests now show REAL device data from the phone regardless of which schema wrote the document. The normalizer handles the Faya POS app's flat schema (systemInfo, deviceCheckResults, nfcAvailable, deviceType, deviceId), the admin nested schema (deviceInfo{...} from /api/pos-device-request), and mixed/partial docs. Verified with the actual Samsung SM-S931B submission — model, OS, NFC, and integrity all display accurately. The previous "Unknown device" fallback no longer triggers for real POS app submissions.
+
+---
+Task ID: dual-role-consumer-account-api
+Agent: main
+Task: User should be able to create a consumer account even if they have a merchant account with the same email — only block if a consumer already exists with that email
+
+Work Log:
+- Root cause: Firebase Auth uses ONE account per email. The Faya Pay (consumer) app calling createUserWithEmailAndPassword fails with "email-already-in-use" when the user already registered with Faya Merchant. There was no server-side route to handle the dual-role case.
+- Created src/app/api/create-consumer-account/route.ts using the client-side Firebase SDK (matching validate-country / pos-device-request pattern — Admin SDK has no credentials in this env):
+  - Flow: try createUserWithEmailAndPassword → on "auth/email-already-in-use" → signInWithEmailAndPassword to REUSE the existing Auth account (dual-role path).
+  - If sign-in fails (wrong password) → 401 with clear message: "An account already exists with this email (likely from Faya Merchant). Please use the same password to link your consumer profile."
+  - Then checks `users` collection by UID and by email. If a consumer doc already exists → 409 "A consumer account with this email already exists. Please sign in to Faya Pay instead."
+  - A merchant profile existing is NOT a blocker — that's the dual-role case. Detects merchant doc (by UID or ownerEmail) and sets dualRole=true + dualRoleWithMerchant flag on the consumer doc.
+  - Creates consumer profile in `users` keyed by the same UID (one Auth account, two profile docs).
+  - Uses .exists() method calls (not property) for Firestore DocumentSnapshot compatibility.
+- Verified all 4 scenarios end-to-end:
+  1. Fresh email (no merchant, no consumer) → SUCCESS, created auth_and_consumer, dualRole=false.
+  2. Duplicate consumer (email already has consumer doc) → 409 "A consumer account with this email already exists."
+  3. DUAL-ROLE SUCCESS: Auth account exists (merchant doc present), no consumer doc → SUCCESS, dualRole=true, created=consumer_profile (reused Auth account). Same UID for both profiles.
+  4. Existing account + WRONG password → 401 clear error telling user to use the same password as their merchant account.
+- Browser-verified: existing dual-role consumer mosesayande82@gmail.com (has both users + merchants docs) shows "This consumer is also a Merchant" banner with link to merchant profile in admin portal.
+- Cleaned up all test data from Firestore. Lint clean. No console errors.
+
+Stage Summary:
+- The Faya Pay app can now call POST /api/create-consumer-account with email+password+profile fields. If the user already has a merchant account (same email), the route REUSES the existing Firebase Auth account (signs in with the provided password) and creates a consumer profile — no "email-already-in-use" error. The ONLY blocker is if a consumer profile already exists for that email (409). A merchant can now have both a consumer and merchant profile under one email/UID, linked in the admin portal via the dual-role banners.
