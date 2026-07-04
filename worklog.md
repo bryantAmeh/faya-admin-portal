@@ -1186,3 +1186,22 @@ Work Log:
 
 Stage Summary:
 - Admins can now permanently delete a consumer from the admin portal. A "Danger zone" section at the bottom of each consumer profile has a red "Delete consumer" button. Clicking it opens a confirmation dialog requiring the admin to type the consumer's exact email to proceed. On confirm: the profile doc + cards + wallets are deleted from Firestore; transactions and documents are kept for audit; the deletion is audit-logged with all identifying details; the admin is navigated back to the Users list. The deleted user can no longer log in to Faya Pay (account-status returns canLogin=false when no profile exists).
+
+---
+Task ID: fix-delete-dialog-email-undefined-crash
+Agent: main
+Task: Fix runtime TypeError: Cannot read properties of undefined (reading 'trim') at user-detail-view.tsx:730
+
+Work Log:
+- Root cause: the delete-consumer confirmation dialog's disabled check called `consumer.email.trim()` directly. Some consumer docs in Firestore don't have an `email` field (e.g. seed/demo docs or partial registrations), so `consumer.email` is undefined → `.trim()` crashed during render at line 730.
+- Fixed all `consumer.email` accesses in the delete section with defensive fallbacks:
+  - handleDeleteConsumer(): `const consumerEmailSafe = (consumer.email ?? "").trim().toLowerCase()` for the match check; `consumer.email || "(no email on file)"` in the error toast; `consumer.email || ""` for the stored consumerEmail variable.
+  - Dialog description: `({consumer.email || "no email"})`.
+  - Dialog label: `{consumer.email || "(no email on file)"}`.
+  - Input placeholder: `placeholder={consumer.email || ""}`.
+  - AlertDialogAction disabled check: `(consumer.email ?? "").trim().toLowerCase()`.
+- Verified via Agent Browser: logged in as super admin → Users → opened consumer profile "moses ameh ayande" → page rendered without crash → scrolled to Danger zone → clicked "Delete consumer" → confirmation dialog rendered correctly showing the email → no console errors. The previous TypeError (which fired on every consumer-profile render when email was missing) is gone.
+- Lint clean.
+
+Stage Summary:
+- The delete-consumer dialog no longer crashes when a consumer doc lacks an `email` field. All `consumer.email` accesses in the delete handler and dialog use defensive fallbacks (`?? ""` / `|| "(no email on file)"`), so the page renders for every consumer regardless of profile completeness.

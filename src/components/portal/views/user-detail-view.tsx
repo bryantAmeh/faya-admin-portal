@@ -414,17 +414,18 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
 
   async function handleDeleteConsumer() {
     if (!consumer || !staff) return;
+    const consumerEmailSafe = (consumer.email ?? "").trim().toLowerCase();
     // Require the admin to type the consumer's exact email before allowing deletion.
-    if (deleteEmailInput.trim().toLowerCase() !== consumer.email.trim().toLowerCase()) {
+    if (deleteEmailInput.trim().toLowerCase() !== consumerEmailSafe) {
       toast.error("Email does not match", {
-        description: `Type ${consumer.email} exactly to confirm deletion.`,
+        description: `Type ${consumer.email || "(no email on file)"} exactly to confirm deletion.`,
       });
       return;
     }
     setDeleting(true);
     try {
       const consumerId = consumer.id;
-      const consumerEmail = consumer.email;
+      const consumerEmail = consumer.email || "";
       const consumerName = consumer.fullName || `${consumer.firstName || ""} ${consumer.lastName || ""}`.trim();
       const consumerCode = consumer.consumerCode ?? "";
 
@@ -701,7 +702,7 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
               <span className="font-medium text-foreground">
                 {consumer.fullName || `${consumer.firstName} ${consumer.lastName}`}
               </span>{" "}
-              ({consumer.email}). The profile, cards, and wallets will be
+              ({consumer.email || "no email"}). The profile, cards, and wallets will be
               removed. Transactions and documents are kept for audit. The user
               will no longer be able to log in to Faya Pay.{" "}
               <strong>This cannot be undone.</strong>
@@ -710,12 +711,12 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
           <div className="space-y-2 py-2">
             <label className="text-xs font-medium text-muted-foreground">
               Type the consumer's email to confirm:{" "}
-              <span className="font-mono text-foreground">{consumer.email}</span>
+              <span className="font-mono text-foreground">{consumer.email || "(no email on file)"}</span>
             </label>
             <Input
               value={deleteEmailInput}
               onChange={(e) => setDeleteEmailInput(e.target.value)}
-              placeholder={consumer.email}
+              placeholder={consumer.email || ""}
               className="text-sm"
               autoFocus
               disabled={deleting}
@@ -727,7 +728,7 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
               disabled={
                 deleting ||
                 deleteEmailInput.trim().toLowerCase() !==
-                  consumer.email.trim().toLowerCase()
+                  (consumer.email ?? "").trim().toLowerCase()
               }
               onClick={handleDeleteConsumer}
               className="bg-red-600 hover:bg-red-700 text-white"
