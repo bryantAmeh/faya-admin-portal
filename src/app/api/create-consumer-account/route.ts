@@ -3,14 +3,12 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import {
   getAuth,
   createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
 } from "firebase/auth";
 import {
   getFirestore,
   collection,
   doc,
   setDoc,
-  getDoc,
   query,
   where,
   getDocs,
@@ -19,40 +17,55 @@ import {
 /**
  * POST /api/create-consumer-account
  *
- * Creates a Faya Pay CONSUMER profile. Called by the Faya Pay app during
- * registration.
+ * Creates a Faya Pay CONSUMER account as a FULLY INDEPENDENT registration —
+ * the user enters their email, password, and profile/KYC data like a normal
+ * person, even if that email is already registered as a merchant. The two
+ * accounts (consumer + merchant) have DIFFERENT passwords and are separate
+ * Firebase Auth accounts.
  *
- * DUAL-ROLE SUPPORT (consumer + merchant under one email):
- *   Firebase Auth uses ONE account per email. If a user already registered
- *   with Faya Merchant (same email), this route REUSES the existing Auth
- *   account instead of erroring with "email-already-in-use". It then creates
- *   a consumer profile in the `users` collection keyed by the same UID.
+ * HOW THIS IS POSSIBLE (Firebase Auth requires one password per email):
+ *   Firebase Auth enforces a unique email/password credential per email. To
+ *   allow the same person to have an independent consumer account alongside
+ *   their merchant account (with a different password), the consumer account's
+ *   AUTH email uses plus-addressing: `amehbryant+consumer@gmail.com`. Firebase
+ *   treats `+consumer` as a distinct account with its own password, while
+ *   Gmail (and most providers) deliver any verification email to the base
+ *   address. The REAL email (`amehbryant@gmail.com`) is stored in the
+ *   Firestore `users` profile and is what the admin portal displays and uses
+ *   to link the consumer ↔ merchant profiles.
  *
- *   The ONLY blocking condition is: a CONSUMER profile already exists for
- *   this email in the `users` collection. A merchant profile existing is NOT
- *   a blocker — that's the dual-role case the user explicitly wants.
+ *   The user NEVER sees or types the `+consumer` suffix. The Faya Pay app
+ *   calls this endpoint with the real email + password + profile fields; this
+ *   route derives the suffixed auth email internally.
  *
- * Flow:
- *   1. If NO Auth account exists for the email → createUserWithEmailAndPassword
- *   2. If an Auth account DOES exist → signInWithEmailAndPassword to obtain
- *      the UID (reuses the merchant's account). If the password is wrong,
- *      returns a clear error.
- *   3. If a consumer doc already exists in `users` (by UID or email) → 409
- *   4. Create consumer doc in `users` keyed by the UID.
+ * BLOCKING RULE (only one):
+ *   A consumer profile must not already exist for the real email in `users`.
+ *   A merchant profile existing is NOT a blocker — that's the whole point.
+ *
+ * FAYA PAY APP LOGIN (how the consumer signs in afterward):
+ *   The Faya Pay app signs in via the Firebase Auth client SDK using the
+ *   plus-addressed email: `signInWithEmailAndPassword(auth, "<local>+consumer@<domain>", password)`.
+ *   The app derives the `+consumer` suffix the same way this route does (see
+ *   deriveAuthEmail below). The password never leaves the device at login.
  *
  * Body:
  *   {
- *     "email": string,
- *     "password": string,
+ *     "email": string,            // real email, e.g. amehbryant@gmail.com
+ *     "password": string,         // consumer account password (independent)
  *     "firstName"?: string,
  *     "lastName"?: string,
  *     "fullName"?: string,
  *     "phone"?: string,
- *     "countryCode"?: string,
+ *     "countryCode"?: string,     // e.g. "NG"
  *     "countryOfResidence"?: string,
  *     "nationality"?: string,
  *     "dateOfBirth"?: string
  *   }
+ *
+ * Returns:
+ *   200 { success: true, uid, email, authEmail }
+ *   409 { success: false, error: "A consumer account with this email already exists..." }
+ *   400 / 500 { success: false, error }
  */
 const firebaseConfig = {
   apiKey: "AIzaSyAuHmu4z06EPZJ6L4p0a_r-lrbGYo_RyPM",
@@ -64,6 +77,24 @@ const firebaseConfig = {
 function getClientApp() {
   if (!getApps().length) initializeApp(firebaseConfig);
   return getApp();
+}
+
+/**
+ * Derive the Firebase Auth email for a consumer account from the real email.
+ * Strips any existing plus-suffix, then appends `+consumer` before the `@`.
+ *   amehbryant@gmail.com        → amehbryant+consumer@gmail.com
+ *   amehbryant+old@gmail.com    → amehbryant+consumer@gmail.com
+ *   Jane.Doe@Example.co.uk      → Jane.Doe+consumer@Example.co.uk
+ *
+ * The Faya Pay app MUST use the exact same derivation at login time.
+ */
+export function deriveAuthEmail(realEmail: string, role = "consumer"): string {
+  const at = realEmail.lastIndexOf("@");
+  if (at < 1) return realEmail; // malformed; let Firebase reject it
+  const domain = realEmail.slice(at + 1);
+  const local = realEmail.slice(0, at);
+  const baseLocal = local.split("+")[0];
+  return `${baseLocal}+${role}@${domain}`;
 }
 
 export async function POST(request: Request) {
@@ -112,61 +143,11 @@ export async function POST(request: Request) {
     const nationality = (body.nationality ?? "").trim();
     const dateOfBirth = (body.dateOfBirth ?? "").trim();
 
-    /* ---------- 1. Resolve or create the Firebase Auth account ---------- */
-    let uid: string;
-    let authExisted = false;
-
-    // Try to create a new Auth account first. If the email is already in use
-    // (e.g. the user registered with Faya Merchant), fall back to signing in
-    // with the provided password to REUSE the existing account — this is the
-    // dual-role path (one email, both consumer + merchant profiles).
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      uid = cred.user.uid;
-    } catch (e) {
-      const code = (e as { code?: string })?.code ?? "";
-      if (code === "auth/email-already-in-use") {
-        // Account exists — reuse it by signing in (dual-role).
-        authExisted = true;
-        try {
-          const cred = await signInWithEmailAndPassword(auth, email, password);
-          uid = cred.user.uid;
-        } catch {
-          return NextResponse.json(
-            {
-              success: false,
-              error:
-                "An account already exists with this email (likely from Faya Merchant). Please use the same password to link your consumer profile, or sign in with that account.",
-              email,
-            },
-            { status: 401 },
-          );
-        }
-      } else {
-        throw e;
-      }
-    }
-
-    /* ---------- 2. Block only if a CONSUMER profile already exists ---------- */
-    // Check by UID first (fast path).
-    const byUidSnap = await getDoc(doc(db, "users", uid));
-    if (byUidSnap.exists()) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "A consumer account with this email already exists. Please sign in to Faya Pay instead.",
-          uid,
-          email,
-        },
-        { status: 409 },
-      );
-    }
-
-    // Email scan: a consumer doc might exist under a different doc id but with
-    // the same email. This is the authoritative duplicate-consumer check.
+    /* ---------- 1. Block if a CONSUMER profile already exists (real email) ---------- */
+    // The `users` collection stores the REAL email. Querying by it is the
+    // authoritative duplicate-consumer check, regardless of Auth email suffix.
     const emailQuery = await getDocs(
-      query(collection(db, "users"), where("email", "==", email), ),
+      query(collection(db, "users"), where("email", "==", email)),
     );
     if (!emailQuery.empty) {
       return NextResponse.json(
@@ -181,25 +162,59 @@ export async function POST(request: Request) {
       );
     }
 
-    /* ---------- 3. Check whether a merchant profile also exists (dual-role) ---------- */
-    const merchantSnap = await getDoc(doc(db, "merchants", uid));
-    let merchantByEmail = false;
-    if (!merchantSnap.exists()) {
-      const mEmailQ = await getDocs(
-        query(collection(db, "merchants"), where("ownerEmail", "==", email)),
-      );
-      merchantByEmail = !mEmailQ.empty;
-    }
-    const dualRole = merchantSnap.exists() || merchantByEmail;
+    /* ---------- 2. Create an INDEPENDENT Firebase Auth account ---------- */
+    // Auth email uses plus-addressing so it's a distinct account with its own
+    // password — even if a merchant account exists for the same real email.
+    const authEmail = deriveAuthEmail(email);
 
-    /* ---------- 4. Create the consumer profile in `users` ---------- */
+    let uid: string;
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, authEmail, password);
+      uid = cred.user.uid;
+    } catch (e) {
+      const code = (e as { code?: string })?.code ?? "";
+      if (code === "auth/email-already-in-use") {
+        // The plus-addressed auth account already exists but no `users` doc
+        // was found in step 1 → orphaned auth from a failed prior attempt.
+        // Tell the user to sign in (they already have a consumer account).
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "A consumer account with this email already exists. Please sign in to Faya Pay instead.",
+            email,
+            authEmail,
+          },
+          { status: 409 },
+        );
+      }
+      if (code === "auth/invalid-email") {
+        return NextResponse.json(
+          { success: false, error: "The email address is not valid.", email },
+          { status: 400 },
+        );
+      }
+      if (code === "auth/weak-password") {
+        return NextResponse.json(
+          { success: false, error: "Password is too weak. Use at least 6 characters." },
+          { status: 400 },
+        );
+      }
+      throw e;
+    }
+
+    /* ---------- 3. Create the consumer profile in `users` ---------- */
+    // NOTE: we do NOT auto-detect or link the merchant here. The consumer
+    // account is a normal, standalone registration. The admin portal links
+    // consumer ↔ merchant profiles by real email for display purposes only.
     const now = Date.now();
     const consumerCode = `FAY-NG-C-${now.toString().slice(-6)}`;
 
     const consumerDoc = {
       id: uid,
       consumerCode,
-      email,
+      email,            // REAL email — used for display, search, dual-role linking
+      authEmail,        // plus-addressed Firebase Auth email (reference only)
       firstName,
       lastName,
       fullName: fullName || email,
@@ -219,14 +234,12 @@ export async function POST(request: Request) {
       transactionCount: 0,
       walletBalance: 0,
       currency: "NGN",
-      emailVerified: authExisted,
+      emailVerified: false,
       phoneVerified: false,
       acceptedTerms: false,
       createdAt: now,
       updatedAt: now,
       notes: "",
-      // Provenance: marks that this consumer shares an Auth account with a merchant
-      dualRoleWithMerchant: dualRole,
       source: "faya_pay_app",
     };
 
@@ -236,11 +249,9 @@ export async function POST(request: Request) {
       success: true,
       uid,
       email,
-      dualRole,
-      created: authExisted ? "consumer_profile" : "auth_and_consumer",
-      message: dualRole
-        ? "Consumer profile created. This account is also linked to a merchant profile."
-        : "Consumer account created successfully.",
+      authEmail,
+      message:
+        "Consumer account created successfully. The user can now sign in to Faya Pay with this email and password.",
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

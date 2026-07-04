@@ -1071,3 +1071,27 @@ Work Log:
 
 Stage Summary:
 - The Faya Pay app can now call POST /api/create-consumer-account with email+password+profile fields. If the user already has a merchant account (same email), the route REUSES the existing Firebase Auth account (signs in with the provided password) and creates a consumer profile — no "email-already-in-use" error. The ONLY blocker is if a consumer profile already exists for that email (409). A merchant can now have both a consumer and merchant profile under one email/UID, linked in the admin portal via the dual-role banners.
+
+---
+Task ID: consumer-account-independent-dual-role
+Agent: main
+Task: User wants consumer account creation to be a normal independent registration (own password, KYC data entry) even if the email is already a merchant — NOT auto-linked to the merchant's existing Auth account
+
+Work Log:
+- Previous approach was wrong: it signed into the merchant's existing Firebase Auth account and just attached a consumer profile doc — meaning no separate password, no real registration flow, no KYC data entry. User explicitly rejected this ("dont give them auto consumer account").
+- Root constraint: Firebase Auth enforces ONE email/password credential per email — you cannot have two different passwords for the same bare email in a single Firebase Auth project.
+- Solution: PLUS-ADDRESSING. The consumer account's Firebase Auth email is derived as `<local>+consumer@<domain>` (e.g. amehbryant+consumer@gmail.com). Firebase treats `+consumer` as a DISTINCT account with its own password and UID. The REAL email (amehbryant@gmail.com) is stored in the Firestore `users` profile and is what the admin portal displays + uses to link consumer↔merchant. Gmail (and most providers) deliver any verification email to the base address.
+- Rewrote src/app/api/create-consumer-account/route.ts:
+  - Added exported deriveAuthEmail(realEmail, role) helper: strips existing plus-suffix, appends `+consumer` before the `@`.
+  - Flow: (1) block if a consumer profile already exists for the REAL email in `users` (409); (2) create a brand-new INDEPENDENT Firebase Auth account with authEmail + the provided password; (3) create consumer profile in `users` with real email + authEmail reference + KYC/profile fields. No merchant detection, no auto-linking.
+  - The user enters their real email + a different password + profile data like a normal person. They never see the `+consumer` suffix.
+- Documented the Faya Pay app login flow in the route header: the app signs in via Firebase Auth client SDK using the plus-addressed email `signInWithEmailAndPassword(auth, deriveAuthEmail(realEmail), password)`. Password stays on-device at login. The app reuses the same deriveAuthEmail derivation (exported from this route module or reimplemented).
+- Verified all scenarios:
+  1. Create consumer for amehbryant@gmail.com (has merchant account) with DIFFERENT password 'ConsumerPass123' → SUCCESS. New independent UID (8Sihx13ae8hLWOyDfw6btkDqjOq1, different from merchant's amehbryant_merchant). authEmail = amehbryant+consumer@gmail.com.
+  2. Duplicate consumer (same real email) → 409 "A consumer account with this email already exists. Please sign in to Faya Pay instead."
+  3. Consumer signs in via Firebase Auth with amehbryant+consumer@gmail.com + 'ConsumerPass123' → SUCCESS (confirms independent account with its own password).
+- Browser-verified: new consumer "Ameh Bryant" (amehbryant@gmail.com) appears in admin Users list. Profile shows "This consumer is also a Merchant" banner → links to merchant profile (dual-role linking by real email still works for DISPLAY, even though the two Auth accounts are independent).
+- Cleaned up test consumer doc from Firestore. Lint clean. No console errors.
+
+Stage Summary:
+- Consumer account creation is now a normal, independent registration. A user with a merchant account (amehbryant@gmail.com) can create a consumer account with the SAME email and a DIFFERENT password — fully independent Firebase Auth accounts via plus-addressing (amehbryant+consumer@gmail.com). They go through the full registration flow (email, password, profile, KYC data). The ONLY blocker is if a consumer profile already exists for that email. The admin portal links the two profiles by real email for display only — no auto-account-creation. The Faya Pay app logs in using the plus-addressed email via the Firebase Auth client SDK (password stays on-device).
