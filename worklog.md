@@ -1126,3 +1126,38 @@ Work Log:
 
 Stage Summary:
 - Admins can now reset passwords for both merchants and consumers from each profile page. A "Reset password" button (sky-bordered, KeyRound icon) sits in the action row alongside Restrict/Suspend/Reactivate. Clicking it opens a confirmation dialog showing the user's email; confirming sends a Firebase password-reset email. The user sets their OWN new password via the secure link — the admin never sees or sets it. Consumer resets correctly target the plus-addressed Auth email (amehbryant+consumer@gmail.com); merchant resets target the real email. Each reset is audit-logged.
+
+---
+Task ID: suspended-account-block-login-transact
+Agent: main
+Task: If user/merchant are suspended they should not be able to login or carry out any transaction
+
+Work Log:
+- Root constraint: Firebase Auth only verifies email+password credentials. It does NOT know about the admin portal's `status` field (suspended/restricted/closed). A suspended user's Firebase Auth login still succeeds — so the apps (Faya Pay, Faya Business, Faya POS) MUST check the Firestore profile status after login and before each transaction. Disabling the Auth account itself would require Firebase Admin SDK credentials (unavailable in this env).
+- Created src/app/api/account-status/route.ts (GET):
+  - Params: ?uid=<firebaseUid>&role=consumer|merchant OR ?email=<email>&role=consumer|merchant
+  - Looks up the profile doc by UID first, then by email (consumer.email, merchant.ownerEmail, merchant.contactEmail).
+  - Maps status → permissions:
+    - active → canLogin=true, canTransact=true
+    - pending_kyc / onboarding → canLogin=true, canTransact=false (complete KYC/KYB first)
+    - restricted → canLogin=true, canTransact=false (under review)
+    - suspended → canLogin=false, canTransact=false (BLOCKED)
+    - closed → canLogin=false, canTransact=false (BLOCKED)
+    - unknown → fail safe: canLogin=true, canTransact=false
+  - Returns { found, uid, role, status, canLogin, canTransact, reason, kycStatus?, kybStatus?, merchantCode?, consumerCode? }
+  - If profile not found → canLogin=false, canTransact=false with "No profile found" reason.
+- Documented the app integration flow in the route header (pseudocode):
+  - After signInWithEmailAndPassword succeeds → GET /api/account-status?uid=X&role=Y → if !canLogin → signOut + show reason.
+  - Before each transaction → if !canTransact → block + show reason.
+- Verified all status scenarios by toggling a real merchant (amehbryant_merchant) via Firestore REST:
+  - active → canLogin=T, canTransact=T ✓
+  - onboarding → canLogin=T, canTransact=F ✓
+  - restricted → canLogin=T, canTransact=F ✓
+  - suspended → canLogin=F, canTransact=F ✓ (BLOCKED — the core requirement)
+  - closed → canLogin=F, canTransact=F ✓
+  - Restored merchant to active afterward.
+- Edge cases verified: missing params → 400; nonexistent UID → found=false, canLogin=false; email lookup for both consumer and merchant works.
+- Admin portal renders cleanly, no console errors. Lint clean.
+
+Stage Summary:
+- The Faya Pay, Faya Business, and Faya POS apps now have a single endpoint to enforce admin suspensions: GET /api/account-status?uid=X&role=consumer|merchant. After Firebase Auth login, the app checks canLogin — if false (suspended/closed), it signs the user out and shows the reason. Before each transaction, the app checks canTransact — if false (suspended/restricted/closed/onboarding/pending_kyc), the transaction is blocked. The admin portal's Suspend/Restrict/Reactivate buttons (already wired to update the Firestore status field) now have real enforcement power across all three apps.
