@@ -314,6 +314,7 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
   const [resettingPassword, setResettingPassword] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
+  const [sendingResetEmail, setSendingResetEmail] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteEmailInput, setDeleteEmailInput] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -410,6 +411,39 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
       });
     } finally {
       setResettingPassword(false);
+    }
+  }
+
+  async function handleSendResetEmail() {
+    if (!consumer || !staff) return;
+    setSendingResetEmail(true);
+    try {
+      const res = await fetch("/api/send-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: consumer.email || "",
+          role: "consumer",
+          actorStaffId: staff.id,
+          actorStaffName: `${staff.firstName} ${staff.lastName}`,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to send reset email");
+      }
+      toast.success("Reset email sent", {
+        description: `A secure password-reset link was sent to ${consumer.email || "the consumer's email"}. They set their own new password.`,
+      });
+      setResetConfirm(false);
+    } catch (e) {
+      toast.error("Could not send reset email", {
+        description:
+          (e instanceof Error ? e.message : String(e)) +
+          " — the account may not have a Firebase Auth profile. Use 'Generate temp password' instead.",
+      });
+    } finally {
+      setSendingResetEmail(false);
     }
   }
 
@@ -727,24 +761,60 @@ export function UserDetailView({ consumers, countries }: UserDetailViewProps) {
               <AlertDialogHeader>
                 <AlertDialogTitle>Reset consumer password?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This generates a new temporary password for{" "}
+                  Choose how to reset the password for{" "}
                   <span className="font-medium text-foreground">
                     {consumer.email || "this consumer"}
                   </span>
-                  . You'll see it once to share with them. The consumer should
-                  sign in and change it afterward.
+                  .
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              <div className="space-y-2 py-1">
+                <div className="rounded-md border p-3 space-y-1">
+                  <div className="text-sm font-medium flex items-center gap-1.5">
+                    <Mail className="size-3.5 text-sky-600" /> Send reset link (email)
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Sends a secure Firebase reset link. The consumer sets their
+                    own new password. Works for accounts with a Firebase Auth
+                    profile (legacy accounts). Firestore-only accounts won't
+                    receive an email — use the temp password option instead.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full h-8 text-xs border-sky-300 text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300"
+                    disabled={sendingResetEmail || resettingPassword}
+                    onClick={handleSendResetEmail}
+                  >
+                    {sendingResetEmail ? "Sending…" : "Send reset link"}
+                  </Button>
+                </div>
+                <div className="rounded-md border p-3 space-y-1">
+                  <div className="text-sm font-medium flex items-center gap-1.5">
+                    <KeyRound className="size-3.5 text-emerald-600" /> Generate temp password
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Generates a random temporary password you can share with the
+                    consumer. Always works (Firestore-based). The consumer
+                    should sign in and change it afterward.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full h-8 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+                    disabled={sendingResetEmail || resettingPassword}
+                    onClick={handleResetPassword}
+                  >
+                    {resettingPassword ? "Setting…" : "Generate temp password"}
+                  </Button>
+                </div>
+              </div>
               <AlertDialogFooter>
-                <AlertDialogCancel disabled={resettingPassword}>
+                <AlertDialogCancel disabled={resettingPassword || sendingResetEmail}>
                   Cancel
                 </AlertDialogCancel>
-                <AlertDialogAction
-                  disabled={resettingPassword}
-                  onClick={handleResetPassword}
-                >
-                  {resettingPassword ? "Setting…" : "Generate new password"}
-                </AlertDialogAction>
               </AlertDialogFooter>
             </>
           )}

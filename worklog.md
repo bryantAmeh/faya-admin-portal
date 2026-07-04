@@ -1233,3 +1233,22 @@ Work Log:
 
 Stage Summary:
 - Consumer + merchant authentication is now Firestore bcrypt-based (passwordHash on each profile doc), not Firebase Auth. Same email can have independent consumer + merchant accounts with different passwords — no plus-addressing. Deleting a profile doc fully removes the account (login fails, account-status blocks) — no leftover Firebase Auth account. Admin "Reset password" generates a temp password shown once in the dialog with a Copy button. Firebase Auth remains only for admin portal staff. Existing consumer/merchant accounts created under the old Firebase Auth flow have no passwordHash yet — their first login returns needsPasswordReset:true, and the admin can set a password via the new Reset password button.
+
+---
+Task ID: dual-password-reset-options
+Agent: main
+Task: Can we still use Firebase Auth to reset the password?
+
+Work Log:
+- Answer: Yes — for accounts that have a Firebase Auth profile (legacy accounts created under the old Firebase Auth system). New Firestore-only accounts (created under the bcrypt system) don't have a Firebase Auth account, so the reset email won't reach them — but the admin can use the "Generate temp password" option which always works.
+- Updated the admin "Reset password" dialog (both consumer + merchant profiles) to offer BOTH options as a choice screen:
+  1. "Send reset link (email)" — calls /api/send-password-reset (Firebase Auth sendPasswordResetEmail). The user gets a secure email link and sets their own new password. For consumers it derives the +consumer plus-addressed Auth email; for merchants it uses the real email. Best for legacy accounts.
+  2. "Generate temp password" — calls /api/auth/set-password (Firestore bcrypt). Generates a random 12-char temp password, shows it once in the dialog with a Copy button. Always works (Firestore-based).
+- Each option is in a bordered card with an icon, description, and button. The dialog explains when each applies (legacy Firebase Auth vs Firestore-only).
+- Added handleSendResetEmail() to both views: POSTs to /api/send-password-reset, shows success toast "Reset email sent" with the email, or an error toast that hints to use temp password if no Firebase Auth account exists.
+- Fixed broken import: /api/send-password-reset/route.ts imported deriveAuthEmail from create-consumer-account/route.ts, but that export was removed when create-consumer-account was rewritten to Firestore bcrypt. Inlined the deriveAuthEmail function directly in send-password-reset/route.ts.
+- Verified end-to-end via Agent Browser: merchant "moses Store" profile → Reset password → dialog shows both options → clicked "Send reset link" → "Reset email sent" toast (mosesayande82@gmail.com has a Firebase Auth account). Confirmed via direct API call: success, sentTo=mosesayande82@gmail.com.
+- Lint clean. No console errors after reload (cleared stale cached error).
+
+Stage Summary:
+- Admins now choose between two password-reset methods per account: "Send reset link" (Firebase Auth email — user self-serves, works for legacy accounts) or "Generate temp password" (Firestore bcrypt — always works, temp password shown once with Copy button). The dialog clearly explains when each applies. The Firebase Auth reset flow is preserved as an option for accounts that have a Firebase Auth profile, while the Firestore temp-password flow covers all accounts including the new dual-role Firestore-only ones.

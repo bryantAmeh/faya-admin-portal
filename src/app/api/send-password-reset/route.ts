@@ -1,7 +1,24 @@
 import { NextResponse } from "next/server";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, sendPasswordResetEmail } from "firebase/auth";
-import { deriveAuthEmail } from "../create-consumer-account/route";
+
+/**
+ * Derive the plus-addressed Firebase Auth email for a consumer account.
+ * Consumers registered under the OLD (Firebase Auth + plus-addressing) system
+ * have an Auth account at `<local>+consumer@<domain>`. This route sends the
+ * Firebase reset email there so those legacy accounts can self-serve a
+ * password reset. New Firestore-only accounts don't have a Firebase Auth
+ * account, so this won't reach them — the admin should use the temp-password
+ * flow instead.
+ */
+function deriveAuthEmail(realEmail: string, role = "consumer"): string {
+  const at = realEmail.lastIndexOf("@");
+  if (at < 1) return realEmail;
+  const domain = realEmail.slice(at + 1);
+  const local = realEmail.slice(0, at);
+  const baseLocal = local.split("+")[0];
+  return `${baseLocal}+${role}@${domain}`;
+}
 
 /**
  * POST /api/send-password-reset
