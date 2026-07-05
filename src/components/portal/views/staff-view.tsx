@@ -99,7 +99,7 @@ import {
 
 import { useAuth } from "@/hooks/use-auth";
 import { adminData, logAudit } from "@/lib/admin-data";
-import { PERMISSION_CATALOG, getPermissionsByCategory } from "@/lib/permissions";
+import { PERMISSION_CATALOG, getPermissionsByCategory, getRolePermissions, getRolePermissionSummary } from "@/lib/permissions";
 import { formatDateTime, formatDate, statusBadge, timeAgo } from "@/lib/formatters";
 import type {
   AdminStaff,
@@ -295,6 +295,31 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
     // Reset role if it doesn't belong to the new dept
     const stillValid = roles.some((r) => r.id === form.roleId && r.departmentId === deptId);
     setForm((f) => ({ ...f, departmentId: deptId, roleId: stillValid ? f.roleId : "" }));
+  }
+
+  /**
+   * When the role changes, merge the new role's permission baseline into the
+   * staff member's current permissions (union). This means:
+   *   - Role-granted permissions are always present (can't be unchecked while
+   *     the role is active — they're the role's baseline).
+   *   - Any extra permissions the admin previously toggled ON are kept.
+   *   - Permissions NOT in the role baseline stay toggleable for fine-tuning.
+   *
+   * Super-admin roles have an empty baseline (they bypass all checks), so
+   * selecting a super-admin role clears the manual permissions list.
+   */
+  function onRoleChange(roleId: string) {
+    const baseline = getRolePermissions(roleId);
+    setForm((f) => {
+      // Union: keep existing toggled-on perms + add all role baseline perms.
+      const merged = Array.from(new Set([...f.permissions, ...baseline]));
+      return { ...f, roleId, permissions: merged };
+    });
+  }
+
+  /** Reset permissions to exactly the role's baseline (clears fine-tuning). */
+  function resetPermissionsToRole() {
+    setForm((f) => ({ ...f, permissions: [...getRolePermissions(f.roleId)] }));
   }
 
   function toggleCountry(code: string, checked: boolean) {
@@ -946,7 +971,7 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="role">Role <span className="text-destructive">*</span></Label>
-                <Select value={form.roleId} onValueChange={(v) => setForm((f) => ({ ...f, roleId: v }))} disabled={!form.departmentId}>
+                <Select value={form.roleId} onValueChange={onRoleChange} disabled={!form.departmentId}>
                   <SelectTrigger id="role" className="w-full">
                     <SelectValue placeholder={form.departmentId ? "Select role" : "Pick a department first"} />
                   </SelectTrigger>
@@ -1025,6 +1050,30 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
                   Choose what this admin can see and do. Unchecked items are
                   hidden from their sidebar and blocked if accessed directly.
                 </p>
+                {/* Role baseline hint — shows what the selected role grants and
+                    lets the admin reset to exactly that baseline. */}
+                {form.roleId && (
+                  <div className="rounded-md border border-sky-200 bg-sky-50 dark:border-sky-900/50 dark:bg-sky-950/30 p-2.5 flex items-center justify-between gap-2">
+                    <div className="min-w-0 text-xs">
+                      <div className="font-medium text-sky-900 dark:text-sky-200 flex items-center gap-1">
+                        <Shield className="size-3.5 shrink-0" />
+                        Role baseline: {roles.find((r) => r.id === form.roleId)?.name ?? "—"}
+                      </div>
+                      <div className="text-sky-700 dark:text-sky-400 text-[11px]">
+                        {getRolePermissionSummary(form.roleId)} granted by role · merged with manual picks
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[11px] border-sky-300 text-sky-700 hover:bg-sky-100 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-900/30 shrink-0"
+                      onClick={resetPermissionsToRole}
+                    >
+                      Reset to role
+                    </Button>
+                  </div>
+                )}
                 <div className="max-h-64 overflow-y-auto rounded-md border p-3 space-y-3">
                   {getPermissionsByCategoryEntries.map(([cat, perms]) => (
                     <div key={cat} className="space-y-1.5">
@@ -1034,15 +1083,22 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
                       <div className="grid gap-1.5 sm:grid-cols-2">
                         {perms.map((p) => {
                           const checked = form.permissions.includes(p.key);
+                          const roleBaseline = getRolePermissions(form.roleId);
+                          const isRoleGranted = roleBaseline.includes(p.key);
                           return (
                             <label
                               key={p.key}
                               htmlFor={`perm-${p.key}`}
-                              className="flex items-start gap-2 rounded-md border p-2 cursor-pointer hover:bg-muted/40 has-[:checked]:border-emerald-300 has-[:checked]:bg-emerald-50/50 dark:has-[:checked]:bg-emerald-950/20"
+                              className={`flex items-start gap-2 rounded-md border p-2 ${
+                                isRoleGranted
+                                  ? "cursor-not-allowed border-sky-200 bg-sky-50/60 dark:border-sky-900/50 dark:bg-sky-950/20"
+                                  : "cursor-pointer hover:bg-muted/40 has-[:checked]:border-emerald-300 has-[:checked]:bg-emerald-50/50 dark:has-[:checked]:bg-emerald-950/20"
+                              }`}
                             >
                               <Checkbox
                                 id={`perm-${p.key}`}
                                 checked={checked}
+                                disabled={isRoleGranted}
                                 onCheckedChange={(v) => {
                                   setForm((f) => ({
                                     ...f,
@@ -1053,7 +1109,14 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
                                 }}
                               />
                               <div className="min-w-0">
-                                <div className="text-xs font-medium leading-tight">{p.label}</div>
+                                <div className="text-xs font-medium leading-tight flex items-center gap-1">
+                                  {p.label}
+                                  {isRoleGranted && (
+                                    <span className="text-[9px] px-1 py-0.5 rounded bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300 font-normal">
+                                      role
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2">
                                   {p.description}
                                 </div>

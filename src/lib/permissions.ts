@@ -292,3 +292,172 @@ export function getPermissionsByCategory(): Record<string, PermissionDef[]> {
   }
   return grouped;
 }
+
+/* ============================================================ */
+/* Role → permission templates                                   */
+/*                                                              */
+/* Each role grants a FIXED baseline of permissions. Roles within */
+/* the same department are designed NOT to overlap — a compliance */
+/* reviewer gets compliance + read-only ops views, a risk analyst */
+/* gets risk + read-only ops views, etc. Super admin bypasses all */
+/* checks so its template is empty (meaning "everything").        */
+/* ============================================================ */
+
+/**
+ * Maps role IDs to the list of permission keys that role grants by default.
+ * When a staff member's role is set/changed, the Staff dialog auto-populates
+ * their permissions to this baseline (union with any already-toggled items
+ * so fine-tuning is preserved). A "Reset to role defaults" button restores
+ * exactly this list.
+ *
+ * Design rules (no overlap within a department):
+ *   - Super Admin: empty (bypasses all checks).
+ *   - Country Admin: view-all + country config + staff manage (scoped by their
+ *     country access, not by permission overlap).
+ *   - Compliance roles: compliance + audit + read-only ops views + their
+ *     specific action (KYC/KYB approve, escalate). No merchant/consumer
+ *     restrict, no staff manage, no finance.
+ *   - Risk roles: risk + audit + read-only ops views + restrict/suspend
+ *     actions. No compliance approve, no staff manage.
+ *   - Merchant ops: merchants + support + disputes + read-only ops views +
+ *     POS device approve. No compliance, no staff manage, no risk.
+ *   - Finance: finance + audit + read-only ops views. No action perms on
+ *     consumers/merchants.
+ *   - Support: support + disputes + users/merchants view. No action perms.
+ */
+export const ROLE_PERMISSION_TEMPLATES: Record<string, string[]> = {
+  // Super Admin — bypasses all checks; empty = "everything".
+  role_super_admin: [],
+
+  // Country Admin — view everything + configure country + manage staff in their country.
+  role_country_admin: [
+    "view.dashboard", "view.users", "view.merchants", "view.stock",
+    "view.compliance", "view.risk", "view.devices", "view.finance",
+    "view.support", "view.disputes", "view.countries", "view.staff",
+    "view.audit", "view.approvals",
+    "country.configure.global",
+    "staff.manage.global",
+    "consumer.restrict.global",
+    "merchant.restrict.global",
+    "merchant.approve_kyb.global",
+  ],
+
+  // Compliance — KYC/KYB review + audit + read-only ops.
+  role_kyc_reviewer: [
+    "view.dashboard", "view.users", "view.compliance", "view.audit",
+  ],
+  role_kyb_reviewer: [
+    "view.dashboard", "view.merchants", "view.compliance", "view.audit",
+    "merchant.approve_kyb.global",
+  ],
+  role_senior_compliance: [
+    "view.dashboard", "view.users", "view.merchants", "view.compliance",
+    "view.audit", "view.approvals",
+    "merchant.approve_kyb.global",
+    "consumer.restrict.global",
+  ],
+  role_compliance_manager: [
+    "view.dashboard", "view.users", "view.merchants", "view.compliance",
+    "view.audit", "view.approvals",
+    "merchant.approve_kyb.global",
+    "consumer.restrict.global",
+    "staff.manage.global",
+  ],
+  role_aml_investigator: [
+    "view.dashboard", "view.users", "view.merchants", "view.compliance",
+    "view.risk", "view.audit",
+    "consumer.restrict.global",
+    "merchant.restrict.global",
+  ],
+  role_sanctions_pep: [
+    "view.dashboard", "view.users", "view.merchants", "view.compliance",
+    "view.audit",
+  ],
+  role_reg_reporting: [
+    "view.dashboard", "view.compliance", "view.audit",
+  ],
+
+  // Risk & Fraud — risk + restrict/suspend + audit + read-only ops.
+  role_fraud_analyst: [
+    "view.dashboard", "view.users", "view.merchants", "view.risk",
+    "view.devices", "view.audit",
+    "consumer.restrict.global",
+    "merchant.restrict.global",
+  ],
+  role_risk_analyst: [
+    "view.dashboard", "view.users", "view.merchants", "view.risk",
+    "view.audit",
+    "consumer.restrict.global",
+    "merchant.restrict.global",
+  ],
+  role_fraud_manager: [
+    "view.dashboard", "view.users", "view.merchants", "view.risk",
+    "view.devices", "view.audit", "view.approvals",
+    "consumer.restrict.global",
+    "merchant.restrict.global",
+    "consumer.delete.global",
+  ],
+  role_device_risk: [
+    "view.dashboard", "view.devices", "view.risk", "view.audit",
+    "pos_device.approve.global",
+  ],
+
+  // Merchant Ops — merchants + support + disputes + POS device approve.
+  role_merchant_support: [
+    "view.dashboard", "view.merchants", "view.support", "view.disputes",
+    "view.devices",
+  ],
+  role_merchant_ops: [
+    "view.dashboard", "view.merchants", "view.support", "view.disputes",
+    "view.devices", "view.stock",
+    "pos_device.approve.global",
+  ],
+  role_pos_deploy: [
+    "view.dashboard", "view.merchants", "view.devices", "view.stock",
+    "pos_device.approve.global",
+  ],
+
+  // Finance — finance + audit + read-only ops.
+  role_finance_analyst: [
+    "view.dashboard", "view.finance", "view.audit",
+  ],
+  role_settlements: [
+    "view.dashboard", "view.finance", "view.merchants", "view.audit",
+  ],
+
+  // Support — support + disputes + users/merchants view (no action perms).
+  role_support_agent: [
+    "view.dashboard", "view.users", "view.merchants", "view.support",
+    "view.disputes",
+  ],
+  role_support_lead: [
+    "view.dashboard", "view.users", "view.merchants", "view.support",
+    "view.disputes", "view.audit",
+  ],
+
+  // Audit / governance — read-only audit + approvals.
+  role_audit_viewer: [
+    "view.dashboard", "view.audit", "view.approvals",
+  ],
+};
+
+/**
+ * Returns the permission baseline for a role. If the role isn't in the
+ * template map (e.g. a custom role), returns a safe read-only dashboard set.
+ */
+export function getRolePermissions(roleId: string | undefined | null): string[] {
+  if (!roleId) return ["view.dashboard"];
+  return ROLE_PERMISSION_TEMPLATES[roleId] ?? ["view.dashboard"];
+}
+
+/**
+ * Returns the human-readable label for a role's permission baseline, shown in
+ * the Staff dialog so the admin understands what the role grants.
+ */
+export function getRolePermissionSummary(roleId: string | undefined | null): string {
+  const perms = getRolePermissions(roleId);
+  if (perms.length === 0) return "Full access (super admin)";
+  const viewCount = perms.filter((p) => p.startsWith("view.")).length;
+  const actionCount = perms.length - viewCount;
+  return `${viewCount} views${actionCount > 0 ? ` · ${actionCount} actions` : ""}`;
+}

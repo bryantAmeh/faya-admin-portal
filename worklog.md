@@ -1317,3 +1317,32 @@ Work Log:
 
 Stage Summary:
 - Super admins can now control exactly what each admin sees and does. In the Staff create/edit dialog, a "Permissions" section shows 25 permissions across 4 categories (View Access, Consumer Actions, Merchant Actions, Admin Actions) as checkboxes. Unchecked view permissions hide the corresponding nav item from that admin's sidebar. Unchecked action permissions will be used to gate specific actions (restrict, delete, reset password, approve KYB, invite admins, etc.). Direct URL access to a restricted view shows an "Access denied" panel. Super admins bypass all checks. Invite-registered admins get all view permissions by default; the super admin then fine-tunes. Permissions persist to the staff.permissions[] Firestore field.
+
+---
+Task ID: permissions-match-roles-no-overlap
+Agent: main
+Task: Make sure permissions match the roles so they don't overlap
+
+Work Log:
+- Added `permissions?: string[]` field to the Role type (optional — super-admin roles have empty = bypass all).
+- Created ROLE_PERMISSION_TEMPLATES map in src/lib/permissions.ts defining the permission baseline for every role. Designed so roles within the same department DON'T overlap on action permissions:
+  - Super Admin: empty (bypasses all checks).
+  - Country Admin: view-all + country config + staff manage + restrict/suspend + approve KYB.
+  - Compliance (KYC/KYB Reviewer, Senior Compliance, Compliance Manager, AML Investigator, Sanctions/PEP, Reg Reporting): compliance + audit + read-only ops views + their specific action (KYB approve, restrict). No merchant ops, no risk actions, no finance.
+  - Risk & Fraud (Fraud Analyst, Risk Analyst, Fraud Manager, Device Risk): risk + audit + read-only ops + restrict/suspend. No compliance approve, no staff manage.
+  - Merchant Ops (Merchant Support, Merchant Ops, POS Deploy): merchants + support + disputes + devices + POS device approve. No compliance, no risk, no staff manage.
+  - Finance (Finance Analyst, Settlements): finance + audit + read-only ops. No action perms on consumers/merchants.
+  - Support (Support Agent, Support Lead): support + disputes + users/merchants view. No action perms.
+  - Audit Viewer: audit + approvals read-only.
+  - Shared view perms (dashboard, users, audit) are intentionally shared across roles — that's read-only access, not an action overlap.
+- Added getRolePermissions(roleId) + getRolePermissionSummary(roleId) helpers.
+- Updated Staff create/edit dialog:
+  - onRoleChange(roleId): when the role changes, MERGES the new role's baseline into the staff's current permissions (union). Existing manual picks are preserved; role-granted perms are always added.
+  - Role-granted permissions show a sky-blue "role" badge and are DISABLED (can't be unchecked while the role is active — they're the role's baseline).
+  - "Role baseline" banner shows the selected role name + summary ("N views · M actions granted by role · merged with manual picks") + a "Reset to role" button that restores exactly the baseline (clears manual fine-tuning).
+  - Non-role permissions remain toggleable for fine-tuning.
+- Verified the merge logic via a node script: existing [view.dashboard, view.users] + Fraud Analyst baseline → union preserves all 8 perms. KYC Reviewer vs Fraud Analyst overlap = shared view perms only (dashboard, users, audit), no action conflicts.
+- Browser-verified: edited New2 Admin → permissions section showed "Dashboard" with a "role" badge + disabled checkbox (role-baseline lock working) → "Role baseline: 1 views granted by role · merged with manual picks" banner → "Reset to role" button reduced count from 2 to 1 (cleared the manual view.users, kept the role-granted view.dashboard). Lint clean.
+
+Stage Summary:
+- Permissions now match roles with no overlap. Each role has a fixed permission baseline (ROLE_PERMISSION_TEMPLATES) designed so roles within the same department grant distinct action permissions — compliance roles get KYC/KYB approve, risk roles get restrict/suspend, merchant ops get POS device approve, finance gets finance-only, support gets read-only. When a staff member's role is set/changed, the role's baseline is auto-merged into their permissions (union with manual picks). Role-granted permissions are locked (can't be unchecked) and show a "role" badge. A "Reset to role" button restores exactly the baseline. The admin can still fine-tune by toggling non-role permissions on. Super admins bypass all checks. Shared read-only view permissions (dashboard, users, audit) are intentionally shared across roles — that's not an action overlap.

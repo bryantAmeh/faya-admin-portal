@@ -53,6 +53,9 @@ export interface Role {
   description: string;
   riskLevel: RiskLevel;
   status: "active" | "inactive";
+  /** Permission keys this role grants by default. Staff inherit these; a
+   * super admin can fine-tune per-staff. Super-admin roles bypass entirely. */
+  permissions?: string[];
   createdAt: number;
   updatedAt: number;
 }
