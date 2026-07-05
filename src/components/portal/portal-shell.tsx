@@ -29,6 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { AdminStaff, Department, Role } from "@/lib/types";
+import { canAccessView, isSuperAdmin } from "@/lib/permissions";
 
 interface NavItem {
   view: PortalView;
@@ -39,21 +40,21 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { view: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "operations" },
-  { view: "users", label: "Users (Consumers)", icon: Users, group: "operations" },
-  { view: "merchants", label: "Merchants", icon: Store, group: "operations" },
-  { view: "stock", label: "Stock & Inventory", icon: Package, group: "operations" },
-  { view: "compliance", label: "Compliance · KYC/KYB", icon: ShieldCheck, group: "operations" },
-  { view: "risk", label: "Risk & Fraud", icon: AlertTriangle, group: "operations" },
-  { view: "devices", label: "Devices & Terminals", icon: Smartphone, group: "operations" },
-  { view: "finance", label: "Finance & Settlements", icon: Wallet, group: "operations" },
-  { view: "support", label: "Support Tickets", icon: Headphones, group: "operations" },
-  { view: "disputes", label: "Disputes & Chargebacks", icon: Scale, group: "operations" },
-  { view: "countries", label: "Country Management", icon: Globe2, group: "admin", requiredPermission: "country.configure.global" },
-  { view: "staff", label: "Staff & Roles", icon: Users, group: "admin" },
-  { view: "departments", label: "Departments", icon: Building2, group: "admin" },
-  { view: "audit", label: "Audit Logs", icon: ScrollText, group: "governance" },
-  { view: "approvals", label: "Approvals", icon: CheckSquare, group: "governance" },
+  { view: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "operations", requiredPermission: "view.dashboard" },
+  { view: "users", label: "Users (Consumers)", icon: Users, group: "operations", requiredPermission: "view.users" },
+  { view: "merchants", label: "Merchants", icon: Store, group: "operations", requiredPermission: "view.merchants" },
+  { view: "stock", label: "Stock & Inventory", icon: Package, group: "operations", requiredPermission: "view.stock" },
+  { view: "compliance", label: "Compliance · KYC/KYB", icon: ShieldCheck, group: "operations", requiredPermission: "view.compliance" },
+  { view: "risk", label: "Risk & Fraud", icon: AlertTriangle, group: "operations", requiredPermission: "view.risk" },
+  { view: "devices", label: "Devices & Terminals", icon: Smartphone, group: "operations", requiredPermission: "view.devices" },
+  { view: "finance", label: "Finance & Settlements", icon: Wallet, group: "operations", requiredPermission: "view.finance" },
+  { view: "support", label: "Support Tickets", icon: Headphones, group: "operations", requiredPermission: "view.support" },
+  { view: "disputes", label: "Disputes & Chargebacks", icon: Scale, group: "operations", requiredPermission: "view.disputes" },
+  { view: "countries", label: "Country Management", icon: Globe2, group: "admin", requiredPermission: "view.countries" },
+  { view: "staff", label: "Staff & Roles", icon: Users, group: "admin", requiredPermission: "view.staff" },
+  { view: "departments", label: "Departments", icon: Building2, group: "admin", requiredPermission: "view.staff" },
+  { view: "audit", label: "Audit Logs", icon: ScrollText, group: "governance", requiredPermission: "view.audit" },
+  { view: "approvals", label: "Approvals", icon: CheckSquare, group: "governance", requiredPermission: "view.approvals" },
 ];
 
 const GROUP_LABELS: Record<NavItem["group"], string> = {
@@ -99,16 +100,10 @@ export function PortalShell({
       governance: [],
     };
     for (const item of NAV_ITEMS) {
-      // Super admin sees everything
-      if (staff?.departmentId === "dept_super_admin") {
+      // Super admin sees everything; others are gated by the view permission.
+      if (canAccessView(staff, item.view)) {
         groups[item.group].push(item);
-        continue;
       }
-      // Permission gate (optional)
-      if (item.requiredPermission && !staff?.permissions.includes(item.requiredPermission)) {
-        continue;
-      }
-      groups[item.group].push(item);
     }
     return groups;
   }, [staff]);

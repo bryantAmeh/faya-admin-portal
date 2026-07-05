@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, WifiOff, RefreshCw } from "lucide-react";
+import { Loader2, WifiOff, RefreshCw, Lock, ArrowLeft } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { usePortalStore } from "@/hooks/use-portal-store";
+import { canAccessView } from "@/lib/permissions";
 import { adminData, ensureSeedData } from "@/lib/admin-data";
 import type {
   Department,
@@ -199,6 +200,31 @@ function PortalContent(props: {
   consumers: Consumer[];
 }) {
   const { view } = usePortalStore();
+  const { staff } = useAuth();
+
+  // Permission gate: if the current admin can't access this view, show an
+  // access-denied panel instead of the view. Super admins always pass.
+  if (!canAccessView(staff, view)) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh] p-6">
+        <Card className="max-w-md w-full">
+          <CardContent className="p-6 text-center space-y-3">
+            <div className="size-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mx-auto">
+              <Lock className="size-6 text-red-600 dark:text-red-400" />
+            </div>
+            <h2 className="text-lg font-semibold">Access denied</h2>
+            <p className="text-sm text-muted-foreground">
+              You don't have permission to view this section. Contact a super
+              admin if you believe this is an error.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => usePortalStore.getState().setView("dashboard")}>
+              <ArrowLeft className="size-4 mr-1" /> Back to Dashboard
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // Quick empty-data check to show seed-error recovery
   const totalDocs =

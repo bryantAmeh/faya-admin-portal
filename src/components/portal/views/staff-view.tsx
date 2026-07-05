@@ -99,6 +99,7 @@ import {
 
 import { useAuth } from "@/hooks/use-auth";
 import { adminData, logAudit } from "@/lib/admin-data";
+import { PERMISSION_CATALOG, getPermissionsByCategory } from "@/lib/permissions";
 import { formatDateTime, formatDate, statusBadge, timeAgo } from "@/lib/formatters";
 import type {
   AdminStaff,
@@ -162,6 +163,7 @@ function emptyStaffForm(): StaffFormState {
     mfaEnabled: true,
     notes: "",
     countries: [],
+    permissions: [],
   };
 }
 
@@ -175,6 +177,7 @@ interface StaffFormState {
   mfaEnabled: boolean;
   notes: string;
   countries: StaffCountryAccess[];
+  permissions: string[];
 }
 
 export function StaffView({ staff, departments, roles, countries }: StaffViewProps) {
@@ -217,6 +220,12 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
   const [generatedInviteUrl, setGeneratedInviteUrl] = useState<string | null>(null);
 
   const canCreate = isSuperAdmin(currentStaff);
+
+  // Permission catalog grouped by category, as entries for the form UI.
+  const getPermissionsByCategoryEntries = useMemo(
+    () => Object.entries(getPermissionsByCategory()) as [string, { key: string; label: string; description: string; category: string }[]][],
+    [],
+  );
 
   /* ----------------------------- derived -------------------------------- */
   const filteredStaff = useMemo(() => {
@@ -277,6 +286,7 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
       mfaEnabled: s.mfaEnabled,
       notes: s.notes ?? "",
       countries: s.countries.map((c) => ({ ...c })),
+      permissions: [...(s.permissions ?? [])],
     });
     setFormOpen(true);
   }
@@ -369,6 +379,7 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
           mfaEnabled: after.mfaEnabled,
           notes: after.notes,
           countries: after.countries,
+          permissions: form.permissions,
           updatedAt: after.updatedAt,
         });
         logAudit(actor, "staff.update", "staff", editing.id, {
@@ -390,7 +401,7 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
           status: "invited",
           mfaEnabled: form.mfaEnabled,
           countries: form.countries,
-          permissions: [],
+          permissions: form.permissions,
           lastLoginAt: null,
           failedLoginCount: 0,
           createdBy: currentStaff.id,
@@ -999,6 +1010,95 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
                 )}
               </div>
             </div>
+
+            {/* Permissions — super admins bypass; for everyone else, checkboxes
+                control what they can see (nav) and do (actions). */}
+            {form.departmentId !== SUPER_ADMIN_DEPT_ID && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">Permissions</Label>
+                  <span className="text-[11px] text-muted-foreground">
+                    {form.permissions.length} selected · controls nav + actions
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Choose what this admin can see and do. Unchecked items are
+                  hidden from their sidebar and blocked if accessed directly.
+                </p>
+                <div className="max-h-64 overflow-y-auto rounded-md border p-3 space-y-3">
+                  {getPermissionsByCategoryEntries.map(([cat, perms]) => (
+                    <div key={cat} className="space-y-1.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {cat}
+                      </div>
+                      <div className="grid gap-1.5 sm:grid-cols-2">
+                        {perms.map((p) => {
+                          const checked = form.permissions.includes(p.key);
+                          return (
+                            <label
+                              key={p.key}
+                              htmlFor={`perm-${p.key}`}
+                              className="flex items-start gap-2 rounded-md border p-2 cursor-pointer hover:bg-muted/40 has-[:checked]:border-emerald-300 has-[:checked]:bg-emerald-50/50 dark:has-[:checked]:bg-emerald-950/20"
+                            >
+                              <Checkbox
+                                id={`perm-${p.key}`}
+                                checked={checked}
+                                onCheckedChange={(v) => {
+                                  setForm((f) => ({
+                                    ...f,
+                                    permissions: v
+                                      ? [...f.permissions, p.key]
+                                      : f.permissions.filter((k) => k !== p.key),
+                                  }));
+                                }}
+                              />
+                              <div className="min-w-0">
+                                <div className="text-xs font-medium leading-tight">{p.label}</div>
+                                <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2">
+                                  {p.description}
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-[11px] h-7"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        permissions: PERMISSION_CATALOG.map((p) => p.key),
+                      }))
+                    }
+                  >
+                    Select all
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-[11px] h-7"
+                    onClick={() => setForm((f) => ({ ...f, permissions: [] }))}
+                  >
+                    Clear all
+                  </Button>
+                </div>
+              </div>
+            )}
+            {form.departmentId === SUPER_ADMIN_DEPT_ID && (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/30 p-3 text-xs text-emerald-800 dark:text-emerald-300">
+                <Shield className="inline size-3.5 mr-1" />
+                Super Admin — full access to all views and actions. No
+                permission restrictions apply.
+              </div>
+            )}
 
             {/* MFA + notes */}
             <div className="grid gap-3 sm:grid-cols-2">

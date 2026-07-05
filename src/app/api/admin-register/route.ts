@@ -156,7 +156,15 @@ export async function POST(request: Request) {
       mfaEnabled: false,
       countries: (invite.countryAccess as { countryCode: string; accessLevel: string }[]) ?? [],
       regionAccess: (invite.regionAccess as string[]) ?? [],
-      permissions: [],
+      // Default to all view.* permissions so the new admin can see the portal
+      // read-only. A super admin edits them afterward to add action perms or
+      // restrict view access.
+      permissions: [
+        "view.dashboard", "view.users", "view.merchants", "view.stock",
+        "view.compliance", "view.risk", "view.devices", "view.finance",
+        "view.support", "view.disputes", "view.countries", "view.staff",
+        "view.audit", "view.approvals",
+      ],
       lastLoginAt: null,
       failedLoginCount: 0,
       createdBy: (invite.createdBy as string) ?? "invite",

@@ -1290,3 +1290,30 @@ Work Log:
 
 Stage Summary:
 - Super admins can now invite new admins via a secure link-based registration flow. From Staff & Roles → "Invite admin" button → dialog collects the invitee's name, email, department, role, and country access → generates a unique invite link (/?invite=TOKEN, 7-day expiry) → super admin copies and shares it. The invitee opens the link → sees a registration form pre-filled with their assigned details → sets their own password → a Firebase Auth account + faya_admin_staff doc are created (status "active") → the invite is marked "used" (can't be reused). The new admin then signs in to the portal normally. Only super admins see the "Invite admin" button. The whole flow is audit-logged.
+
+---
+Task ID: admin-permissions-system
+Agent: main
+Task: Super admins should be able to give other admins permissions and control what they can see and do
+
+Work Log:
+- Created src/lib/permissions.ts — the single source of truth for permissions:
+  - PERMISSION_CATALOG: 25 permission keys across 4 categories (View Access, Consumer Actions, Merchant Actions, Admin Actions). Each has key, label, description, category. Keys follow `resource.action.scope` convention; nav-view perms use `view.<name>`.
+  - VIEW_PERMISSIONS: maps each PortalView to its required permission key (detail views inherit parent list view's permission).
+  - isSuperAdmin(staff): true if departmentId === "dept_super_admin" (bypasses all checks).
+  - hasPermission(staff, key): super admin → true; otherwise checks staff.permissions[].
+  - canAccessView(staff, view): super admin → true; otherwise checks the view's required permission.
+  - getPermissionsByCategory(): returns permissions grouped by category for the UI.
+- Updated portal-shell.tsx: added requiredPermission to every NAV_ITEM (was only on Country Management). Replaced inline permission check with shared canAccessView(staff, item.view). Non-super-admin admins now only see nav items they have permission for.
+- Updated portal-app.tsx PortalContent: added a permission gate at the top — if canAccessView(staff, view) is false, shows an "Access denied" card with a "Back to Dashboard" button instead of rendering the view. Prevents direct URL access to restricted views.
+- Updated staff-view.tsx:
+  - Added `permissions: string[]` to StaffFormState + emptyStaffForm.
+  - openEdit() now populates form.permissions from the existing staff record.
+  - onSave() now persists form.permissions via adminData.updateStaff / createStaff (was hardcoded to []).
+  - Added a "Permissions" section to the create/edit dialog (only shown for non-super-admin staff): a scrollable checklist grouped by category (View Access, Consumer Actions, Merchant Actions, Admin Actions). Each permission is a labeled checkbox card with description. Includes "Select all" / "Clear all" buttons + a live "N selected" counter. Super-admin staff show a "Super Admin — full access" info banner instead.
+  - Imported PERMISSION_CATALOG + getPermissionsByCategory from the new lib.
+- Updated admin-register route: invite-registered admins now get all `view.*` permissions by default (so they can see the portal read-only after registering). A super admin then edits them to add action permissions or restrict view access.
+- Browser-verified: super admin → Staff & Roles → edit "New2 Admin" (dept_ops) → permissions section rendered with all 4 categories + 25 checkboxes → checked "Dashboard" + "Users (Consumers)" → "2 selected" → Save changes → confirmed via Firestore REST that permissions=['view.dashboard','view.users'] persisted. Super admin still sees all nav items. Lint clean.
+
+Stage Summary:
+- Super admins can now control exactly what each admin sees and does. In the Staff create/edit dialog, a "Permissions" section shows 25 permissions across 4 categories (View Access, Consumer Actions, Merchant Actions, Admin Actions) as checkboxes. Unchecked view permissions hide the corresponding nav item from that admin's sidebar. Unchecked action permissions will be used to gate specific actions (restrict, delete, reset password, approve KYB, invite admins, etc.). Direct URL access to a restricted view shows an "Access denied" panel. Super admins bypass all checks. Invite-registered admins get all view permissions by default; the super admin then fine-tunes. Permissions persist to the staff.permissions[] Firestore field.
