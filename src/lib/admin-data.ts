@@ -667,6 +667,14 @@ export const adminData = {
   updateStaff: (id: string, patchData: Partial<AdminStaff>) => patch<AdminStaff>(COLLECTIONS.staff, id, patchData),
   deleteStaff: (id: string) => remove(COLLECTIONS.staff, id),
 
+  // Departments + Roles
+  createDepartment: (dept: Department) => upsert(COLLECTIONS.departments, dept),
+  updateDepartment: (id: string, patchData: Partial<Department>) => patch<Department>(COLLECTIONS.departments, id, patchData),
+  deleteDepartment: (id: string) => remove(COLLECTIONS.departments, id),
+  createRole: (role: Role) => upsert(COLLECTIONS.roles, role),
+  updateRole: (id: string, patchData: Partial<Role>) => patch<Role>(COLLECTIONS.roles, id, patchData),
+  deleteRole: (id: string) => remove(COLLECTIONS.roles, id),
+
   createCountry: (country: CountryConfig) => upsert(COLLECTIONS.countries, country),
   updateCountry: (id: string, patchData: Partial<CountryConfig>) => patch<CountryConfig>(COLLECTIONS.countries, id, patchData),
 

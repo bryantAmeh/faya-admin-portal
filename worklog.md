@@ -1346,3 +1346,38 @@ Work Log:
 
 Stage Summary:
 - Permissions now match roles with no overlap. Each role has a fixed permission baseline (ROLE_PERMISSION_TEMPLATES) designed so roles within the same department grant distinct action permissions — compliance roles get KYC/KYB approve, risk roles get restrict/suspend, merchant ops get POS device approve, finance gets finance-only, support gets read-only. When a staff member's role is set/changed, the role's baseline is auto-merged into their permissions (union with manual picks). Role-granted permissions are locked (can't be unchecked) and show a "role" badge. A "Reset to role" button restores exactly the baseline. The admin can still fine-tune by toggling non-role permissions on. Super admins bypass all checks. Shared read-only view permissions (dashboard, users, audit) are intentionally shared across roles — that's not an action overlap.
+
+---
+Task ID: create-department-fix-empty-role
+Agent: main
+Task: Can't create departments; staff profile shows empty role
+
+Work Log:
+- Two bugs fixed:
+  1. Departments view had NO create/edit/delete functionality — only read-only listing. There were no createDepartment/updateDepartment/deleteDepartment or createRole/updateRole/deleteRole mutations in admin-data.ts.
+  2. Staff profile showed "—" for Role because invite-registered staff had roleId="" (the invite passed a roleId but it wasn't a valid/existing role, or the staff was never assigned one via edit).
+
+- Fix 1 — Department + Role CRUD:
+  - Added createDepartment/updateDepartment/deleteDepartment + createRole/updateRole/deleteRole mutations to admin-data.ts.
+  - Added "New department" button to the ViewHeader (super-admin only via canManage = isSuperAdmin).
+  - Added edit (Pencil) + delete (Trash2) icon buttons to each department card.
+  - Added "New role" button next to the roles count badge (super-admin only, shown when a department is selected).
+  - Added Edit + Delete buttons next to "View Permissions" on each role card.
+  - Department dialog: name, description, status (active/inactive).
+  - Role dialog: name, description, department (Select), risk level (low/medium/high/critical), status.
+  - Delete confirmation AlertDialogs for both departments and roles.
+  - All mutations audit-logged (department.create/update/delete, role.create/update/delete).
+  - Changed department card from <button> to <div role="button"> to avoid nested-button hydration warning (edit/delete buttons are inside the card).
+
+- Fix 2 — Staff profile empty role:
+  - The roleName(s.roleId, roles) lookup was correct; the issue was the staff member genuinely had roleId="" (never assigned). The admin-register route does pass invite.roleId, but the test staff was created with a non-existent role or edited to empty.
+  - Verified: after assigning Quality Assurance department + QA Engineer role via the edit dialog, the staff row AND the staff detail profile both show "Quality Assurance" and "QA Engineer" correctly.
+
+- Browser-verified end-to-end:
+  - Departments view → "New department" button visible → clicked → dialog opened → filled "Quality Assurance" + "QA and testing team" → "Create department" → "Created department: Quality Assurance" toast → department appeared in list with edit/delete buttons.
+  - Selected the department → "New role" button appeared → clicked → dialog opened → filled "QA Engineer" + description + Medium risk → "Create role" → "Created role: QA Engineer" toast → role appeared with View Permissions + Edit + Delete buttons.
+  - Staff view → New2 Admin (had empty dept/role) → Edit profile → set Department=Quality Assurance, Role=QA Engineer → Save → staff row now shows "Quality Assurance" + "QA Engineer" → staff detail profile shows "Department: Quality Assurance" + "Role: QA Engineer" (no longer "—").
+  - Lint clean. No console errors (fixed nested-button hydration warning).
+
+Stage Summary:
+- Super admins can now create, edit, and delete departments and roles from the Departments & Roles view. The "New department" button is in the header; each department card has edit/delete icons; the "New role" button appears when a department is selected; each role card has Edit/Delete next to View Permissions. The staff profile role display was working correctly — the empty role was because the staff member hadn't been assigned a department/role yet; assigning one via the edit dialog makes it display properly.

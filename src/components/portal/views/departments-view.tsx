@@ -30,7 +30,11 @@ import {
   X,
   Layers,
   Lock,
+  Plus,
+  Pencil,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { ViewHeader, ViewContainer, StatCard, EmptyState } from "@/components/portal/view-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +43,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +59,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -57,6 +79,9 @@ import {
 } from "@/components/ui/table";
 
 import { statusBadge } from "@/lib/formatters";
+import { adminData, logAudit } from "@/lib/admin-data";
+import { useAuth } from "@/hooks/use-auth";
+import { isSuperAdmin } from "@/lib/permissions";
 import type { Department, Permission, Role, RiskLevel } from "@/lib/types";
 
 interface DepartmentsViewProps {
@@ -109,12 +134,204 @@ function permissionsForRole(role: Role, allPermissions: Permission[]): Permissio
 }
 
 export function DepartmentsView({ departments, roles, permissions }: DepartmentsViewProps) {
+  const { staff: currentStaff } = useAuth();
+  const canManage = isSuperAdmin(currentStaff);
   const [deptSearch, setDeptSearch] = useState("");
   const [roleSearch, setRoleSearch] = useState("");
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(
     departments[0]?.id ?? null,
   );
   const [permissionsRole, setPermissionsRole] = useState<Role | null>(null);
+
+  // ---- Department create/edit state ----
+  const [deptDialogOpen, setDeptDialogOpen] = useState(false);
+  const [editingDept, setEditingDept] = useState<Department | null>(null);
+  const [deptForm, setDeptForm] = useState({ name: "", description: "", status: "active" as "active" | "inactive" });
+  const [deptDeleteTarget, setDeptDeleteTarget] = useState<Department | null>(null);
+
+  // ---- Role create/edit state ----
+  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<Role | null>(null);
+  const [roleForm, setRoleForm] = useState({
+    name: "",
+    description: "",
+    departmentId: "",
+    riskLevel: "medium" as RiskLevel,
+    status: "active" as "active" | "inactive",
+  });
+  const [roleDeleteTarget, setRoleDeleteTarget] = useState<Role | null>(null);
+
+  function openCreateDept() {
+    setEditingDept(null);
+    setDeptForm({ name: "", description: "", status: "active" });
+    setDeptDialogOpen(true);
+  }
+
+  function openEditDept(d: Department) {
+    setEditingDept(d);
+    setDeptForm({ name: d.name, description: d.description, status: d.status });
+    setDeptDialogOpen(true);
+  }
+
+  async function onSaveDept() {
+    if (!currentStaff) return;
+    if (!deptForm.name.trim()) {
+      toast.error("Department name is required.");
+      return;
+    }
+    const now = Date.now();
+    try {
+      if (editingDept) {
+        await adminData.updateDepartment(editingDept.id, {
+          name: deptForm.name.trim(),
+          description: deptForm.description.trim(),
+          status: deptForm.status,
+          updatedAt: now,
+        });
+        logAudit(
+          { staffId: currentStaff.id, staffName: `${currentStaff.firstName} ${currentStaff.lastName}`, department: currentStaff.departmentId, role: currentStaff.roleId },
+          "department.update",
+          "department",
+          editingDept.id,
+          { afterValue: deptForm.name.trim() },
+        );
+        toast.success(`Updated department: ${deptForm.name.trim()}`);
+      } else {
+        const id = `dept_${now}_${Math.random().toString(36).slice(2, 8)}`;
+        const dept: Department = {
+          id,
+          name: deptForm.name.trim(),
+          description: deptForm.description.trim(),
+          status: deptForm.status,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await adminData.createDepartment(dept);
+        logAudit(
+          { staffId: currentStaff.id, staffName: `${currentStaff.firstName} ${currentStaff.lastName}`, department: currentStaff.departmentId, role: currentStaff.roleId },
+          "department.create",
+          "department",
+          id,
+          { afterValue: dept.name },
+        );
+        toast.success(`Created department: ${dept.name}`);
+        setSelectedDeptId(id);
+      }
+      setDeptDialogOpen(false);
+    } catch (e) {
+      toast.error("Could not save department", { description: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  async function onDeleteDept() {
+    if (!currentStaff || !deptDeleteTarget) return;
+    try {
+      await adminData.deleteDepartment(deptDeleteTarget.id);
+      logAudit(
+        { staffId: currentStaff.id, staffName: `${currentStaff.firstName} ${currentStaff.lastName}`, department: currentStaff.departmentId, role: currentStaff.roleId },
+        "department.delete",
+        "department",
+        deptDeleteTarget.id,
+        { beforeValue: deptDeleteTarget.name },
+      );
+      toast.success(`Deleted department: ${deptDeleteTarget.name}`);
+      if (selectedDeptId === deptDeleteTarget.id) setSelectedDeptId(null);
+      setDeptDeleteTarget(null);
+    } catch (e) {
+      toast.error("Could not delete department", { description: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  function openCreateRole() {
+    if (!selectedDeptId) {
+      toast.error("Select a department first.");
+      return;
+    }
+    setEditingRole(null);
+    setRoleForm({ name: "", description: "", departmentId: selectedDeptId, riskLevel: "medium", status: "active" });
+    setRoleDialogOpen(true);
+  }
+
+  function openEditRole(r: Role) {
+    setEditingRole(r);
+    setRoleForm({ name: r.name, description: r.description, departmentId: r.departmentId, riskLevel: r.riskLevel, status: r.status });
+    setRoleDialogOpen(true);
+  }
+
+  async function onSaveRole() {
+    if (!currentStaff) return;
+    if (!roleForm.name.trim()) {
+      toast.error("Role name is required.");
+      return;
+    }
+    if (!roleForm.departmentId) {
+      toast.error("Department is required.");
+      return;
+    }
+    const now = Date.now();
+    try {
+      if (editingRole) {
+        await adminData.updateRole(editingRole.id, {
+          name: roleForm.name.trim(),
+          description: roleForm.description.trim(),
+          departmentId: roleForm.departmentId,
+          riskLevel: roleForm.riskLevel,
+          status: roleForm.status,
+          updatedAt: now,
+        });
+        logAudit(
+          { staffId: currentStaff.id, staffName: `${currentStaff.firstName} ${currentStaff.lastName}`, department: currentStaff.departmentId, role: currentStaff.roleId },
+          "role.update",
+          "role",
+          editingRole.id,
+          { afterValue: roleForm.name.trim() },
+        );
+        toast.success(`Updated role: ${roleForm.name.trim()}`);
+      } else {
+        const id = `role_${now}_${Math.random().toString(36).slice(2, 8)}`;
+        const role: Role = {
+          id,
+          name: roleForm.name.trim(),
+          description: roleForm.description.trim(),
+          departmentId: roleForm.departmentId,
+          riskLevel: roleForm.riskLevel,
+          status: roleForm.status,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await adminData.createRole(role);
+        logAudit(
+          { staffId: currentStaff.id, staffName: `${currentStaff.firstName} ${currentStaff.lastName}`, department: currentStaff.departmentId, role: currentStaff.roleId },
+          "role.create",
+          "role",
+          id,
+          { afterValue: role.name },
+        );
+        toast.success(`Created role: ${role.name}`);
+      }
+      setRoleDialogOpen(false);
+    } catch (e) {
+      toast.error("Could not save role", { description: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  async function onDeleteRole() {
+    if (!currentStaff || !roleDeleteTarget) return;
+    try {
+      await adminData.deleteRole(roleDeleteTarget.id);
+      logAudit(
+        { staffId: currentStaff.id, staffName: `${currentStaff.firstName} ${currentStaff.lastName}`, department: currentStaff.departmentId, role: currentStaff.roleId },
+        "role.delete",
+        "role",
+        roleDeleteTarget.id,
+        { beforeValue: roleDeleteTarget.name },
+      );
+      toast.success(`Deleted role: ${roleDeleteTarget.name}`);
+      setRoleDeleteTarget(null);
+    } catch (e) {
+      toast.error("Could not delete role", { description: e instanceof Error ? e.message : String(e) });
+    }
+  }
 
   // Filtered departments
   const filteredDepartments = useMemo(() => {
@@ -176,6 +393,13 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
         title="Departments & Roles"
         description="Organizational structure"
         icon={Building2}
+        actions={
+          canManage ? (
+            <Button onClick={openCreateDept} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <Plus className="size-4" /> New department
+            </Button>
+          ) : null
+        }
       />
       <ViewContainer>
         {/* KPI strip */}
@@ -241,11 +465,13 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
                     const badge = statusBadge("risk", d.status === "active" ? "low" : "medium");
                     const roleCount = roleCountByDept.get(d.id) ?? 0;
                     return (
-                      <button
+                      <div
                         key={d.id}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setSelectedDeptId(d.id)}
-                        className={`w-full text-left rounded-lg border p-3 transition-all ${
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedDeptId(d.id); } }}
+                        className={`w-full text-left rounded-lg border p-3 transition-all cursor-pointer ${
                           isActive
                             ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 ring-1 ring-emerald-500/30"
                             : "hover:border-emerald-400 hover:shadow-sm bg-card"
@@ -268,8 +494,28 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
                             <Users className="size-3" /> {roleCount} {roleCount === 1 ? "role" : "roles"}
                           </span>
                           <span className="font-mono">{d.id}</span>
+                          {canManage && (
+                            <span className="ml-auto flex items-center gap-1">
+                              <button
+                                type="button"
+                                className="inline-flex items-center justify-center size-6 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-muted-foreground hover:text-emerald-700"
+                                onClick={(e) => { e.stopPropagation(); openEditDept(d); }}
+                                title="Edit department"
+                              >
+                                <Pencil className="size-3" />
+                              </button>
+                              <button
+                                type="button"
+                                className="inline-flex items-center justify-center size-6 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-700"
+                                onClick={(e) => { e.stopPropagation(); setDeptDeleteTarget(d); }}
+                                title="Delete department"
+                              >
+                                <Trash2 className="size-3" />
+                              </button>
+                            </span>
+                          )}
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -291,11 +537,18 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
                     "Roles"
                   )}
                 </CardTitle>
-                {selectedDept && (
-                  <Badge variant="secondary" className="text-[10px]">
-                    {filteredRoles.length} / {rolesForDept.length}
-                  </Badge>
-                )}
+                <div className="flex items-center gap-2">
+                  {selectedDept && (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {filteredRoles.length} / {rolesForDept.length}
+                    </Badge>
+                  )}
+                  {canManage && selectedDept && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openCreateRole}>
+                      <Plus className="size-3 mr-1" /> New role
+                    </Button>
+                  )}
+                </div>
               </div>
               {selectedDept ? (
                 <div className="relative">
@@ -377,7 +630,7 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
                           </div>
                         </div>
                         <Separator className="my-2.5" />
-                        <div className="flex justify-end">
+                        <div className="flex justify-end gap-1.5">
                           <Button
                             size="sm"
                             variant="outline"
@@ -386,6 +639,26 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
                           >
                             <Eye className="size-3 mr-1" /> View Permissions
                           </Button>
+                          {canManage && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={() => openEditRole(r)}
+                              >
+                                <Pencil className="size-3 mr-1" /> Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300"
+                                onClick={() => setRoleDeleteTarget(r)}
+                              >
+                                <Trash2 className="size-3 mr-1" /> Delete
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </div>
                     );
@@ -472,6 +745,193 @@ export function DepartmentsView({ departments, roles, permissions }: Departments
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Department create/edit dialog */}
+        <Dialog open={deptDialogOpen} onOpenChange={setDeptDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{editingDept ? "Edit department" : "New department"}</DialogTitle>
+              <DialogDescription>
+                {editingDept
+                  ? "Update the department details."
+                  : "Create a new department to organize staff and roles."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-1">
+              <div className="space-y-1.5">
+                <Label htmlFor="dept-name">Name <span className="text-destructive">*</span></Label>
+                <Input
+                  id="dept-name"
+                  value={deptForm.name}
+                  onChange={(e) => setDeptForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Compliance"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dept-desc">Description</Label>
+                <Textarea
+                  id="dept-desc"
+                  rows={3}
+                  value={deptForm.description}
+                  onChange={(e) => setDeptForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="What this department is responsible for…"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dept-status">Status</Label>
+                <Select
+                  value={deptForm.status}
+                  onValueChange={(v) => setDeptForm((f) => ({ ...f, status: v as "active" | "inactive" }))}
+                >
+                  <SelectTrigger id="dept-status" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeptDialogOpen(false)}>Cancel</Button>
+              <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={onSaveDept}>
+                {editingDept ? "Save changes" : "Create department"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Role create/edit dialog */}
+        <Dialog open={roleDialogOpen} onOpenChange={setRoleDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{editingRole ? "Edit role" : "New role"}</DialogTitle>
+              <DialogDescription>
+                {editingRole
+                  ? "Update the role details."
+                  : "Create a new role for this department."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-1">
+              <div className="space-y-1.5">
+                <Label htmlFor="role-name">Name <span className="text-destructive">*</span></Label>
+                <Input
+                  id="role-name"
+                  value={roleForm.name}
+                  onChange={(e) => setRoleForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Senior Compliance Analyst"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="role-desc">Description</Label>
+                <Textarea
+                  id="role-desc"
+                  rows={3}
+                  value={roleForm.description}
+                  onChange={(e) => setRoleForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="What this role does…"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="role-dept">Department</Label>
+                  <Select
+                    value={roleForm.departmentId}
+                    onValueChange={(v) => setRoleForm((f) => ({ ...f, departmentId: v }))}
+                  >
+                    <SelectTrigger id="role-dept" className="w-full">
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departments.map((d) => (
+                        <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="role-risk">Risk level</Label>
+                  <Select
+                    value={roleForm.riskLevel}
+                    onValueChange={(v) => setRoleForm((f) => ({ ...f, riskLevel: v as RiskLevel }))}
+                  >
+                    <SelectTrigger id="role-risk" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="critical">Critical</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="role-status">Status</Label>
+                <Select
+                  value={roleForm.status}
+                  onValueChange={(v) => setRoleForm((f) => ({ ...f, status: v as "active" | "inactive" }))}
+                >
+                  <SelectTrigger id="role-status" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRoleDialogOpen(false)}>Cancel</Button>
+              <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={onSaveRole}>
+                {editingRole ? "Save changes" : "Create role"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Department delete confirmation */}
+        <AlertDialog open={!!deptDeleteTarget} onOpenChange={(o) => !o && setDeptDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete department?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes <span className="font-medium text-foreground">{deptDeleteTarget?.name}</span>.
+                Roles in this department will remain but lose their department link. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className="bg-red-600 hover:bg-red-700 text-white" onClick={onDeleteDept}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Role delete confirmation */}
+        <AlertDialog open={!!roleDeleteTarget} onOpenChange={(o) => !o && setRoleDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete role?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes the <span className="font-medium text-foreground">{roleDeleteTarget?.name}</span> role.
+                Staff assigned this role will keep their permissions until reassigned. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className="bg-red-600 hover:bg-red-700 text-white" onClick={onDeleteRole}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </ViewContainer>
     </>
   );
