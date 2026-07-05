@@ -25,6 +25,7 @@ import type {
 } from "@/lib/types";
 import { LoginScreen } from "@/components/portal/login-screen";
 import { PortalShell } from "@/components/portal/portal-shell";
+import { InviteRegistrationScreen } from "@/components/portal/invite-registration/invite-registration-screen";
 import { DashboardView } from "@/components/portal/views/dashboard-view";
 import { UsersView } from "@/components/portal/views/users-view";
 import { UserDetailView } from "@/components/portal/views/user-detail-view";
@@ -55,6 +56,15 @@ export function PortalApp() {
   const { loading, staff } = useAuth();
   const [seeding, setSeeding] = useState(true);
   const [seedError, setSeedError] = useState<string | null>(null);
+
+  // Invite-link registration: if ?invite=TOKEN is in the URL, show the
+  // registration form instead of the normal login/portal flow. This lets a
+  // prospective admin (who isn't logged in yet) complete their registration.
+  // Read once during initial state (lazy initializer) — no effect needed.
+  const [inviteToken] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("invite");
+  });
 
   // Live data state
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -119,6 +129,12 @@ export function PortalApp() {
   // Show loading screen while seeding / auth-loading
   if (loading || seeding) {
     return <LoadingScreen message={seeding ? "Initializing Firebase…" : "Authenticating…"} />;
+  }
+
+  // Invite-link registration takes priority over the auth gate: the invitee
+  // isn't logged in yet, so they'd otherwise see the login screen.
+  if (inviteToken) {
+    return <InviteRegistrationScreen token={inviteToken} />;
   }
 
   // Auth gate

@@ -32,6 +32,8 @@ import {
   Globe2,
   ScrollText,
   X,
+  Copy,
+  Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -198,6 +200,21 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
   /* --------------------------- suspend dialog --------------------------- */
   const [suspendTarget, setSuspendTarget] = useState<AdminStaff | null>(null);
   const [suspending, setSuspending] = useState(false);
+
+  /* --------------------------- invite dialog ---------------------------- */
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteForm, setInviteForm] = useState({
+    email: "",
+    firstName: "",
+    lastName: "",
+    departmentId: "",
+    roleId: "",
+  });
+  const [inviteCountryAccess, setInviteCountryAccess] = useState<
+    { countryCode: string; accessLevel: "view" | "operate" | "manage" }[]
+  >([{ countryCode: "NG", accessLevel: "view" }]);
+  const [inviteSaving, setInviteSaving] = useState(false);
+  const [generatedInviteUrl, setGeneratedInviteUrl] = useState<string | null>(null);
 
   const canCreate = isSuperAdmin(currentStaff);
 
@@ -427,6 +444,73 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
     }
   }
 
+  function openInviteDialog() {
+    setInviteForm({ email: "", firstName: "", lastName: "", departmentId: departments[0]?.id ?? "", roleId: roles[0]?.id ?? "" });
+    setInviteCountryAccess([{ countryCode: "NG", accessLevel: "view" }]);
+    setGeneratedInviteUrl(null);
+    setInviteOpen(true);
+  }
+
+  async function onGenerateInvite() {
+    if (!currentStaff) return;
+    if (!inviteForm.email || !inviteForm.email.includes("@")) {
+      toast.error("A valid email is required.");
+      return;
+    }
+    if (!inviteForm.firstName.trim() || !inviteForm.lastName.trim()) {
+      toast.error("First name and last name are required.");
+      return;
+    }
+    setInviteSaving(true);
+    try {
+      const res = await fetch("/api/admin-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: inviteForm.email,
+          firstName: inviteForm.firstName,
+          lastName: inviteForm.lastName,
+          departmentId: inviteForm.departmentId,
+          roleId: inviteForm.roleId,
+          countryAccess: inviteCountryAccess,
+          regionAccess: [],
+          createdBy: fullName(currentStaff),
+          createdByUid: currentStaff.id,
+          createdByEmail: currentStaff.email,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to generate invite.");
+      }
+      setGeneratedInviteUrl(data.inviteUrl);
+      toast.success("Invite link generated", {
+        description: "Copy the link and send it to the prospective admin.",
+      });
+      logAudit(
+        {
+          staffId: currentStaff.id,
+          staffName: fullName(currentStaff),
+          department: deptName(currentStaff.departmentId, departments),
+          role: roleName(currentStaff.roleId, roles),
+        },
+        "staff.invite_generated",
+        "staff_invite",
+        data.token,
+        {
+          afterValue: "pending",
+          reason: `Invited ${inviteForm.firstName} ${inviteForm.lastName} (${inviteForm.email}) as admin.`,
+        },
+      );
+    } catch (e) {
+      toast.error("Could not generate invite", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setInviteSaving(false);
+    }
+  }
+
   async function onUnlock(s: AdminStaff) {
     if (!currentStaff) return;
     try {
@@ -506,9 +590,14 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
         icon={Users}
         actions={
           canCreate ? (
-            <Button onClick={openCreate} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-              <UserPlus className="size-4" /> Create Staff
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={openInviteDialog} variant="outline">
+                <Mail className="size-4" /> Invite admin
+              </Button>
+              <Button onClick={openCreate} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                <UserPlus className="size-4" /> Create Staff
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -998,6 +1087,211 @@ export function StaffView({ staff, departments, roles, countries }: StaffViewPro
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Invite admin dialog */}
+      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="size-4 text-emerald-600" /> Invite a new admin
+            </DialogTitle>
+            <DialogDescription>
+              Generate a secure registration link for a prospective admin.
+              They'll set their own password when they open it.
+            </DialogDescription>
+          </DialogHeader>
+
+          {generatedInviteUrl ? (
+            /* ---- Success state: show the link to copy ---- */
+            <div className="space-y-3 py-2">
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/30 p-3 space-y-2">
+                <div className="text-sm font-medium text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                  <Link2 className="size-3.5" /> Invite link ready
+                </div>
+                <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                  Send this link to {inviteForm.firstName} {inviteForm.lastName} ({inviteForm.email}).
+                  The link expires in 7 days.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={generatedInviteUrl}
+                    className="text-xs font-mono"
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(generatedInviteUrl);
+                      toast.success("Invite link copied to clipboard");
+                    }}
+                  >
+                    <Copy className="size-3.5" /> Copy
+                  </Button>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                When the invitee opens the link, they'll see the details you
+                entered (name, email, department, role, country access) and set
+                their own password. Their account will be created as "active"
+                once they complete the form.
+              </p>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="outline" onClick={() => setInviteOpen(false)}>
+                  Done
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setGeneratedInviteUrl(null)}
+                >
+                  Generate another
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* ---- Form state: collect invitee details ---- */
+            <div className="space-y-3 py-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="inv-firstName">First name <span className="text-destructive">*</span></Label>
+                  <Input
+                    id="inv-firstName"
+                    value={inviteForm.firstName}
+                    onChange={(e) => setInviteForm({ ...inviteForm, firstName: e.target.value })}
+                    placeholder="Jane"
+                    disabled={inviteSaving}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="inv-lastName">Last name <span className="text-destructive">*</span></Label>
+                  <Input
+                    id="inv-lastName"
+                    value={inviteForm.lastName}
+                    onChange={(e) => setInviteForm({ ...inviteForm, lastName: e.target.value })}
+                    placeholder="Doe"
+                    disabled={inviteSaving}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="inv-email">Email <span className="text-destructive">*</span></Label>
+                <Input
+                  id="inv-email"
+                  type="email"
+                  value={inviteForm.email}
+                  onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                  placeholder="jane.doe@faya.com"
+                  disabled={inviteSaving}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="inv-dept">Department</Label>
+                  <Select value={inviteForm.departmentId} onValueChange={(v) => setInviteForm({ ...inviteForm, departmentId: v })}>
+                    <SelectTrigger id="inv-dept" className="w-full">
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departments.map((d) => (
+                        <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="inv-role">Role</Label>
+                  <Select value={inviteForm.roleId} onValueChange={(v) => setInviteForm({ ...inviteForm, roleId: v })}>
+                    <SelectTrigger id="inv-role" className="w-full">
+                      <SelectValue placeholder="Select role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Country access</Label>
+                <div className="space-y-1.5">
+                  {inviteCountryAccess.map((ca, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <Select
+                        value={ca.countryCode}
+                        onValueChange={(v) => {
+                          const next = [...inviteCountryAccess];
+                          next[idx] = { ...next[idx], countryCode: v };
+                          setInviteCountryAccess(next);
+                        }}
+                      >
+                        <SelectTrigger className="flex-1">
+                          <SelectValue placeholder="Country" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {countries.map((c) => (
+                            <SelectItem key={c.countryCode} value={c.countryCode}>{c.countryName}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={ca.accessLevel}
+                        onValueChange={(v) => {
+                          const next = [...inviteCountryAccess];
+                          next[idx] = { ...next[idx], accessLevel: v as "view" | "operate" | "manage" };
+                          setInviteCountryAccess(next);
+                        }}
+                      >
+                        <SelectTrigger className="w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="view">View</SelectItem>
+                          <SelectItem value="operate">Operate</SelectItem>
+                          <SelectItem value="manage">Manage</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {inviteCountryAccess.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setInviteCountryAccess(inviteCountryAccess.filter((_, i) => i !== idx))}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setInviteCountryAccess([...inviteCountryAccess, { countryCode: "NG", accessLevel: "view" }])}
+                  >
+                    + Add country
+                  </Button>
+                </div>
+              </div>
+              <DialogFooter className="pt-2">
+                <Button variant="outline" onClick={() => setInviteOpen(false)} disabled={inviteSaving}>
+                  Cancel
+                </Button>
+                <Button
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                  disabled={inviteSaving || !inviteForm.email || !inviteForm.firstName || !inviteForm.lastName}
+                  onClick={onGenerateInvite}
+                >
+                  {inviteSaving ? "Generating…" : "Generate invite link"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

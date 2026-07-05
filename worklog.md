@@ -1252,3 +1252,41 @@ Work Log:
 
 Stage Summary:
 - Admins now choose between two password-reset methods per account: "Send reset link" (Firebase Auth email — user self-serves, works for legacy accounts) or "Generate temp password" (Firestore bcrypt — always works, temp password shown once with Copy button). The dialog clearly explains when each applies. The Firebase Auth reset flow is preserved as an option for accounts that have a Firebase Auth profile, while the Firestore temp-password flow covers all accounts including the new dual-role Firestore-only ones.
+
+---
+Task ID: admin-invitation-registration-system
+Agent: main
+Task: Make a registration form for other admins; super admins should be the one to send them link to apply
+
+Work Log:
+- Built an admin invitation + registration system: super admins generate invite links from the Staff view, and the invitee completes a registration form at /?invite=TOKEN.
+- Created src/app/api/admin-invite/route.ts:
+  - POST: super admin generates an invite. Body: { email, firstName, lastName, departmentId, roleId, countryAccess, regionAccess, createdBy, createdByUid }. Stores a doc in faya_admin_staff_invites with a random 32-byte hex token, status "pending", 7-day TTL. Returns the invite URL. Reuses existing pending invite for the same email.
+  - GET ?token=: public — the registration form loads invite details by token. Returns 404 with clear messages for invalid/used/revoked/expired invites.
+  - DELETE ?token=: revokes an invite (marks status "revoked", keeps audit trail).
+- Created src/app/api/admin-register/route.ts (POST { token, password, phone }):
+  - Verifies the invite token (valid, pending, not expired).
+  - Creates a Firebase Auth account with the invite email + chosen password.
+  - Creates an faya_admin_staff doc keyed by the new Auth UID (status "active", invitedVia "admin_invite_link").
+  - Marks the invite as "used" (usedAt, usedByUid).
+  - Returns 409 if a Firebase Auth account already exists for the email.
+- Created src/components/portal/invite-registration/invite-registration-screen.tsx:
+  - Loads invite details by token on mount (GET /api/admin-invite?token=).
+  - Shows a pre-filled "Invitation details" card (name, email, department, role, country access badges, invited by).
+  - Form: phone (optional), password (required, min 6), confirm password.
+  - Submits to /api/admin-register. On success → "Welcome to Faya, {firstName}!" screen with "Sign in to Admin Portal" button.
+  - Handles invalid/expired/used invites with a clear error screen.
+- Wired PortalApp to show InviteRegistrationScreen when ?invite=TOKEN is present: used a lazy useState initializer to read the URL param once (no effect, satisfies rules-of-hooks). The invite check runs after the loading screen but before the auth gate (the invitee isn't logged in yet).
+- Added "Invite admin" button + dialog to StaffView (only visible to super admins via canCreate = isSuperAdmin):
+  - Button next to "Create Staff" in the ViewHeader.
+  - Dialog collects: firstName, lastName, email, department (Select), role (Select), country access (dynamic list of country + accessLevel selectors with add/remove).
+  - "Generate invite link" → POST /api/admin-invite → shows the generated URL in a read-only Input with a Copy button + "Generate another" option.
+  - Audit-logged as staff.invite_generated.
+- Verified end-to-end via API + Agent Browser:
+  1. API: generated invite (token, inviteUrl) → GET verify returned pre-filled details → POST register created Firebase Auth account + staff doc (uid returned) → reusing the same invite failed with "already been used".
+  2. Browser: generated invite → opened /?invite=TOKEN → registration form rendered with pre-filled details (Browser TestAdmin, browsertest-...@testfaya.com, dept_ops, role_analyst, NG view, invited by Anger Jude) → filled password → "Create admin account" → "Welcome to Faya, Browser!" success screen → navigated to / → logged in as super admin → Staff view → new admin "Browser TestAdmin" appeared in the list.
+  3. "Invite admin" button visible next to "Create Staff". No console errors. Lint clean.
+- Cleaned up test admin docs from Firestore.
+
+Stage Summary:
+- Super admins can now invite new admins via a secure link-based registration flow. From Staff & Roles → "Invite admin" button → dialog collects the invitee's name, email, department, role, and country access → generates a unique invite link (/?invite=TOKEN, 7-day expiry) → super admin copies and shares it. The invitee opens the link → sees a registration form pre-filled with their assigned details → sets their own password → a Firebase Auth account + faya_admin_staff doc are created (status "active") → the invite is marked "used" (can't be reused). The new admin then signs in to the portal normally. Only super admins see the "Invite admin" button. The whole flow is audit-logged.
